@@ -1,0 +1,9 @@
+name: linc-convert
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - ipython
+  - glymur
+  - zarr
+  - numpy
