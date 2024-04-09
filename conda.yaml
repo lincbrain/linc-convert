@@ -4,6 +4,10 @@ channels:
 dependencies:
   - python
   - ipython
+  - typer
+  - numpy
   - glymur
   - zarr
-  - numpy
+  - nibabel
+  - pip:
+    - cyclopts
