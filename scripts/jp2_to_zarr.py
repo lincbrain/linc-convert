@@ -11,7 +11,7 @@ dependencies:
     glymur
     zarr
     nibabel
-    typer
+    cyclopts
 """
 import cyclopts
 import glymur
@@ -198,7 +198,7 @@ def convert(
         return
 
     # Write NIfTI-Zarr header
-    # NOTE: we use nifti1 because dimensions typically do not fit in a short
+    # NOTE: we use nifti2 because dimensions typically do not fit in a short
     # TODO: we do not write the json zattrs, but it should be added in
     #       once the nifti-zarr package is released
     shape = list(reversed(omz['0'].shape))
