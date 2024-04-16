@@ -1,0 +1,13 @@
+name: linc-convert
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - ipython
+  - typer
+  - numpy
+  - glymur
+  - zarr
+  - nibabel
+  - pip:
+    - cyclopts
