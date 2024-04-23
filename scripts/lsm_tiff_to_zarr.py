@@ -201,7 +201,7 @@ def convert(
 
     # Prepare Zarr group
     omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=False)
+    omz = zarr.group(store=omz, overwrite=True)
 
     # Prepare chunking options
     opt = {
@@ -251,8 +251,6 @@ def convert(
         if all(x < chunk for x in new_shape):
             break
         print('Compute level', level, 'with shape', new_shape)
-        if str(level) in omz:
-            del omz[str(level)]
         omz.create_dataset(str(level), shape=[nchannels, *new_shape], **opt)
         new_array = omz[str(level)]
 
