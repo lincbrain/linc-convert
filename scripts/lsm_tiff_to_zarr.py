@@ -20,7 +20,6 @@ import zarr
 import os
 import re
 import ast
-import math
 import numpy as np
 import nibabel as nib
 from tifffile import TiffFile
