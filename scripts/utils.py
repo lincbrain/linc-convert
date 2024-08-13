@@ -214,7 +214,7 @@ si_prefix_exponent = {
 
 unit_space_short2long = {
     short + 'm': long + 'meter'
-    for short, long in si_prefix_long2short.items()
+    for short, long in si_prefix_short2long.items()
 }
 unit_space_short2long.update({
     'm': 'meter',
@@ -235,7 +235,7 @@ unit_space_long2short['micron'] = 'u'
 
 unit_time_short2long = {
     short + 's': long + 'second'
-    for short, long in si_prefix_long2short.items()
+    for short, long in si_prefix_short2long.items()
 }
 unit_time_short2long.update({
     'y': 'year',
