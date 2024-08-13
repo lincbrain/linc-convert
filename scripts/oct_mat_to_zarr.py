@@ -62,6 +62,7 @@ def convert(
     compressor: str = 'blosc',
     compressor_opt: str = "{}",
     max_load: int = 128,
+    max_levels: int = 5,
     nii: bool = False,
     orientation: str = 'RAS',
     center: bool = True,
@@ -86,6 +87,8 @@ def convert(
         Compression options
     max_load
         Maximum input chunk size
+    max_levels
+        Maximum number of pyramid levels
     nii
         Convert to nifti-zarr. True if path ends in ".nii.zarr"
     orientation
@@ -101,9 +104,11 @@ def convert(
     # Write OME-Zarr multiscale metadata
     if meta:
         print('Write JSON')
-        meta_json = make_json(meta)
+        with open(meta, 'r') as f:
+            meta_txt = f.read()
+            meta_json = make_json(meta_txt)
         path_json = '.'.join(out.split('.')[:-2]) + '.json'
-        with open(path_json, 'r') as f:
+        with open(path_json, 'w') as f:
             json.dump(meta_json, f, indent=4)
         vx = meta_json['PixelSize']
         unit = meta_json['PixelSizeUnits']
@@ -113,7 +118,7 @@ def convert(
 
     # Prepare Zarr group
     omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=True)
+    omz = zarr.group(store=omz, overwrite=False)
 
     # Prepare chunking options
     opt = {
@@ -128,34 +133,34 @@ def convert(
     nk = ceildiv(inp.shape[0], max_load)
     nj = ceildiv(inp.shape[1], max_load)
     ni = ceildiv(inp.shape[2], max_load)
-    nblevels = int(math.ceil(math.log2(max_load)))
+    nblevels = min([int(math.ceil(math.log2(x))) for x in inp.shape])
+    nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
+    nblevels = min(nblevels, max_levels)
 
     # create all arrays in the group
     shape_level = inp.shape
-    for level in range(nblevels):
-        omz.create_dataset(str(level), shape=shape_level, **opt)
-        shape_level = [ceildiv(x, 2) for x in shape_level]
+    #for level in range(nblevels):
+    #    omz.create_dataset(str(level), shape=shape_level, **opt)
+    #    shape_level = [ceildiv(x, 2) for x in shape_level]
 
     # iterate across input chunks
     pct = 0
-    for i, j, k in product(range(ni), range(nj), range(nk)):
-        pct = int(math.ceil((i*j*k + 1) / (ni*nj*nk)))
-        print(pct, '%', end='\r')
-
+    for _ in []: # i, j, k in product(range(ni), range(nj), range(nk)):
         chunk_size = max_load
         inp_chunk = inp[
-            k*chunk_size:(k+1)*chunk_size.
-            i*chunk_size:(i+1)*chunk_size,
+            k*chunk_size:(k+1)*chunk_size,
             j*chunk_size:(j+1)*chunk_size,
+            i*chunk_size:(i+1)*chunk_size,
         ]
 
         for level in range(nblevels):
+            print(f'[{i:03d}, {j:03d}, {k:03d}] / [{ni:03d}, {nj:03d}, {nk:03d}] ({1+level}/{nblevels})', end='\r')
             out_level = omz[str(level)]
             # save current chunk
             out_level[
-                k*chunk_size:(k+1)*chunk_size.
-                i*chunk_size:(i+1)*chunk_size,
-                j*chunk_size:(j+1)*chunk_size,
+                k*chunk_size:k*chunk_size+inp_chunk.shape[0],
+                j*chunk_size:j*chunk_size+inp_chunk.shape[1],
+                i*chunk_size:i*chunk_size+inp_chunk.shape[2],
             ] = inp_chunk
             # ensure divisible by
             inp_chunk = inp_chunk[
@@ -179,6 +184,7 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print('Write metadata')
+    print(unit)
     ome_unit = to_ome_unit(unit)
     multiscales = [{
         'version': '0.4',
@@ -265,9 +271,8 @@ def mapmat(fname):
         f = loadmat(fname)
     keys = list(f.keys())
     if len(keys) > 1:
-        key = keys[0]
-        warn(f'More than one key in .mat, arbitrarily loading "{key}"')
-    yield f.get(key)
+        warn(f'More than one key in .mat, arbitrarily loading "{keys[0]}"')
+    yield f.get(keys[0])
     if hasattr(f, 'close'):
         f.close()
 
@@ -308,7 +313,7 @@ def make_json(oct_meta):
         'SampleStaining': 'none',
     }
 
-    for line in oct_meta.split():
+    for line in oct_meta.split('\n'):
         if ':' not in line:
             continue
 

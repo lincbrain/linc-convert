@@ -266,7 +266,7 @@ unit_space_scale.update({
 
 unit_time_scale = {
     prefix + 's': 10**exponent
-    for prefix, exponent in si_prefix_exponent
+    for prefix, exponent in si_prefix_exponent.items()
 }
 unit_time_scale.update({
     'y': 365.25*24*60*60,
