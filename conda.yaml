@@ -9,5 +9,6 @@ dependencies:
   - glymur
   - zarr
   - nibabel
+  - tifffile
   - pip:
     - cyclopts
