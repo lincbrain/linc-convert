@@ -291,6 +291,7 @@ def to_ome_unit(unit):
         unit = si_prefix_short2long[unit]
     if unit not in (*ome_valid_units['space'], *ome_valid_units['time']):
         raise ValueError('Unknow unit')
+    return unit
 
 
 def to_nifti_unit(unit):
