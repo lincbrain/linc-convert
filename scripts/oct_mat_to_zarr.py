@@ -15,8 +15,6 @@ dependencies:
 import cyclopts
 import zarr
 import ast
-import numcodecs
-import uuid
 import re
 import os
 import math
@@ -27,9 +25,13 @@ import nibabel as nib
 from itertools import product
 from functools import wraps
 from scipy.io import loadmat
-from typing import Optional, Union, Sequence
 from warnings import warn
 from contextlib import contextmanager
+
+from utils import (
+    ceildiv, make_compressor, convert_unit, to_ome_unit, to_nifti_unit,
+    orientation_to_affine, center_affine
+)
 
 app = cyclopts.App(help_format="markdown")
 
@@ -177,12 +179,13 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print('Write metadata')
+    ome_unit = to_ome_unit(unit)
     multiscales = [{
         'version': '0.4',
         'axes': [
-            {"name": "z", "type": "space", "unit": "micrometer"},
-            {"name": "y", "type": "space", "unit": "micrometer"},
-            {"name": "x", "type": "space", "unit": "micrometer"}
+            {"name": "z", "type": "space", "unit": ome_unit},
+            {"name": "y", "type": "space", "unit": ome_unit},
+            {"name": "x", "type": "space", "unit": ome_unit}
         ],
         'datasets': [],
         'type': '2x2x2 mean window',
@@ -231,15 +234,15 @@ def convert(
     # TODO: we do not write the json zattrs, but it should be added in
     #       once the nifti-zarr package is released
     shape = list(reversed(omz['0'].shape))
-    affine = orientation_to_affine(orientation, vxw, vxh, thickness or 1)
+    affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
-        affine = center_affine(affine, shape[:2])
+        affine = center_affine(affine, shape[:3])
     header = nib.Nifti2Header()
     header.set_data_shape(shape)
     header.set_data_dtype(omz['0'].dtype)
     header.set_qform(affine)
     header.set_sform(affine)
-    header.set_xyzt_units(nib.nifti1.unit_codes.code['micron'])
+    header.set_xyzt_units(nib.nifti1.unit_codes.code[to_nifti_unit(unit)])
     header.structarr['magic'] = b'nz2\0'
     header = np.frombuffer(header.structarr.tobytes(), dtype='u1')
     opt = {
@@ -252,7 +255,6 @@ def convert(
     }
     omz.create_dataset('nifti', data=header, shape=shape, **opt)
     print('done.')
-
 
 
 @contextmanager
@@ -268,23 +270,6 @@ def mapmat(fname):
     yield f.get(key)
     if hasattr(f, 'close'):
         f.close()
-
-
-def make_compressor(name, **prm):
-    if not isinstance(name, str):
-        return name
-    name = name.lower()
-    if name == 'blosc':
-        Compressor = numcodecs.Blosc
-    elif name == 'zlib':
-        Compressor = numcodecs.Zlib
-    else:
-        raise ValueError('Unknown compressor', name)
-    return Compressor(**prm)
-
-
-def ceildiv(x, y):
-    return int(math.ceil(x / y))
 
 
 def make_json(oct_meta):
@@ -316,12 +301,6 @@ def make_json(oct_meta):
         if n is None:
             value = value[0]
         return value, unit
-
-    def convert_unit(value, src, dst):
-        exponent = {'P': 15, 'T': 12, 'G': 9, 'M': 6, 'K': 3, 'H': 2,
-                    'D': 1, '': 0, 'd': -1, 'c': -2, 'm': -3, 'u': -6,
-                    'µ': -6, 'n': -9, 'p': -12}
-        return value * 10**(exponent[src] - exponent[dst])
 
     meta = {
         'BodyPart': 'BRAIN',
@@ -387,7 +366,6 @@ def make_json(oct_meta):
             continue
 
     return meta
-
 
 
 if __name__ == "__main__":
