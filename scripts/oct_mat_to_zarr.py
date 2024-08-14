@@ -22,6 +22,7 @@ import json
 import h5py
 import numpy as np
 import nibabel as nib
+from typing import Optional
 from itertools import product
 from functools import wraps
 from scipy.io import loadmat
@@ -63,6 +64,7 @@ def convert(
     compressor_opt: str = "{}",
     max_load: int = 128,
     max_levels: int = 5,
+    no_pool: Optional[int] = None,
     nii: bool = False,
     orientation: str = 'RAS',
     center: bool = True,
@@ -89,6 +91,8 @@ def convert(
         Maximum input chunk size
     max_levels
         Maximum number of pyramid levels
+    no_pool
+        Index of dimension to not pool when building pyramid
     nii
         Convert to nifti-zarr. True if path ends in ".nii.zarr"
     orientation
@@ -118,11 +122,10 @@ def convert(
 
     # Prepare Zarr group
     omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=False)
+    omz = zarr.group(store=omz, overwrite=True)
 
     # Prepare chunking options
     opt = {
-        'chunks': [chunk] * 3,
         'dimension_separator': r'/',
         'order': 'F',
         'dtype': np.dtype(inp.dtype).str,
@@ -130,56 +133,95 @@ def convert(
         'compressor': make_compressor(compressor, **compressor_opt),
     }
 
-    nk = ceildiv(inp.shape[0], max_load)
-    nj = ceildiv(inp.shape[1], max_load)
-    ni = ceildiv(inp.shape[2], max_load)
-    nblevels = min([int(math.ceil(math.log2(x))) for x in inp.shape])
+    inp_chunk = [min(x, max_load) for x in inp.shape]
+    nk = ceildiv(inp.shape[0], inp_chunk[0])
+    nj = ceildiv(inp.shape[1], inp_chunk[1])
+    ni = ceildiv(inp.shape[2], inp_chunk[2])
+
+    nblevels = min([
+        int(math.ceil(math.log2(x)))
+        for i, x in enumerate(inp.shape)
+        if i != no_pool
+    ])
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
 
     # create all arrays in the group
     shape_level = inp.shape
-    #for level in range(nblevels):
-    #    omz.create_dataset(str(level), shape=shape_level, **opt)
-    #    shape_level = [ceildiv(x, 2) for x in shape_level]
+    for level in range(nblevels):
+        opt['chunks'] = [min(x, chunk) for x in shape_level]
+        omz.create_dataset(str(level), shape=shape_level, **opt)
+        shape_level = [
+            s if c == 1 else s//2
+            for c, s in zip(chunk, shape_level)
+        ]
 
     # iterate across input chunks
-    pct = 0
-    for _ in []: # i, j, k in product(range(ni), range(nj), range(nk)):
-        chunk_size = max_load
-        inp_chunk = inp[
-            k*chunk_size:(k+1)*chunk_size,
-            j*chunk_size:(j+1)*chunk_size,
-            i*chunk_size:(i+1)*chunk_size,
+    for i, j, k in product(range(ni), range(nj), range(nk)):
+
+        level_chunk = inp_chunk
+        loaded_chunk = inp[
+            k*level_chunk[0]:(k+1)*level_chunk[0],
+            j*level_chunk[1]:(j+1)*level_chunk[1],
+            i*level_chunk[2]:(i+1)*level_chunk[2],
         ]
 
         for level in range(nblevels):
-            print(f'[{i:03d}, {j:03d}, {k:03d}] / [{ni:03d}, {nj:03d}, {nk:03d}] ({1+level}/{nblevels})', end='\r')
             out_level = omz[str(level)]
+
+            print(f'[{i+1:03d}, {j+1:03d}, {k+1:03d}]', '/',
+                  f'[{ni:03d}, {nj:03d}, {nk:03d}]',
+                  f'({1+level}/{nblevels})', end='\r')
+
             # save current chunk
             out_level[
-                k*chunk_size:k*chunk_size+inp_chunk.shape[0],
-                j*chunk_size:j*chunk_size+inp_chunk.shape[1],
-                i*chunk_size:i*chunk_size+inp_chunk.shape[2],
-            ] = inp_chunk
-            # ensure divisible by
-            inp_chunk = inp_chunk[
-                :2*(inp_chunk.shape[0]//2),
-                :2*(inp_chunk.shape[1]//2),
-                :2*(inp_chunk.shape[2]//2),
+                k*level_chunk[0]:k*level_chunk[0]+loaded_chunk.shape[0],
+                j*level_chunk[1]:j*level_chunk[1]+loaded_chunk.shape[1],
+                i*level_chunk[2]:i*level_chunk[2]+loaded_chunk.shape[2],
+            ] = loaded_chunk
+            # ensure divisible by 2
+            loaded_chunk = loaded_chunk[
+                slice(2*(inp_chunk.shape[0]//2) if 0 != no_pool else None),
+                slice(2*(inp_chunk.shape[1]//2) if 1 != no_pool else None),
+                slice(2*(inp_chunk.shape[2]//2) if 2 != no_pool else None),
             ]
             # mean pyramid (average each 2x2x2 patch)
-            inp_chunk = (
-                inp_chunk[0::2, 0::2, 0::2] +
-                inp_chunk[0::2, 0::2, 1::2] +
-                inp_chunk[0::2, 1::2, 0::2] +
-                inp_chunk[0::2, 1::2, 1::2] +
-                inp_chunk[1::2, 0::2, 0::2] +
-                inp_chunk[1::2, 0::2, 1::2] +
-                inp_chunk[1::2, 1::2, 0::2] +
-                inp_chunk[1::2, 1::2, 1::2]
-            ) / 8
-            chunk_size = chunk_size // 2
+            if no_pool == 0:
+                loaded_chunk = (
+                    loaded_chunk[:, 0::2, 0::2] +
+                    loaded_chunk[:, 0::2, 1::2] +
+                    loaded_chunk[:, 1::2, 0::2] +
+                    loaded_chunk[:, 1::2, 1::2]
+                ) / 4
+            elif no_pool == 1:
+                loaded_chunk = (
+                    loaded_chunk[0::2, :, 0::2] +
+                    loaded_chunk[0::2, :, 1::2] +
+                    loaded_chunk[1::2, :, 0::2] +
+                    loaded_chunk[1::2, :, 1::2]
+                ) / 4
+            elif no_pool == 2:
+                loaded_chunk = (
+                    loaded_chunk[0::2, 0::2, :] +
+                    loaded_chunk[0::2, 1::2, :] +
+                    loaded_chunk[1::2, 0::2, :] +
+                    loaded_chunk[1::2, 1::2, :]
+                ) / 4
+            else:
+                inp_chunk = (
+                    inp_chunk[0::2, 0::2, 0::2] +
+                    inp_chunk[0::2, 0::2, 1::2] +
+                    inp_chunk[0::2, 1::2, 0::2] +
+                    inp_chunk[0::2, 1::2, 1::2] +
+                    inp_chunk[1::2, 0::2, 0::2] +
+                    inp_chunk[1::2, 0::2, 1::2] +
+                    inp_chunk[1::2, 1::2, 0::2] +
+                    inp_chunk[1::2, 1::2, 1::2]
+                ) / 8
+            level_chunk = [
+                x if i == no_pool else x // 2
+                for i, x in enumerate(level_chunk)
+            ]
     print('')
 
     # Write OME-Zarr multiscale metadata
@@ -194,7 +236,7 @@ def convert(
             {"name": "x", "type": "space", "unit": ome_unit}
         ],
         'datasets': [],
-        'type': '2x2x2 mean window',
+        'type': ('2x2x2' if no_pool is None else '2x2') + 'mean window',
         'name': '',
     }]
 
@@ -209,17 +251,17 @@ def convert(
             {
                 "type": "scale",
                 "scale": [
-                    (2**n)*vx[0],
-                    (2**n)*vx[1],
-                    (2**n)*vx[2],
+                    (1 if no_pool == 0 else 2**n)*vx[0],
+                    (1 if no_pool == 1 else 2**n)*vx[1],
+                    (1 if no_pool == 2 else 2**n)*vx[2],
                 ]
             },
             {
                 "type": "translation",
                 "translation": [
-                    (2**n - 1)*vx[0]*0.5,
-                    (2**n - 1)*vx[1]*0.5,
-                    (2**n - 1)*vx[2]*0.5,
+                    (0 if no_pool == 0 else (2**n - 1))*vx[0]*0.5,
+                    (0 if no_pool == 1 else (2**n - 1))*vx[1]*0.5,
+                    (0 if no_pool == 2 else (2**n - 1))*vx[2]*0.5,
                 ]
             }
         ]
