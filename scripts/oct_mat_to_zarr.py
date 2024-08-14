@@ -99,7 +99,6 @@ def convert(
         Orientation of the volume
     center
         Set RAS[0, 0, 0] at FOV center
-
     """
 
     if isinstance(compressor_opt, str):
@@ -307,9 +306,12 @@ def convert(
 
 @contextmanager
 def mapmat(fname):
+    """Load or memory-map an array stored in a .mat file"""
     try:
+        # "New" .mat file
         f = h5py.File(fname, 'r')
     except Exception:
+        # "Old" .mat file
         f = loadmat(fname)
     keys = list(f.keys())
     if len(keys) > 1:
