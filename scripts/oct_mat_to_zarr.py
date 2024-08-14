@@ -151,8 +151,8 @@ def convert(
         opt['chunks'] = [min(x, chunk) for x in shape_level]
         omz.create_dataset(str(level), shape=shape_level, **opt)
         shape_level = [
-            s if c == 1 else s//2
-            for c, s in zip(chunk, shape_level)
+            x if i == no_pool else x//2
+            for i, x in enumerate(shape_level)
         ]
 
     # iterate across input chunks
