@@ -180,9 +180,9 @@ def convert(
             ] = loaded_chunk
             # ensure divisible by 2
             loaded_chunk = loaded_chunk[
-                slice(2*(inp_chunk.shape[0]//2) if 0 != no_pool else None),
-                slice(2*(inp_chunk.shape[1]//2) if 1 != no_pool else None),
-                slice(2*(inp_chunk.shape[2]//2) if 2 != no_pool else None),
+                slice(2*(level_chunk.shape[0]//2) if 0 != no_pool else None),
+                slice(2*(level_chunk.shape[1]//2) if 1 != no_pool else None),
+                slice(2*(level_chunk.shape[2]//2) if 2 != no_pool else None),
             ]
             # mean pyramid (average each 2x2x2 patch)
             if no_pool == 0:
