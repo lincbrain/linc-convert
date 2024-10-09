@@ -19,7 +19,6 @@ with wk.client.context.webknossos_context(url=os.environ.get('WK_URL'),token=os.
 z = mag_view.bounding_box.topleft.z
 with mag_view.get_buffered_slice_reader() as reader:
     for slice_data in reader:
-        print(slice_data)
         slice_data = slice_data[0]  # First channel only
         for segment_id in SEGMENT_IDS:
             segment_mask = (slice_data == segment_id).astype(
