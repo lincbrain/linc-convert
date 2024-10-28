@@ -7,22 +7,25 @@ https://lincbrain.org/dandiset/000004/0.240319.1924/files?location=derivatives%2
 
 # stdlib
 import ast
+import json
 import os
 import re
+from copy import deepcopy
 from glob import glob
+from typing import Literal
 
 # externals
 import cyclopts
 import nibabel as nib
 import numpy as np
-import zarr
+import tensorstore as ts
 from tifffile import TiffFile
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr import make_compressor
+from linc_convert.utils.zarr import make_compressor_v2, make_compressor_v3
 
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
@@ -33,14 +36,15 @@ def convert(
     inp: str,
     out: str = None,
     *,
-    chunk: int = 128,
-    compressor: str = "blosc",
+    chunk: list[int] = [128],
+    shard: list[int] | None = None,
+    zarr_version: Literal[2, 3] = 3,
+    compressor: str = 'blosc',
     compressor_opt: str = "{}",
     max_load: int = 512,
     nii: bool = False,
     orientation: str = "coronal",
     center: bool = True,
-    thickness: float | None = None,
     voxel_size: list[float] = (1, 1, 1),
 ) -> None:
     """
@@ -76,6 +80,10 @@ def convert(
         Path to the output Zarr directory [<INP>.ome.zarr]
     chunk
         Output chunk size
+    shard
+        Output shard size
+    zarr_version
+        Zarr version to use. If `shard` is used, 3 is requiredl
     compressor : {blosc, zlib, raw}
         Compression method
     compressor_opt
@@ -96,6 +104,13 @@ def convert(
 
     if max_load % 2:
         max_load += 1
+
+    if zarr_version < 3 and shard:
+        raise ValueError('Sharding requires zarr v3')
+
+    # ------------------------------------------------------------------
+    # Parse all input tiles and their shape
+    # ------------------------------------------------------------------
 
     CHUNK_PATTERN = re.compile(
         r"^(?P<prefix>\w*)" r"_z(?P<z>[0-9]+)" r"_y(?P<y>[0-9]+)" r"(?P<suffix>\w*)$"
@@ -177,7 +192,7 @@ def convert(
             yx_shape = list(yx_shape)[0]
             allshapes[zchunk][ychunk] = (nplanes, *yx_shape)
 
-    # check that all chink shapes are compatible
+    # check that all chunk shapes are compatible
     for zchunk in range(nchunkz):
         if len(set(shape[1] for shape in allshapes[zchunk])) != 1:
             raise ValueError("Incompatible Y shapes")
@@ -193,68 +208,175 @@ def convert(
     fullshape[1] = sum(shape[1] for shape in allshapes[0])
     fullshape[2] = allshapes[0][0][2]
 
-    # Prepare Zarr group
-    omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=True)
+    # ------------------------------------------------------------------
+    # Write into a zarr
+    # ------------------------------------------------------------------
 
-    # Prepare chunking options
-    opt = {
-        "chunks": [nchannels] + [chunk] * 3,
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": np.dtype(dtype).str,
-        "fill_value": None,
-        "compressor": make_compressor(compressor, **compressor_opt),
-    }
+    # Format chunk option
+    if isinstance(chunk, int):
+        chunk = [chunk]
+    chunk = list(chunk)
+    if len(chunk) == 1:
+        chunk = [nchannels] + chunk * 3
+    elif len(chunk) == 3:
+        chunk = [nchannels] + chunk
+    elif len(chunk) != 4:
+        raise ValueError(
+            'chunk should contain 1, 3 or 4 elements. Got', len(chunk)
+        )
+
+    # Format shard option
+    if shard:
+        if isinstance(shard, int):
+            shard = [shard]
+        shard = list(shard)
+        if len(shard) == 1:
+            shard = [nchannels] + shard * 3
+        elif len(shard) == 3:
+            shard = [nchannels] + shard
+        elif len(shard) != 4:
+            raise ValueError(
+                'shard should contain 1, 3 or 4 elements. Got', len(shard)
+            )
+        if any(s % c for s, c in zip(shard, chunk)):
+            raise ValueError('shard should be a multiple of chunk')
+
+    # Prepare TensorStore config
+    if zarr_version == 3:
+        codec_little_endian = {
+            "name": "bytes",
+            "configuration": {"endian": "little"}
+        }
+        if shard:
+            chunk_grid = {
+                "name": "regular",
+                "configuration": {"chunk_shape": shard},
+            }
+
+            sharding_codec = {
+                "name": "sharding_indexed",
+                "configuration": {
+                    "chunk_shape": chunk,
+                    "codecs": [
+                        codec_little_endian,
+                        make_compressor_v3(compressor, **compressor_opt),
+                    ],
+                    "index_codecs": [
+                        codec_little_endian,
+                        {"name": "crc32c"},
+                    ],
+                    "index_location": "end",
+                },
+            }
+            codecs = [sharding_codec]
+        else:
+            chunk_grid = {
+                "name": "regular",
+                "configuration": {"chunk_shape": chunk}
+            }
+            codecs = [
+                codec_little_endian,
+                make_compressor_v3(compressor, **compressor_opt),
+            ]
+        metadata = {
+            "chunk_grid": chunk_grid,
+            "codecs": codecs,
+            "data_type": np.dtype(dtype).name,
+            "fill_value": 0,
+            "chunk_key_encoding": {
+                "name": "default",
+                "configuration": {"separator": r"/"}
+            },
+        }
+        tsconfig = {
+            "driver": "zarr3",
+            "metadata": metadata,
+        }
+
+    else:
+        metadata = {
+            'chunks': [nchannels] + [chunk] * 3,
+            'order': 'F',
+            'dtype': np.dtype(dtype).str,
+            'fill_value': 0,
+            'compressor': make_compressor_v2(compressor, **compressor_opt),
+        }
+        tsconfig = {
+            "driver": "zarr",
+            "metadata": metadata,
+            "key_encoding": r"/",
+        }
+
+    # Prepare store
+    tsconfig["kvstore"] = {"driver": "file", "path": out}
+
+
+    # Prepare Zarr group
+    # omz = zarr.storage.DirectoryStore(out)
+    # omz = zarr.group(store=omz, overwrite=True)
 
     # write first level
-    omz.create_dataset("0", shape=[nchannels, *fullshape], **opt)
-    array = omz["0"]
-    print("Write level 0 with shape", [nchannels, *fullshape])
-    for i, dirname in enumerate(all_chunks_info["dirname"]):
-        chunkz = all_chunks_info["z"][i] - 1
-        chunky = all_chunks_info["y"][i] - 1
-        planes = all_chunks_info["planes"][i]
-        for j, fname in enumerate(planes["fname"]):
-            subz = planes["z"][j] - 1
-            subc = planes["c"][j] - 1
-            yx_shape = planes["yx_shape"][j]
+    shape = fullshape
+    print('Write level 0 with shape', [nchannels, *shape])
+    wconfig = deepcopy(tsconfig)
+    wconfig["kvstore"]["path"] = os.path.join(out, "0")
+    wconfig["metadata"]["shape"] = [nchannels, *shape]
+    wconfig["create"] = True
+    wconfig["delete_existing"] = True
+
+    tswrite = ts.open(wconfig).result()
+
+    for i, dirname in enumerate(all_chunks_info['dirname']):
+        chunkz = all_chunks_info['z'][i] - 1
+        chunky = all_chunks_info['y'][i] - 1
+        planes = all_chunks_info['planes'][i]
+        for j, fname in enumerate(planes['fname']):
+            subz = planes['z'][j] - 1
+            subc = planes['c'][j] - 1
+            yx_shape = planes['yx_shape'][j]
 
             zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
-            ystart = sum(
-                shape[1] for subshapes in allshapes for shape in subshapes[:chunky]
-            )
-            print(
-                f"Write plane "
-                f"({subc}, {zstart + subz}, {ystart}:{ystart + yx_shape[0]})",
-                end="\r",
-            )
-            slicer = (
-                subc,
-                zstart + subz,
-                slice(ystart, ystart + yx_shape[0]),
-                slice(None),
-            )
+            ystart = sum(shape[1] for subshapes in allshapes for shape in subshapes[:chunky])
 
-            f = TiffFile(fname)
-            array[slicer] = f.asarray()
-    print("")
+            with ts.Transaction() as txn:
+                print(f'Write plane ({subc}, {zstart + subz}, {ystart}:{ystart + yx_shape[0]})', end='\r')
+                slicer = (
+                    subc,
+                    zstart + subz,
+                    slice(ystart, ystart + yx_shape[0]),
+                    slice(None),
+                )
+                f = TiffFile(fname)
+                tswrite.with_transaction(txn)[slicer] = f.asarray()
+    print('')
 
     # build pyramid using median windows
     level = 0
-    while any(x > 1 for x in omz[str(level)].shape[-3:]):
-        prev_array = omz[str(level)]
-        prev_shape = prev_array.shape[-3:]
+    allshapes = [shape]
+    while True:
         level += 1
+        rconfig = wconfig
+        rconfig["create"] = False
+        rconfig["delete_existing"] = False
 
-        new_shape = list(map(lambda x: max(1, x // 2), prev_shape))
-        if all(x < chunk for x in new_shape):
+        prev_shape = shape
+        shape = list(map(lambda x: max(1, x//2), prev_shape))
+        if all(x <= c for x, c in zip(shape[-3:], chunk[-3:])):
             break
-        print("Compute level", level, "with shape", new_shape)
-        omz.create_dataset(str(level), shape=[nchannels, *new_shape], **opt)
-        new_array = omz[str(level)]
+        allshapes.append(shape)
 
-        nz, ny, nx = prev_array.shape[-3:]
+        wconfig = deepcopy(rconfig)
+        wconfig["kvstore"]["path"] = os.path.join(out, str(level))
+        wconfig["metadata"]["shape"] = [nchannels, *shape]
+        wconfig["create"] = True
+        wconfig["delete_existing"] = True
+
+        print('Compute level', level, 'with shape', [nchannels, *shape])
+
+        tsread = ts.open(rconfig).result()
+        tswrite = ts.open(wconfig).result()
+
+        nz, ny, nx = prev_shape
         ncz = ceildiv(nz, max_load)
         ncy = ceildiv(ny, max_load)
         ncx = ceildiv(nx, max_load)
@@ -264,46 +386,40 @@ def convert(
                 for cx in range(ncx):
                     print(f"chunk ({cz}, {cy}, {cx}) / ({ncz}, {ncy}, {ncx})", end="\r")
 
-                    dat = prev_array[
-                        ...,
-                        cz * max_load : (cz + 1) * max_load,
-                        cy * max_load : (cy + 1) * max_load,
-                        cx * max_load : (cx + 1) * max_load,
-                    ]
-                    crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
-                    slicer = [slice(-1) if x else slice(None) for x in crop]
-                    dat = dat[(Ellipsis, *slicer)]
-                    pz, py, px = dat.shape[-3:]
-
-                    dat = dat.reshape(
-                        [
-                            nchannels,
-                            max(pz // 2, 1),
-                            min(pz, 2),
-                            max(py // 2, 1),
-                            min(py, 2),
-                            max(px // 2, 1),
-                            min(px, 2),
+                    with ts.Transaction() as txn:
+                        dat = tsread[
+                            ...,
+                            cz*max_load:(cz+1)*max_load,
+                            cy*max_load:(cy+1)*max_load,
+                            cx*max_load:(cx+1)*max_load,
                         ]
-                    )
-                    dat = dat.transpose([0, 1, 3, 5, 2, 4, 6])
-                    dat = dat.reshape(
-                        [
+                        crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
+                        slicer = [slice(-1) if x else slice(None) for x in crop]
+                        dat = dat[(Ellipsis, *slicer)]
+                        pz, py, px = dat.shape[-3:]
+
+                        dat = dat.reshape([
                             nchannels,
-                            max(pz // 2, 1),
-                            max(py // 2, 1),
-                            max(px // 2, 1),
+                            max(pz//2, 1), min(pz, 2),
+                            max(py//2, 1), min(py, 2),
+                            max(px//2, 1), min(px, 2),
+                        ])
+                        dat = dat.transpose([0, 1, 3, 5, 2, 4, 6])
+                        dat = dat.reshape([
+                            nchannels,
+                            max(pz//2, 1),
+                            max(py//2, 1),
+                            max(px//2, 1),
                             -1,
-                        ]
-                    )
-                    dat = np.median(dat, -1)
+                        ])
+                        dat = np.median(dat, -1)
 
-                    new_array[
-                        ...,
-                        cz * max_load // 2 : (cz + 1) * max_load // 2,
-                        cy * max_load // 2 : (cy + 1) * max_load // 2,
-                        cx * max_load // 2 : (cx + 1) * max_load // 2,
-                    ] = dat
+                        tswrite[
+                            ...,
+                            cz*max_load//2:(cz+1)*max_load//2,
+                            cy*max_load//2:(cy+1)*max_load//2,
+                            cx*max_load//2:(cx+1)*max_load//2,
+                        ] = dat
 
     print("")
     nblevel = level
@@ -328,15 +444,15 @@ def convert(
     voxel_size = list(map(float, reversed(voxel_size)))
     factor = [1] * 3
     for n in range(nblevel):
-        shape = omz[str(n)].shape[-3:]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
+        shape = allshapes[n]
+        multiscales[0]['datasets'].append({})
+        level = multiscales[0]['datasets'][-1]
         level["path"] = str(n)
 
         # We made sure that the downsampling level is exactly 2
         # However, once a dimension has size 1, we stop downsampling.
         if n > 0:
-            shape_prev = omz[str(n - 1)].shape[-3:]
+            shape_prev = shape
             if shape_prev[0] != shape[0]:
                 factor[0] *= 2
             if shape_prev[1] != shape[1]:
@@ -367,7 +483,19 @@ def convert(
     multiscales[0]["coordinateTransformations"] = [
         {"scale": [1.0] * 4, "type": "scale"}
     ]
-    omz.attrs["multiscales"] = multiscales
+
+    if zarr_version == 3:
+        with open(os.path.join(out, "zarr.json"), "wb") as f:
+            json.dump(f, {
+                "zarr_format": 3,
+                "node_type": "group",
+                "attributes": {"multiscales": multiscales}
+            })
+    else:
+        with open(os.path.join(out, ".zgroup"), "wb") as f:
+            json.dump(f, {"zarr_format": 2})
+        with open(os.path.join(out, ".zattrs"), "wb") as f:
+            json.dump(f, {"multiscales": multiscales})
 
     if not nii:
         print("done.")
@@ -377,26 +505,58 @@ def convert(
     # NOTE: we use nifti2 because dimensions typically do not fit in a short
     # TODO: we do not write the json zattrs, but it should be added in
     #       once the nifti-zarr package is released
-    shape = list(reversed(omz["0"].shape))
-    shape = shape[:3] + [1] + shape[3:]  # insert time dimension
+    shape = list(reversed(fullshape)) + [1, nchannels]  # insert time dimension
     affine = orientation_to_affine(orientation, *voxel_size)
     if center:
         affine = center_affine(affine, shape[:3])
     header = nib.Nifti2Header()
     header.set_data_shape(shape)
-    header.set_data_dtype(omz["0"].dtype)
+    header.set_data_dtype(dtype)
     header.set_qform(affine)
     header.set_sform(affine)
-    header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
-    header.structarr["magic"] = b"nz2\0"
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    opt = {
-        "chunks": [len(header)],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None,
+    header.set_xyzt_units(nib.nifti1.unit_codes.code['micron'])
+    header.structarr['magic'] = b'nz2\0'
+    header = np.frombuffer(header.structarr.tobytes(), dtype='u1')
+
+    if zarr_version == 3:
+        metadata = {
+            "chunk_grid": {
+                "name": "regular",
+                "configuration": {"chunk_shape": [len(header)]}
+            },
+            "codecs": [{"name": "bytes"}],
+            "data_type": 'uint8',
+            "fill_value": 0,
+            "chunk_key_encoding": {
+                "name": "default",
+                "configuration": {"separator": r"/"}
+            },
+        }
+        tsconfig = {
+            "driver": "zarr3",
+            "metadata": metadata,
+        }
+    else:
+        metadata = {
+            'chunks': [len(header)],
+            'order': 'F',
+            'dtype': '|u1',
+            'fill_value': None,
+            'compressor': None,
+        }
+        tsconfig = {
+            "driver": "zarr",
+            "metadata": metadata,
+            "key_encoding":  r"/",
+        }
+    tsconfig["kvstore"] = {
+        "driver": "file",
+        "path": os.path.join(out, "nifti")
     }
-    omz.create_dataset("nifti", data=header, shape=shape, **opt)
-    print("done.")
+    wconfig["metadata"]["shape"] = [len(header)]
+    wconfig["create"] = True
+    wconfig["delete_existing"] = True
+    tswrite = ts.open(tsconfig).result()
+    with ts.Transaction() as txn:
+        tswrite.with_transaction(txn)[...] = header
+    print('done.')

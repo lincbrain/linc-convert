@@ -28,6 +28,7 @@ cyclopts = "^2.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
+tensorstore = "*"
 
 [tool.poetry.group.df.dependencies]
 glymur = "*"
