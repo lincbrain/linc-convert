@@ -355,9 +355,6 @@ def convert(
     allshapes = [shape]
     while True:
         level += 1
-        rconfig = wconfig
-        rconfig["create"] = False
-        rconfig["delete_existing"] = False
 
         prev_shape = shape
         shape = list(map(lambda x: max(1, x//2), prev_shape))
@@ -365,7 +362,12 @@ def convert(
             break
         allshapes.append(shape)
 
-        wconfig = deepcopy(rconfig)
+        rconfig = deepcopy(wconfig)
+
+        rconfig["open"] = True
+        rconfig["create"] = False
+        rconfig["delete_existing"] = False
+
         wconfig["kvstore"]["path"] = os.path.join(out, str(level))
         wconfig["metadata"]["shape"] = [nchannels, *shape]
         wconfig["create"] = True
@@ -392,7 +394,7 @@ def convert(
                             cz*max_load:(cz+1)*max_load,
                             cy*max_load:(cy+1)*max_load,
                             cx*max_load:(cx+1)*max_load,
-                        ]
+                        ].result()
                         crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
                         slicer = [slice(-1) if x else slice(None) for x in crop]
                         dat = dat[(Ellipsis, *slicer)]
