@@ -58,7 +58,7 @@ def convert(
     inp: str,
     out: Optional[str] = None,
     *,
-    key: str = None,
+    key: Optional[str] = None,
     meta: str = None,
     chunk: int = 128,
     compressor: str = 'blosc',
@@ -80,6 +80,8 @@ def convert(
         Path to the input mat file
     out
         Path to the output Zarr directory [<INP>.ome.zarr]
+    key
+        Key of the array to be extracted, default to first key found
     meta
         Path to the metadata file
     chunk
