@@ -328,6 +328,8 @@ def mapmat(fnames, key=None):
             if len(f.keys()) > 1:
                 warn(f'More than one key in .mat file {fname}, arbitrarily loading "{f.keys[0]}"')
             key = f.keys()[0]
+        if key not in f.keys():
+            raise Exception(f"Key {key} not found in file {fname}")
 
         if len(fnames) == 1:
             yield f.get(key)
