@@ -325,7 +325,7 @@ def mapmat(fnames, key=None):
             # "Old" .mat file
             f = loadmat(fname)
         if key is None:
-            if len(f.keys()[0]) > 1:
+            if len(f.keys()) > 1:
                 warn(f'More than one key in .mat file {fname}, arbitrarily loading "{f.keys[0]}"')
             key = f.keys()[0]
 
