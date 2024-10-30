@@ -12,22 +12,23 @@ dependencies:
     nibabel
     cyclopts
 """
-import cyclopts
-import zarr
 import ast
-import re
-import os
-import math
 import json
-import h5py
-import numpy as np
-import nibabel as nib
-from typing import Optional
-from itertools import product
-from functools import wraps
-from scipy.io import loadmat
-from warnings import warn
+import math
+import os
+import re
 from contextlib import contextmanager
+from functools import wraps
+from itertools import product
+from typing import Optional, List
+from warnings import warn
+
+import cyclopts
+import h5py
+import nibabel as nib
+import numpy as np
+import zarr
+from scipy.io import loadmat
 
 from utils import (
     ceildiv, make_compressor, convert_unit, to_ome_unit, to_nifti_unit,
@@ -41,12 +42,12 @@ def automap(func):
     """Decorator to automatically map the array in the mat file"""
 
     @wraps(func)
-    def wrapper(inp, out, **kwargs):
+    def wrapper(inp, out=None, **kwargs):
         if out is None:
-            out = os.path.splitext(inp)
+            out = os.path.splitext(inp[0])[0]
             out += '.nii.zarr' if kwargs.get('nii', False) else '.ome.zarr'
         kwargs['nii'] = kwargs.get('nii', False) or out.endswith('.nii.zarr')
-        with mapmat(inp) as dat:
+        with mapmat(inp, kwargs.get('key', None)) as dat:
             return func(dat, out, **kwargs)
 
     return wrapper
@@ -55,19 +56,20 @@ def automap(func):
 @app.default
 @automap
 def convert(
-    inp: str,
-    out: str = None,
-    *,
-    meta: str = None,
-    chunk: int = 128,
-    compressor: str = 'blosc',
-    compressor_opt: str = "{}",
-    max_load: int = 128,
-    max_levels: int = 5,
-    no_pool: Optional[int] = None,
-    nii: bool = False,
-    orientation: str = 'RAS',
-    center: bool = True,
+        inp: List[str],
+        out: Optional[str] = None,
+        *,
+        key: Optional[str] = None,
+        meta: str = None,
+        chunk: int = 128,
+        compressor: str = 'blosc',
+        compressor_opt: str = "{}",
+        max_load: int = 128,
+        max_levels: int = 5,
+        no_pool: Optional[int] = None,
+        nii: bool = False,
+        orientation: str = 'RAS',
+        center: bool = True,
 ):
     """
     This command converts OCT volumes stored in raw matlab files
@@ -79,6 +81,8 @@ def convert(
         Path to the input mat file
     out
         Path to the output Zarr directory [<INP>.ome.zarr]
+    key
+        Key of the array to be extracted, default to first key found
     meta
         Path to the metadata file
     chunk
@@ -123,6 +127,10 @@ def convert(
     omz = zarr.storage.DirectoryStore(out)
     omz = zarr.group(store=omz, overwrite=True)
 
+    if not hasattr(inp, "dtype"):
+        raise Exception("Input is not a numpy array. This is likely unexpected")
+    if len(inp.shape) < 3:
+        raise Exception("Input array is not 3d")
     # Prepare chunking options
     opt = {
         'dimension_separator': r'/',
@@ -151,7 +159,7 @@ def convert(
         opt['chunks'] = [min(x, chunk) for x in shape_level]
         omz.create_dataset(str(level), shape=shape_level, **opt)
         shape_level = [
-            x if i == no_pool else x//2
+            x if i == no_pool else x // 2
             for i, x in enumerate(shape_level)
         ]
 
@@ -160,29 +168,29 @@ def convert(
 
         level_chunk = inp_chunk
         loaded_chunk = inp[
-            k*level_chunk[0]:(k+1)*level_chunk[0],
-            j*level_chunk[1]:(j+1)*level_chunk[1],
-            i*level_chunk[2]:(i+1)*level_chunk[2],
-        ]
+                       k * level_chunk[0]:(k + 1) * level_chunk[0],
+                       j * level_chunk[1]:(j + 1) * level_chunk[1],
+                       i * level_chunk[2]:(i + 1) * level_chunk[2],
+                       ]
 
         for level in range(nblevels):
             out_level = omz[str(level)]
 
-            print(f'[{i+1:03d}, {j+1:03d}, {k+1:03d}]', '/',
+            print(f'[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]', '/',
                   f'[{ni:03d}, {nj:03d}, {nk:03d}]',
-                  f'({1+level}/{nblevels})', end='\r')
+                  f'({1 + level}/{nblevels})', end='\r')
 
             # save current chunk
             out_level[
-                k*level_chunk[0]:k*level_chunk[0]+loaded_chunk.shape[0],
-                j*level_chunk[1]:j*level_chunk[1]+loaded_chunk.shape[1],
-                i*level_chunk[2]:i*level_chunk[2]+loaded_chunk.shape[2],
+            k * level_chunk[0]:k * level_chunk[0] + loaded_chunk.shape[0],
+            j * level_chunk[1]:j * level_chunk[1] + loaded_chunk.shape[1],
+            i * level_chunk[2]:i * level_chunk[2] + loaded_chunk.shape[2],
             ] = loaded_chunk
             # ensure divisible by 2
             loaded_chunk = loaded_chunk[
-                slice(2*(loaded_chunk.shape[0]//2) if 0 != no_pool else None),
-                slice(2*(loaded_chunk.shape[1]//2) if 1 != no_pool else None),
-                slice(2*(loaded_chunk.shape[2]//2) if 2 != no_pool else None),
+                slice(2 * (loaded_chunk.shape[0] // 2) if 0 != no_pool else None),
+                slice(2 * (loaded_chunk.shape[1] // 2) if 1 != no_pool else None),
+                slice(2 * (loaded_chunk.shape[2] // 2) if 2 != no_pool else None),
             ]
             # mean pyramid (average each 2x2x2 patch)
             if no_pool == 0:
@@ -207,15 +215,15 @@ def convert(
                     loaded_chunk[1::2, 1::2, :]
                 ) / 4
             else:
-                inp_chunk = (
-                    inp_chunk[0::2, 0::2, 0::2] +
-                    inp_chunk[0::2, 0::2, 1::2] +
-                    inp_chunk[0::2, 1::2, 0::2] +
-                    inp_chunk[0::2, 1::2, 1::2] +
-                    inp_chunk[1::2, 0::2, 0::2] +
-                    inp_chunk[1::2, 0::2, 1::2] +
-                    inp_chunk[1::2, 1::2, 0::2] +
-                    inp_chunk[1::2, 1::2, 1::2]
+                loaded_chunk = (
+                    loaded_chunk[0::2, 0::2, 0::2] +
+                    loaded_chunk[0::2, 0::2, 1::2] +
+                    loaded_chunk[0::2, 1::2, 0::2] +
+                    loaded_chunk[0::2, 1::2, 1::2] +
+                    loaded_chunk[1::2, 0::2, 0::2] +
+                    loaded_chunk[1::2, 0::2, 1::2] +
+                    loaded_chunk[1::2, 1::2, 0::2] +
+                    loaded_chunk[1::2, 1::2, 1::2]
                 ) / 8
             level_chunk = [
                 x if i == no_pool else x // 2
@@ -250,17 +258,17 @@ def convert(
             {
                 "type": "scale",
                 "scale": [
-                    (1 if no_pool == 0 else 2**n)*vx[0],
-                    (1 if no_pool == 1 else 2**n)*vx[1],
-                    (1 if no_pool == 2 else 2**n)*vx[2],
+                    (1 if no_pool == 0 else 2 ** n) * vx[0],
+                    (1 if no_pool == 1 else 2 ** n) * vx[1],
+                    (1 if no_pool == 2 else 2 ** n) * vx[2],
                 ]
             },
             {
                 "type": "translation",
                 "translation": [
-                    (0 if no_pool == 0 else (2**n - 1))*vx[0]*0.5,
-                    (0 if no_pool == 1 else (2**n - 1))*vx[1]*0.5,
-                    (0 if no_pool == 2 else (2**n - 1))*vx[2]*0.5,
+                    (0 if no_pool == 0 else (2 ** n - 1)) * vx[0] * 0.5,
+                    (0 if no_pool == 1 else (2 ** n - 1)) * vx[1] * 0.5,
+                    (0 if no_pool == 2 else (2 ** n - 1)) * vx[2] * 0.5,
                 ]
             }
         ]
@@ -305,24 +313,35 @@ def convert(
 
 
 @contextmanager
-def mapmat(fname):
+def mapmat(fnames, key=None):
     """Load or memory-map an array stored in a .mat file"""
-    try:
-        # "New" .mat file
-        f = h5py.File(fname, 'r')
-    except Exception:
-        # "Old" .mat file
-        f = loadmat(fname)
-    keys = list(f.keys())
-    if len(keys) > 1:
-        warn(f'More than one key in .mat, arbitrarily loading "{keys[0]}"')
-    yield f.get(keys[0])
-    if hasattr(f, 'close'):
-        f.close()
+    loaded_data = []
+
+    for fname in fnames:
+        try:
+            # "New" .mat file
+            f = h5py.File(fname, 'r')
+        except Exception:
+            # "Old" .mat file
+            f = loadmat(fname)
+        if key is None:
+            if len(f.keys()) > 1:
+                warn(f'More than one key in .mat file {fname}, arbitrarily loading "{f.keys[0]}"')
+            key = f.keys()[0]
+        if key not in f.keys():
+            raise Exception(f"Key {key} not found in file {fname}")
+
+        if len(fnames) == 1:
+            yield f.get(key)
+            if hasattr(f, 'close'):
+                f.close()
+            break
+        loaded_data.append(f.get(key))
+
+    yield np.stack(loaded_data, axis=-1)
 
 
 def make_json(oct_meta):
-
     """
     Expected input:
     ---------------
@@ -343,7 +362,7 @@ def make_json(oct_meta):
 
     def parse_value_unit(string, n=None):
         number = r'-?(\d+\.?\d*|\d*\.?\d+)(E-?\d+)?'
-        value = 'x'.join([number]*(n or 1))
+        value = 'x'.join([number] * (n or 1))
         match = re.fullmatch(r'(?P<value>' + value + r')(?P<unit>\w*)', string)
         value, unit = match.group('value'), match.group('unit')
         value = list(map(float, value.split('x')))
