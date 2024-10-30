@@ -41,9 +41,9 @@ def automap(func):
     """Decorator to automatically map the array in the mat file"""
 
     @wraps(func)
-    def wrapper(inp, out, **kwargs):
+    def wrapper(inp, out=None, **kwargs):
         if out is None:
-            out = os.path.splitext(inp)
+            out = os.path.splitext(inp)[0]
             out += '.nii.zarr' if kwargs.get('nii', False) else '.ome.zarr'
         kwargs['nii'] = kwargs.get('nii', False) or out.endswith('.nii.zarr')
         with mapmat(inp,kwargs.get('key', None)) as dat:
