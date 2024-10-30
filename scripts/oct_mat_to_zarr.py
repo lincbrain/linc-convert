@@ -22,7 +22,7 @@ import json
 import h5py
 import numpy as np
 import nibabel as nib
-from typing import Optional
+from typing import Optional, List
 from itertools import product
 from functools import wraps
 from scipy.io import loadmat
@@ -43,7 +43,7 @@ def automap(func):
     @wraps(func)
     def wrapper(inp, out=None, **kwargs):
         if out is None:
-            out = os.path.splitext(inp)[0]
+            out = os.path.splitext(inp[0])[0]
             out += '.nii.zarr' if kwargs.get('nii', False) else '.ome.zarr'
         kwargs['nii'] = kwargs.get('nii', False) or out.endswith('.nii.zarr')
         with mapmat(inp,kwargs.get('key', None)) as dat:
@@ -55,7 +55,7 @@ def automap(func):
 @app.default
 @automap
 def convert(
-    inp: str,
+    inp: List[str],
     out: Optional[str] = None,
     *,
     key: Optional[str] = None,
@@ -214,15 +214,15 @@ def convert(
                     loaded_chunk[1::2, 1::2, :]
                 ) / 4
             else:
-                inp_chunk = (
-                    inp_chunk[0::2, 0::2, 0::2] +
-                    inp_chunk[0::2, 0::2, 1::2] +
-                    inp_chunk[0::2, 1::2, 0::2] +
-                    inp_chunk[0::2, 1::2, 1::2] +
-                    inp_chunk[1::2, 0::2, 0::2] +
-                    inp_chunk[1::2, 0::2, 1::2] +
-                    inp_chunk[1::2, 1::2, 0::2] +
-                    inp_chunk[1::2, 1::2, 1::2]
+                loaded_chunk = (
+                    loaded_chunk[0::2, 0::2, 0::2] +
+                    loaded_chunk[0::2, 0::2, 1::2] +
+                    loaded_chunk[0::2, 1::2, 0::2] +
+                    loaded_chunk[0::2, 1::2, 1::2] +
+                    loaded_chunk[1::2, 0::2, 0::2] +
+                    loaded_chunk[1::2, 0::2, 1::2] +
+                    loaded_chunk[1::2, 1::2, 0::2] +
+                    loaded_chunk[1::2, 1::2, 1::2]
                 ) / 8
             level_chunk = [
                 x if i == no_pool else x // 2
@@ -312,23 +312,30 @@ def convert(
 
 
 @contextmanager
-def mapmat(fname, key=None):
+def mapmat(fnames, key=None):
     """Load or memory-map an array stored in a .mat file"""
-    try:
-        # "New" .mat file
-        f = h5py.File(fname, 'r')
-    except Exception:
-        # "Old" .mat file
-        f = loadmat(fname)
-    keys = list(f.keys())
-    if key is None:
-        if len(keys) > 1:
-            warn(f'More than one key in .mat, arbitrarily loading "{keys[0]}"')
-        yield f.get(keys[0])
-    else:
-        yield f[key]
-    if hasattr(f, 'close'):
-        f.close()
+    loaded_data = []
+
+    for fname in fnames:
+        try:
+            # "New" .mat file
+            f = h5py.File(fname, 'r')
+        except Exception:
+            # "Old" .mat file
+            f = loadmat(fname)
+        if key is None:
+            if len(f.keys()[0]) > 1:
+                warn(f'More than one key in .mat file {fname}, arbitrarily loading "{f.keys[0]}"')
+            key = f.keys()[0]
+
+        if len(fnames) == 1:
+            yield f.get(key)
+            if hasattr(f, 'close'):
+                f.close()
+            break
+        loaded_data.append(f.get(key))
+
+    yield np.stack(loaded_data, axis=-1)
 
 
 def make_json(oct_meta):
