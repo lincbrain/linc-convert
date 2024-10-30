@@ -56,7 +56,7 @@ def automap(func):
 @automap
 def convert(
     inp: str,
-    out: str = None,
+    out: Optional[str] = None,
     *,
     key: str = None,
     meta: str = None,
