@@ -46,7 +46,7 @@ def automap(func):
             out = os.path.splitext(inp)
             out += '.nii.zarr' if kwargs.get('nii', False) else '.ome.zarr'
         kwargs['nii'] = kwargs.get('nii', False) or out.endswith('.nii.zarr')
-        with mapmat(inp) as dat:
+        with mapmat(inp,kwargs.get('key', None)) as dat:
             return func(dat, out, **kwargs)
 
     return wrapper
@@ -58,6 +58,7 @@ def convert(
     inp: str,
     out: str = None,
     *,
+    key: str = None,
     meta: str = None,
     chunk: int = 128,
     compressor: str = 'blosc',
@@ -309,7 +310,7 @@ def convert(
 
 
 @contextmanager
-def mapmat(fname):
+def mapmat(fname, key=None):
     """Load or memory-map an array stored in a .mat file"""
     try:
         # "New" .mat file
@@ -318,9 +319,12 @@ def mapmat(fname):
         # "Old" .mat file
         f = loadmat(fname)
     keys = list(f.keys())
-    if len(keys) > 1:
-        warn(f'More than one key in .mat, arbitrarily loading "{keys[0]}"')
-    yield f.get(keys[0])
+    if key is None:
+        if len(keys) > 1:
+            warn(f'More than one key in .mat, arbitrarily loading "{keys[0]}"')
+        yield f.get(keys[0])
+    else:
+        yield f[key]
     if hasattr(f, 'close'):
         f.close()
 
