@@ -124,7 +124,7 @@ def convert(
     omz = zarr.group(store=omz, overwrite=True)
 
     if not hasattr(inp,"dtype"):
-        raise Exception("Input is not a numpy array, converted. This is likely unexpected")
+        raise Exception("Input is not a numpy array. This is likely unexpected")
     if len(inp.shape) < 3:
         raise Exception("Input array is not 3d")
     # Prepare chunking options
