@@ -125,7 +125,8 @@ def convert(
 
     if not hasattr(inp,"dtype"):
         raise Exception("Input is not a numpy array, converted. This is likely unexpected")
-
+    if len(inp.shape) < 3:
+        raise Exception("Input array is not 3d")
     # Prepare chunking options
     opt = {
         'dimension_separator': r'/',
