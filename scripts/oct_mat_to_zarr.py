@@ -123,6 +123,9 @@ def convert(
     omz = zarr.storage.DirectoryStore(out)
     omz = zarr.group(store=omz, overwrite=True)
 
+    if not hasattr(inp,"dtype"):
+        raise Exception("Input is not a numpy array, converted. This is likely unexpected")
+
     # Prepare chunking options
     opt = {
         'dimension_separator': r'/',
