@@ -29,6 +29,8 @@ numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
 tensorstore = "*"
+universal_pathlib = "*"
+fsspec = "*"
 
 [tool.poetry.group.df.dependencies]
 glymur = "*"
