@@ -265,14 +265,19 @@ def convert(
             print(f'Write plane ({subc:4d}, {zstart + subz:4d}, '
                   f'{ystart:4d}:{ystart + yx_shape[0]:4d})', end='\r')
 
-            with ts.Transaction() as txn:
-                f = TiffFile(fname)
-                tswriter.with_transaction(txn)[
-                    subc,
-                    zstart + subz,
-                    slice(ystart, ystart + yx_shape[0]),
-                    :,
-                ] = f.asarray()
+            dat = TiffFile(fname).asarray()
+            try:
+                with ts.Transaction() as txn:
+                    tswriter.with_transaction(txn)[
+                        subc,
+                        zstart + subz,
+                        slice(ystart, ystart + yx_shape[0]),
+                        slice(None),
+                    ] = dat
+            except Exception:
+                print('')
+                raise
+
     print('')
 
     # ------------------------------------------------------------------
