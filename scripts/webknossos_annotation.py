@@ -250,9 +250,6 @@ def contour_to_mask(mask, value):
     single_mask = binary_fill_holes(closed_mask)
 
     single_mask = np.where(single_mask, value, 0)
-    # plt.subplot(1,3,3)
-    # plt.imshow(single_mask)
-    # plt.show()
     return single_mask
 
 
