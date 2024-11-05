@@ -240,7 +240,6 @@ def find_borders(img):
     l = cal_distance(np.rot90(img, k=3)) 
     r = cal_distance(np.rot90(img, k=1))
 
-    # return [max(0, k-2) for k in [t, b, l, r]]
     return [t, b, l, r]
 
 
