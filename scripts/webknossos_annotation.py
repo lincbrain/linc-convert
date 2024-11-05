@@ -247,12 +247,6 @@ def contour_to_mask(mask, value):
     h, w = mask.shape[:2]
     kernel = np.ones((5, 5), np.uint8)
     closed_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel) 
-    # closed_mask = skimage.morphology.binary_closing(mask) 
-    # plt.figure()
-    # plt.subplot(1,3,1)
-    # plt.imshow(mask)
-    # plt.subplot(1,3,2)
-    # plt.imshow(closed_mask)
     single_mask = binary_fill_holes(closed_mask)
 
     # contours = measure.find_contours(closed_mask) 
