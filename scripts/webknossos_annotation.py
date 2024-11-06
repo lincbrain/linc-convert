@@ -59,8 +59,7 @@ def convert(
     n = omz_res.shape[1] 
     size = omz_res.shape[-2:]
     for idx in range(n):
-        offset_x, offset_y = 0, 0
-        data = wkw_dataset.read(off = (offset_y, offset_x, idx), shape = [size[1], size[0], 1])
+        data = wkw_dataset.read(off = (0, 0, idx), shape = [size[1], size[0], 1])
         data = data[0, :, :, 0]
         data = np.transpose(data, (1, 0))
         [t,b,l,r] = find_borders(data)
