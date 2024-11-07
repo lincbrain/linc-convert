@@ -34,4 +34,4 @@ jobs:
         run: poetry install --with dev,lsm,df
       - name: Run the automated tests
         run: poetry run pytest -v
-        
+        working-directory: ./tests
