@@ -1,5 +1,5 @@
-
 """Utilities for JPEG2000 files."""
+
 # stdlib
 import uuid
 from dataclasses import dataclass
@@ -87,7 +87,7 @@ class WrappedJ2K:
         if Ellipsis not in index:
             index += (Ellipsis,)
         if any(idx is None for idx in index):
-            raise TypeError('newaxis not supported')
+            raise TypeError("newaxis not supported")
 
         # substitute ellipses
         new_index = []
@@ -99,13 +99,13 @@ class WrappedJ2K:
                 if not has_seen_ellipsis:
                     new_index += [slice(None)] * nb_ellipsis
                 elif not last_was_ellipsis:
-                    raise ValueError('Multiple ellipses should be contiguous')
+                    raise ValueError("Multiple ellipses should be contiguous")
                 has_seen_ellipsis = True
                 last_was_ellipsis = True
             elif not isinstance(idx, slice):
-                raise TypeError('Only slices are supported')
+                raise TypeError("Only slices are supported")
             elif idx.step not in (None, 1):
-                raise ValueError('Striding not supported')
+                raise ValueError("Striding not supported")
             else:
                 last_was_ellipsis = False
                 new_index += [idx]
