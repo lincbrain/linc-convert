@@ -16,6 +16,7 @@ if __name__ == "__main__":
         test_df._write_test_data(tmp_dir)
         output_zarr = os.path.join(tmp_dir, "output.zarr")
         files = glob.glob(os.path.join(tmp_dir, "*.jp2"))
+        files.sort()
         with zipfile.ZipFile("data/df_input.zip", "w") as z:
             for file in files:
                 z.write(file, os.path.basename(file))

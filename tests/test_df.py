@@ -21,5 +21,6 @@ def test_df(tmp_path):
         z.extractall(tmp_path)
     output_zarr = tmp_path / "output.zarr"
     files = glob.glob(os.path.join(tmp_path, "*.jp2"))
+    files.sort()
     multi_slice.convert(files, str(output_zarr))
     assert _cmp_zarr_archives(str(output_zarr), "data/df.zarr.zip")
