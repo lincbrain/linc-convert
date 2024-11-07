@@ -130,7 +130,7 @@ def convert(
             new_width = jp2.shape[1]
     new_size = (new_height, new_width)
     if has_channel:
-        new_size += (3.)
+        new_size += (3.,)
     print(len(inp), new_size, nblevel, has_channel)
 
     # Prepare chunking options
@@ -143,7 +143,7 @@ def convert(
         "compressor": make_compressor(compressor, **compressor_opt),
     }
     print(opt)
-
+    print(new_size)
     # Write each level
     for level in range(nblevel):
         shape = [ceildiv(s, 2**level) for s in new_size[:2]]
@@ -277,7 +277,7 @@ def convert(
     omz.create_dataset("nifti", data=header, shape=shape, **opt)
 
     # Write sidecar .json file
-    json_name = os.path.splitext(out)(os.path.splitext(out)[0])[0]
+    json_name = os.path.splitext(out)[0]
     json_name += '.json'
     dic = {}
     dic["PixelSize"] = json.dumps([vxw, vxh])
