@@ -3,15 +3,14 @@ import os
 import tempfile
 import zipfile
 
-import zarr
-
 import test_df
 import test_lsm
+import zarr
+
 from linc_convert.modalities.df import multi_slice
 from linc_convert.modalities.lsm import mosaic
 
 if __name__ == "__main__":
-
     with tempfile.TemporaryDirectory() as tmp_dir:
         test_df._write_test_data(tmp_dir)
         output_zarr = os.path.join(tmp_dir, "output.zarr")
