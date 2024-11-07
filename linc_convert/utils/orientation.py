@@ -1,4 +1,5 @@
 """Orientation of an array of voxels with respect to world space."""
+
 import numpy as np
 
 
@@ -32,10 +33,7 @@ def orientation_ensure_3d(orientation: str) -> str:
 
 
 def orientation_to_affine(
-    orientation: str,
-    vxw: float = 1,
-    vxh: float = 1,
-    vxd: float = 1
+    orientation: str, vxw: float = 1, vxh: float = 1, vxd: float = 1
 ) -> np.ndarray:
     """
     Build an affine matrix from an orientation string and voxel size.

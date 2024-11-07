@@ -1,4 +1,5 @@
 """Zarr utilities."""
+
 import numcodecs
 import numcodecs.abc
 
@@ -9,10 +10,10 @@ def make_compressor(name: str, **prm: dict) -> numcodecs.abc.Codec:
     if not isinstance(name, str):
         return name
     name = name.lower()
-    if name == 'blosc':
+    if name == "blosc":
         Compressor = numcodecs.Blosc
-    elif name == 'zlib':
+    elif name == "zlib":
         Compressor = numcodecs.Zlib
     else:
-        raise ValueError('Unknown compressor', name)
+        raise ValueError("Unknown compressor", name)
     return Compressor(**prm)

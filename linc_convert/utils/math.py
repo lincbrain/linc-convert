@@ -1,4 +1,5 @@
 """Math utilities."""
+
 import math
 from numbers import Number
 

@@ -39,6 +39,7 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
             print(f"Mismatch found in dataset: {key}")
             return False
         if zarr1[key].attrs != zarr2[key].attrs:
+            print("attrs mismatch")
             return False
 
     # If all checks pass
