@@ -8,7 +8,10 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         poetry-version: ["latest", "1.8.4"]
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        # glymur needs dynamic library on macos and windows, and causing error
+        # os: [ubuntu-22.04, macos-latest, windows-latest]
+        os: [ubuntu-22.04]
+        
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
