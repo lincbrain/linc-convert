@@ -174,11 +174,13 @@ def convert(
             x = floordiv(shape[-2] - subdat_size[-2], 2)
             y = floordiv(shape[-1] - subdat_size[-1], 2)
 
-            for channel in range(3): 
-                if max_load is None or (subdat_size[-2] < max_load and subdat_size[-1] < max_load):
-                    array[channel, idx, x : x + subdat_size[-2], y : y + subdat_size[-1]] = (
-                        subdat[channel:channel+1, ...]
-                    )
+            for channel in range(3):
+                if max_load is None or (
+                    subdat_size[-2] < max_load and subdat_size[-1] < max_load
+                ):
+                    array[
+                        channel, idx, x : x + subdat_size[-2], y : y + subdat_size[-1]
+                    ] = subdat[channel : channel + 1, ...]
 
                 else:
                     ni = ceildiv(subdat_size[-2], max_load)
@@ -202,9 +204,9 @@ def convert(
                                 x + start_x : x + end_x,
                                 y + start_y : y + end_y,
                             ] = subdat[
-                                channel: channel+1,
-                                start_x : end_x,
-                                start_y : end_y,
+                                channel : channel + 1,
+                                start_x:end_x,
+                                start_y:end_y,
                             ]
                     print("")
 
@@ -250,8 +252,8 @@ def convert(
                 "translation": [0.0] * has_channel
                 + [
                     0.0,
-                    float(2**n-1) * vxh * 0.5,
-                    float(2**n-1) * vxw * 0.5,
+                    float(2**n - 1) * vxh * 0.5,
+                    float(2**n - 1) * vxw * 0.5,
                 ],
             },
         ]
