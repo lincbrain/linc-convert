@@ -607,12 +607,12 @@ def generate_pyramid(
                     slice(i*max_load, min((i+1)*max_load, n))
                     for i, n in zip(chunk_index, prev_shape)
                 ]
-                dat = tsreader.with_transaction(txn)[*slicer].read().result()
+                dat = tsreader.with_transaction(txn)[tuple(slicer)].read().result()
 
                 # Discard the last voxel along odd dimensions
                 crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
                 slcr = [slice(-1) if x else slice(None) for x in crop]
-                dat = dat[Ellipsis, *slcr]
+                dat = dat[tuple([Ellipsis, *slcr])]
 
                 patch_shape = dat.shape[-3:]
 
@@ -643,7 +643,7 @@ def generate_pyramid(
                     slice(i*max_load//2, min((i+1)*max_load//2, n))
                     for i, n in zip(chunk_index, shape)
                 ]
-                tswriter.with_transaction(txn)[*slicer] = dat
+                tswriter.with_transaction(txn)[tuple(slicer)] = dat
 
     print("")
 
