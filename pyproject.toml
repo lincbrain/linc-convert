@@ -1,0 +1,126 @@
+[tool.poetry]
+name = "linc-convert"
+version = "0.0.1"
+description = "Data conversion tools for the LINC project."
+authors = [
+    "Yael Balbastre <yael.balbastre@gmail.com>",
+]
+maintainers = [
+    "Yael Balbastre <yael.balbastre@gmail.com>",
+]
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://connects.mgh.harvard.edu"
+repository = "https://github.com/lincbrain/linc-convert"
+documentation = "https://lincbrain.github.io/linc-convert"
+keywords = ["python", "package", "template"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3.10",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent"
+]
+packages = [{include = "linc_convert"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+cyclopts = "^2.0.0"
+numpy = "*"
+nibabel = "*"
+zarr = "^2.0.0"
+
+[tool.poetry.group.df.dependencies]
+glymur = "*"
+
+[tool.poetry.group.lsm.dependencies]
+tifffile = "*"
+
+[tool.poetry.group.dev]
+optional = true
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.1.1"
+mypy = "^1.9.0"
+pre-commit = "^3.7.0"
+pytest-cov = "^5.0.0"
+ruff = "^0.3.4"
+
+[tool.poetry.group.docs]
+optional = true
+[tool.poetry.group.docs.dependencies]
+pdoc = "^14.4.0"
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "."
+]
+testpaths = [
+  "tests"
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.ruff]
+exclude = [
+  ".bzr",
+  ".direnv",
+  ".eggs",
+  ".git",
+  ".git-rewrite",
+  ".hg",
+  ".mypy_cache",
+  ".nox",
+  ".pants.d",
+  ".pytype",
+  ".ruff_cache",
+  ".svn",
+  ".tox",
+  ".venv",
+  "__pypackages__",
+  "_build",
+  "buck-out",
+  "build",
+  "dist",
+  "node_modules",
+  "venv"
+]
+line-length = 88
+indent-width = 4
+src = ["."]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["ANN", "D", "E", "F", "I"]
+ignore = [
+  "ANN101",  # self should not be annotated.
+  "ANN102"  # cls should not be annotated.
+]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN", "D"]
+
+[tool.poetry.scripts]
+linc-convert = "linc_convert.cli:main"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+style = "pep440"
+bump = true
+pattern = "default-unprefixed"
+
+[build-system]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"

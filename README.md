@@ -1,2 +1,3 @@
 # linc-convert
-Data conversion scripts for the LINC project
+
+Data conversion tools for the LINC project
