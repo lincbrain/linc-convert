@@ -39,7 +39,7 @@ def convert(
     chunk: list[int] = [128],
     shard: list[int | str] | None = None,
     zarr_version: Literal[2, 3] = 3,
-    compressor: str = 'blosc',
+    compressor: str = "blosc",
     compressor_opt: str = "{}",
     max_load: int = 512,
     nii: bool = False,
@@ -118,7 +118,7 @@ def convert(
         max_load += 1
 
     if zarr_version < 3 and shard:
-        raise ValueError('Sharding requires zarr v3')
+        raise ValueError("Sharding requires zarr v3")
 
     # ------------------------------------------------------------------
     # Parse all input tiles and their shape
@@ -226,7 +226,7 @@ def convert(
 
     shape = fullshape
 
-    print('Write level 0 with shape', [nchannels, *shape])
+    print("Write level 0 with shape", [nchannels, *shape])
 
     wconfig = default_write_config(
         path=os.path.join(out, "0"),
@@ -243,27 +243,25 @@ def convert(
 
     tswriter = ts.open(wconfig).result()
 
-    for i, dirname in enumerate(all_chunks_info['dirname']):
-        chunkz = all_chunks_info['z'][i] - 1
-        chunky = all_chunks_info['y'][i] - 1
-        planes = all_chunks_info['planes'][i]
-        for j, fname in enumerate(planes['fname']):
-            subz = planes['z'][j] - 1
-            subc = planes['c'][j] - 1
-            yx_shape = planes['yx_shape'][j]
+    for i, dirname in enumerate(all_chunks_info["dirname"]):
+        chunkz = all_chunks_info["z"][i] - 1
+        chunky = all_chunks_info["y"][i] - 1
+        planes = all_chunks_info["planes"][i]
+        for j, fname in enumerate(planes["fname"]):
+            subz = planes["z"][j] - 1
+            subc = planes["c"][j] - 1
+            yx_shape = planes["yx_shape"][j]
 
-            zstart = sum(
-                shape[0][0]
-                for shape in allshapes[:chunkz]
-            )
+            zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
             ystart = sum(
-                shape[1]
-                for subshapes in allshapes
-                for shape in subshapes[:chunky]
+                shape[1] for subshapes in allshapes for shape in subshapes[:chunky]
             )
 
-            print(f'Write plane ({subc:4d}, {zstart + subz:4d}, '
-                  f'{ystart:4d}:{ystart + yx_shape[0]:4d})', end='\r')
+            print(
+                f"Write plane ({subc:4d}, {zstart + subz:4d}, "
+                f"{ystart:4d}:{ystart + yx_shape[0]:4d})",
+                end="\r",
+            )
 
             dat = TiffFile(fname).asarray()
             try:
@@ -275,16 +273,16 @@ def convert(
                         slice(None),
                     ] = dat
             except Exception:
-                print('')
+                print("")
                 raise
 
-    print('')
+    print("")
 
     # ------------------------------------------------------------------
     # Build pyramid using median windows
     # ------------------------------------------------------------------
 
-    print('Generate pyramid levels')
+    print("Generate pyramid levels")
     allshapes = generate_pyramid(
         path=out,
         shard="auto" if shard == "auto" else None,
@@ -296,7 +294,7 @@ def convert(
     # Write OME-Zarr multiscale metadata
     # ------------------------------------------------------------------
 
-    print('Write metadata')
+    print("Write metadata")
     write_ome_metadata(
         path=out,
         axes=["c", "z", "y", "x"],
@@ -318,9 +316,11 @@ def convert(
         affine = center_affine(affine, shape[:3])
 
     niftizarr_write_header(
-        out, shape, affine,
+        out,
+        shape,
+        affine,
         dtype=dtype,
         unit="micron",
         zarr_version=zarr_version,
     )
-    print('done.')
+    print("done.")
