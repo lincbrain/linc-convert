@@ -1,4 +1,5 @@
 """Zarr utilities."""
+
 # stdlib
 import itertools
 import json
@@ -9,7 +10,6 @@ from urllib.parse import urlparse
 
 # externals
 import nibabel as nib
-
 import numcodecs
 import numcodecs.abc
 import numpy as np
@@ -81,8 +81,8 @@ def make_kvstore(path: str | os.PathLike) -> dict:
 def auto_shard_size(
     max_shape: list[int],
     itemsize: int | np.dtype | str,
-    max_file_size: int = 2*1024**4,
-    compression_ratio: float = 2
+    max_file_size: int = 2 * 1024**4,
+    compression_ratio: float = 2,
 ) -> list[int]:
     """
     Find maximal shard size that ensures file size below cap.
@@ -120,7 +120,7 @@ def auto_shard_size(
         if all(x >= s for x, s in zip(shard, max_shape)):
             break
         # Make shard one level larger
-        new_shard = [min(2*x, s) for x, s in zip(shard, max_shape)]
+        new_shard = [min(2 * x, s) for x, s in zip(shard, max_shape)]
         # If shard is too large, stop and keep previous shard
         if np.prod(new_shard) > max_numel:
             break
@@ -128,7 +128,7 @@ def auto_shard_size(
         shard = new_shard
 
     # replace max size with larger power of two
-    shard = [2**math.ceil(math.log2(x)) for x in shard]
+    shard = [2 ** math.ceil(math.log2(x)) for x in shard]
     return shard
 
 
@@ -188,7 +188,7 @@ def niftizarr_write_header(
         metadata = {
             "chunk_grid": {
                 "name": "regular",
-                "configuration": {"chunk_shape": [len(header)]}
+                "configuration": {"chunk_shape": [len(header)]},
             },
             "codecs": [
                 {"name": "bytes"},
@@ -198,7 +198,7 @@ def niftizarr_write_header(
             "fill_value": 0,
             "chunk_key_encoding": {
                 "name": "default",
-                "configuration": {"separator": r"/"}
+                "configuration": {"separator": r"/"},
             },
         }
         tsconfig = {
@@ -216,7 +216,7 @@ def niftizarr_write_header(
         tsconfig = {
             "driver": "zarr",
             "metadata": metadata,
-            "key_encoding":  r"/",
+            "key_encoding": r"/",
         }
     tsconfig["kvstore"] = make_kvstore(path / "nifti")
     tsconfig["metadata"]["shape"] = [len(header)]
@@ -317,16 +317,12 @@ def default_write_config(
     #   Zarr 3
     # ------------------------------------------------------------------
     if version == 3:
-
         if compressor and compressor != "raw":
             compressor = [make_compressor_v3(compressor, **compressor_opt)]
         else:
             compressor = []
 
-        codec_little_endian = {
-            "name": "bytes",
-            "configuration": {"endian": "little"}
-        }
+        codec_little_endian = {"name": "bytes", "configuration": {"endian": "little"}}
 
         if shard:
             chunk_grid = {
@@ -352,10 +348,7 @@ def default_write_config(
             codecs = [sharding_codec]
 
         else:
-            chunk_grid = {
-                "name": "regular",
-                "configuration": {"chunk_shape": chunk}
-            }
+            chunk_grid = {"name": "regular", "configuration": {"chunk_shape": chunk}}
             codecs = [
                 codec_little_endian,
                 *compressor,
@@ -368,7 +361,7 @@ def default_write_config(
             "fill_value": 0,
             "chunk_key_encoding": {
                 "name": "default",
-                "configuration": {"separator": r"/"}
+                "configuration": {"separator": r"/"},
             },
         }
         config = {
@@ -380,7 +373,6 @@ def default_write_config(
     #   Zarr 2
     # ------------------------------------------------------------------
     else:
-
         if compressor and compressor != "raw":
             compressor = make_compressor_v2(compressor, **compressor_opt)
         else:
@@ -539,18 +531,20 @@ def generate_pyramid(
                 "name": "regular",
                 "configuration": {"chunk_shape": shard},
             }
-            metadata["codecs"] = [{
-                "name": "sharding_indexed",
-                "configuration": {
-                    "chunk_shape": chunk,
-                    "codecs": codecs,
-                    "index_codecs": [
-                        codecs[0],  # should be the bytes codec
-                        {"name": "crc32c"},
-                    ],
-                    "index_location": "end",
-                },
-            }]
+            metadata["codecs"] = [
+                {
+                    "name": "sharding_indexed",
+                    "configuration": {
+                        "chunk_shape": chunk,
+                        "codecs": codecs,
+                        "index_codecs": [
+                            codecs[0],  # should be the bytes codec
+                            {"name": "crc32c"},
+                        ],
+                        "index_location": "end",
+                    },
+                }
+            ]
 
         return metadata
 
@@ -568,7 +562,7 @@ def generate_pyramid(
         level += 1
 
         # Compute downsampled shape
-        prev_shape, shape = shape, [max(1, x//2) for x in shape]
+        prev_shape, shape = shape, [max(1, x // 2) for x in shape]
 
         # Stop if seen enough levels or level shape smaller than chunk size
         if levels is None:
@@ -582,7 +576,7 @@ def generate_pyramid(
         allshapes.append(shape)
 
         # Open input and output zarr
-        rconfig = default_read_config(str(path / str(level-1)))
+        rconfig = default_read_config(str(path / str(level - 1)))
         wconfig = {
             "driver": "zarr3" if zarr_version == 3 else "zarr",
             "metadata": update_metadata(metadata, batch + shape),
@@ -597,14 +591,12 @@ def generate_pyramid(
         # (note that these are unrelared to underlying zarr chunks)
         grid_shape = [ceildiv(n, max_load) for n in prev_shape]
         for chunk_index in itertools.product(*[range(x) for x in grid_shape]):
-
             print(f"chunk {chunk_index} / {tuple(grid_shape)})", end="\r")
 
             with ts.Transaction() as txn:
-
                 # Read one chunk of data at the previous resolution
                 slicer = [Ellipsis] + [
-                    slice(i*max_load, min((i+1)*max_load, n))
+                    slice(i * max_load, min((i + 1) * max_load, n))
                     for i, n in zip(chunk_index, prev_shape)
                 ]
                 dat = tsreader.with_transaction(txn)[tuple(slicer)].read().result()
@@ -618,19 +610,17 @@ def generate_pyramid(
 
                 # Reshape into patches of shape 2x2x2
                 windowed_shape = [
-                    x
-                    for n in patch_shape
-                    for x in (max(n//2, 1), min(n, 2))
+                    x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
                 ]
                 dat = dat.reshape(batch + windowed_shape)
                 # -> last `ndim`` dimensions have shape 2x2x2
                 dat = dat.transpose(
-                    list(range(len(batch))) +
-                    list(range(len(batch), len(batch) + 2*ndim, 2)) +
-                    list(range(len(batch)+1, len(batch) + 2*ndim, 2))
+                    list(range(len(batch)))
+                    + list(range(len(batch), len(batch) + 2 * ndim, 2))
+                    + list(range(len(batch) + 1, len(batch) + 2 * ndim, 2))
                 )
                 # -> flatten patches
-                smaller_shape = [max(n//2, 1) for n in patch_shape]
+                smaller_shape = [max(n // 2, 1) for n in patch_shape]
                 dat = dat.reshape(batch + smaller_shape + [-1])
 
                 # Compute the median of each patch
@@ -640,7 +630,7 @@ def generate_pyramid(
 
                 # Write output
                 slicer = [Ellipsis] + [
-                    slice(i*max_load//2, min((i+1)*max_load//2, n))
+                    slice(i * max_load // 2, min((i + 1) * max_load // 2, n))
                     for i, n in zip(chunk_index, shape)
                 ]
                 tswriter.with_transaction(txn)[tuple(slicer)] = dat
@@ -737,7 +727,7 @@ def write_ome_metadata(
         pyramid_aligns = [pyramid_aligns]
     pyramid_aligns = list(pyramid_aligns)
     if len(pyramid_aligns) < sdim:
-        repeat = pyramid_aligns[:1] * (sdim-len(pyramid_aligns))
+        repeat = pyramid_aligns[:1] * (sdim - len(pyramid_aligns))
         pyramid_aligns = repeat + pyramid_aligns
     pyramid_aligns = pyramid_aligns[-sdim:]
 
@@ -745,34 +735,37 @@ def write_ome_metadata(
         space_scale = [space_scale]
     space_scale = list(space_scale)
     if len(space_scale) < sdim:
-        repeat = space_scale[:1] * (sdim-len(space_scale))
+        repeat = space_scale[:1] * (sdim - len(space_scale))
         space_scale = repeat + space_scale
     space_scale = space_scale[-sdim:]
 
-    multiscales = [{
-        "version": "0.4",
-        "axes": [
-            {
-                "name": axis,
-                "type": axis_to_type[axis],
-
-            }
-            if axis_to_type[axis] == "channel" else
-            {
-                "name": axis,
-                "type": axis_to_type[axis],
-                "unit": (
-                    space_unit if axis_to_type[axis] == "space" else
-                    time_unit if axis_to_type[axis] == "time" else
-                    None
-                )
-            }
-            for axis in axes
-        ],
-        "datasets": [],
-        "type": "median window " + "x".join(["2"] * sdim),
-        "name": name,
-    }]
+    multiscales = [
+        {
+            "version": "0.4",
+            "axes": [
+                {
+                    "name": axis,
+                    "type": axis_to_type[axis],
+                }
+                if axis_to_type[axis] == "channel"
+                else {
+                    "name": axis,
+                    "type": axis_to_type[axis],
+                    "unit": (
+                        space_unit
+                        if axis_to_type[axis] == "space"
+                        else time_unit
+                        if axis_to_type[axis] == "time"
+                        else None
+                    ),
+                }
+                for axis in axes
+            ],
+            "datasets": [],
+            "type": "median window " + "x".join(["2"] * sdim),
+            "name": name,
+        }
+    ]
 
     shape = shape0 = shapes[0]
     for n in range(len(shapes)):
@@ -783,22 +776,25 @@ def write_ome_metadata(
 
         scale = [1] * bdim + [
             (
-                pyramid_aligns[i]**n
-                if not isinstance(pyramid_aligns[i], str) else
-                (shape0[bdim+i] / shape[bdim+i])
-                if pyramid_aligns[i][0].lower() == "e" else
-                ((shape0[bdim+i] - 1) / (shape[bdim+i] - 1))
-            ) * space_scale[i]
+                pyramid_aligns[i] ** n
+                if not isinstance(pyramid_aligns[i], str)
+                else (shape0[bdim + i] / shape[bdim + i])
+                if pyramid_aligns[i][0].lower() == "e"
+                else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
+            )
+            * space_scale[i]
             for i in range(sdim)
         ]
         translation = [0] * bdim + [
             (
-                pyramid_aligns[i]**n - 1
-                if not isinstance(pyramid_aligns[i], str) else
-                (shape0[bdim+i] / shape[bdim+i]) - 1
-                if pyramid_aligns[i][0].lower() == "e" else
-                0
-            ) * 0.5 * space_scale[i]
+                pyramid_aligns[i] ** n - 1
+                if not isinstance(pyramid_aligns[i], str)
+                else (shape0[bdim + i] / shape[bdim + i]) - 1
+                if pyramid_aligns[i][0].lower() == "e"
+                else 0
+            )
+            * 0.5
+            * space_scale[i]
             for i in range(sdim)
         ]
 
@@ -810,34 +806,30 @@ def write_ome_metadata(
             {
                 "type": "translation",
                 "translation": translation,
-            }
+            },
         ]
 
     scale = [1] * ndim
     if "t" in axes:
         scale[axes.index("t")] = time_scale
-    multiscales[0]["coordinateTransformations"] = [
-        {
-            "scale": scale,
-            "type": "scale"
-        }
-    ]
+    multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
 
     if zarr_version == 3:
         with (path / "zarr.json").open("wt") as f:
-            json.dump({
-                "zarr_format": 3,
-                "node_type": "group",
-                "attributes": {
-                    # Zarr v2 way of doing it -- neuroglancer wants this
-                    "multiscales": multiscales,
-                    # Zarr RFC-2 recommended way
-                    "ome": {
-                        "version": "0.4",
-                        "multiscales": multiscales
-                    }
-                }
-            }, f, indent=4)
+            json.dump(
+                {
+                    "zarr_format": 3,
+                    "node_type": "group",
+                    "attributes": {
+                        # Zarr v2 way of doing it -- neuroglancer wants this
+                        "multiscales": multiscales,
+                        # Zarr RFC-2 recommended way
+                        "ome": {"version": "0.4", "multiscales": multiscales},
+                    },
+                },
+                f,
+                indent=4,
+            )
     else:
         multiscales[0]["version"] = "0.4"
         with (path / ".zgroup").open("wt") as f:
