@@ -27,8 +27,8 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr import make_compressor
 from linc_convert.utils.unit import (convert_unit, to_ome_unit, to_nifti_unit)
 
-placeholder = cyclopts.App(name="placeholder", help_format="markdown")
-psoct.command(placeholder)
+stacking = cyclopts.App(name="stacking", help_format="markdown")
+psoct.command(stacking)
 
 
 def automap(func):
@@ -46,7 +46,7 @@ def automap(func):
     return wrapper
 
 
-@placeholder.default
+@stacking.default
 @automap
 def convert(
         inp: List[str],
