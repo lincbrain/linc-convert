@@ -40,7 +40,7 @@ def convert(
     inp: list[str],
     out: str | None = None,
     *,
-    chunk: int = 4096,
+    chunk: int = 1024,
     compressor: str = "blosc",
     compressor_opt: str = "{}",
     max_load: int = 16384,
@@ -131,7 +131,7 @@ def convert(
             new_width = jp2.shape[1]
     new_size = (new_height, new_width)
     if has_channel:
-        new_size += (3.0,)
+        new_size += (3,)
     print(len(inp), new_size, nblevel, has_channel)
 
     # Prepare chunking options
@@ -174,43 +174,44 @@ def convert(
             x = floordiv(shape[-2] - subdat_size[-2], 2)
             y = floordiv(shape[-1] - subdat_size[-1], 2)
 
-            if max_load is None or (shape[-2] < max_load and shape[-1] < max_load):
-                array[..., idx, x : x + subdat_size[1], y : y + subdat_size[2]] = (
-                    subdat[...]
-                )
 
-            else:
-                ni = ceildiv(shape[-2], max_load)
-                nj = ceildiv(shape[-1], max_load)
+            for channel in range(3): 
+                if max_load is None or (subdat_size[-2] < max_load and subdat_size[-1] < max_load):
+                    array[channel, idx, x : x + subdat_size[-2], y : y + subdat_size[-1]] = (
+                        subdat[channel:channel+1, ...][0]
+                    )
 
-                for i in range(ni):
-                    for j in range(nj):
-                        print(f"\r{i+1}/{ni}, {j+1}/{nj}", end=" ")
-                        start_x, end_x = (
-                            i * max_load,
-                            min((i + 1) * max_load, shape[-2]),
-                        )
-                        start_y, end_y = (
-                            j * max_load,
-                            min((j + 1) * max_load, shape[-1]),
-                        )
-                        if end_x <= x or end_y <= y:
-                            continue
+            for channel in range(3):
+                if max_load is None or (subdat_size[-2] < max_load and subdat_size[-1] < max_load):
+                    array[channel, idx, x : x + subdat_size[-2], y : y + subdat_size[-1]] = subdat[channel: channel + 1, ...][0]
+                else:
+                    ni = ceildiv(subdat_size[-2], max_load)
+                    nj = ceildiv(subdat_size[-1], max_load)
 
-                        if start_x >= subdat_size[-2] or start_y >= subdat_size[-1]:
-                            continue
+                    for i in range(ni):
+                        for j in range(nj):
+                            print(f"\r{i+1}/{ni}, {j+1}/{nj}", end=" ")
+                            start_x, end_x = (
+                                i * max_load,
+                                min((i + 1) * max_load, subdat_size[-2]),
+                            )
+                            start_y, end_y = (
+                                j * max_load,
+                                min((j + 1) * max_load, subdat_size[-1]),
+                            )
 
-                        array[
-                            ...,
-                            idx,
-                            x + start_x : x + min(end_x, subdat_size[-2]),
-                            y + start_y : y + min(end_y, subdat_size[-1]),
-                        ] = subdat[
-                            ...,
-                            start_x : min((i + 1) * max_load, subdat_size[-2]),
-                            start_y : min((j + 1) * max_load, subdat_size[-1]),
-                        ]
-                print("")
+                            array[
+                                channel,
+                                idx,
+                                x + start_x : x + end_x,
+                                y + start_y : y + end_y,
+                            ] = subdat[
+                                channel: channel+1,
+                                start_x : end_x,
+                                start_y : end_y,
+                            ][0]
+                               
+                    print("")
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
@@ -231,8 +232,6 @@ def convert(
         multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
 
     for n in range(nblevel):
-        shape0 = omz["0"].shape[-2:]
-        shape = omz[str(n)].shape[-2:]
         multiscales[0]["datasets"].append({})
         level = multiscales[0]["datasets"][-1]
         level["path"] = str(n)
@@ -247,8 +246,8 @@ def convert(
                 "scale": [1.0] * has_channel
                 + [
                     1.0,
-                    (shape0[0] / shape[0]) * vxh,
-                    (shape0[1] / shape[1]) * vxw,
+                    float(2**n) * vxh,
+                    float(2**n) * vxw,
                 ],
             },
             {
@@ -256,8 +255,8 @@ def convert(
                 "translation": [0.0] * has_channel
                 + [
                     0.0,
-                    (shape0[0] / shape[0] - 1) * vxh * 0.5,
-                    (shape0[1] / shape[1] - 1) * vxw * 0.5,
+                    float(2**n - 1) * vxh * 0.5,
+                    float(2**n - 1) * vxw * 0.5,
                 ],
             },
         ]
