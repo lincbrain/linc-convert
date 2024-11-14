@@ -252,7 +252,7 @@ def convert(
         "fill_value": None,
         "compressor": None,
     }
-    omz.create_dataset("nifti", data=header, shape=shape, **opt)
+    omz.create_dataset("nifti", data=header, shape=len(header), **opt)
     print("done.")
 
 
