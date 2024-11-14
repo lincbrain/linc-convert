@@ -236,7 +236,7 @@ def convert(
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
         affine = center_affine(affine, shape[:3])
-    niftizarr_write_header(omz,shape,affine,omz["0"].dtype,unit,nifti_version=2)
+    niftizarr_write_header(omz,shape,affine,omz["0"].dtype,to_nifti_unit(unit),nifti_version=2)
     # header = nib.Nifti2Header()
     # header.set_data_shape(shape)
     # header.set_data_dtype(omz["0"].dtype)
