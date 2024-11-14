@@ -4,6 +4,7 @@ into a OME-ZARR pyramid.
 """
 
 import ast
+import itertools
 import json
 import math
 import os
@@ -11,7 +12,7 @@ import re
 from contextlib import contextmanager
 from functools import wraps
 from itertools import product
-from typing import Optional, List
+from typing import Optional, List, Literal
 from warnings import warn
 
 import cyclopts
@@ -22,10 +23,10 @@ import zarr
 from scipy.io import loadmat
 
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.orientation import orientation_to_affine, center_affine
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.zarr import make_compressor
+from linc_convert.utils.orientation import orientation_to_affine, center_affine
 from linc_convert.utils.unit import convert_unit, to_ome_unit, to_nifti_unit
+from linc_convert.utils.zarr import make_compressor
 
 stacking = cyclopts.App(name="stacking", help_format="markdown")
 psoct.command(stacking)
@@ -49,20 +50,20 @@ def automap(func):
 @stacking.default
 @automap
 def convert(
-    inp: List[str],
-    out: Optional[str] = None,
-    *,
-    key: Optional[str] = None,
-    meta: str = None,
-    chunk: int = 128,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
-    max_load: int = 128,
-    max_levels: int = 5,
-    no_pool: Optional[int] = None,
-    nii: bool = False,
-    orientation: str = "RAS",
-    center: bool = True,
+        inp: List[str],
+        out: Optional[str] = None,
+        *,
+        key: Optional[str] = None,
+        meta: str = None,
+        chunk: int = 128,
+        compressor: str = "blosc",
+        compressor_opt: str = "{}",
+        max_load: int = 128,
+        max_levels: int = 5,
+        no_pool: Optional[int] = None,
+        nii: bool = False,
+        orientation: str = "RAS",
+        center: bool = True,
 ) -> None:
     """
     This command converts OCT volumes stored in raw matlab files
@@ -144,81 +145,35 @@ def convert(
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
 
-    # create all arrays in the group
-    shape_level = inp.shape
-    for level in range(nblevels):
-        opt["chunks"] = [min(x, chunk) for x in shape_level]
-        omz.create_dataset(str(level), shape=shape_level, **opt)
-        shape_level = [x if i == no_pool else x // 2 for i, x in enumerate(shape_level)]
+    opt["chunks"] = [min(x, chunk) for x in inp.shape]
+
+    omz.create_dataset(str(0), shape=inp.shape, **opt)
 
     # iterate across input chunks
     for i, j, k in product(range(ni), range(nj), range(nk)):
-        level_chunk = inp_chunk
         loaded_chunk = inp[
-            k * level_chunk[0] : (k + 1) * level_chunk[0],
-            j * level_chunk[1] : (j + 1) * level_chunk[1],
-            i * level_chunk[2] : (i + 1) * level_chunk[2],
-        ]
+                       k * inp_chunk[0]: (k + 1) * inp_chunk[0],
+                       j * inp_chunk[1]: (j + 1) * inp_chunk[1],
+                       i * inp_chunk[2]: (i + 1) * inp_chunk[2],
+                       ]
 
-        for level in range(nblevels):
-            out_level = omz[str(level)]
+        print(
+            f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
+            "/",
+            f"[{ni:03d}, {nj:03d}, {nk:03d}]",
+            # f"({1 + level}/{nblevels})",
+            end="\r",
+        )
 
-            print(
-                f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
-                "/",
-                f"[{ni:03d}, {nj:03d}, {nk:03d}]",
-                f"({1 + level}/{nblevels})",
-                end="\r",
-            )
+        # save current chunk
+        omz["0"][
+        k * inp_chunk[0]: k * inp_chunk[0] + loaded_chunk.shape[0],
+        j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
+        i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
+        ] = loaded_chunk
 
-            # save current chunk
-            out_level[
-                k * level_chunk[0] : k * level_chunk[0] + loaded_chunk.shape[0],
-                j * level_chunk[1] : j * level_chunk[1] + loaded_chunk.shape[1],
-                i * level_chunk[2] : i * level_chunk[2] + loaded_chunk.shape[2],
-            ] = loaded_chunk
-            # ensure divisible by 2
-            loaded_chunk = loaded_chunk[
-                slice(2 * (loaded_chunk.shape[0] // 2) if 0 != no_pool else None),
-                slice(2 * (loaded_chunk.shape[1] // 2) if 1 != no_pool else None),
-                slice(2 * (loaded_chunk.shape[2] // 2) if 2 != no_pool else None),
-            ]
-            # mean pyramid (average each 2x2x2 patch)
-            if no_pool == 0:
-                loaded_chunk = (
-                    loaded_chunk[:, 0::2, 0::2]
-                    + loaded_chunk[:, 0::2, 1::2]
-                    + loaded_chunk[:, 1::2, 0::2]
-                    + loaded_chunk[:, 1::2, 1::2]
-                ) / 4
-            elif no_pool == 1:
-                loaded_chunk = (
-                    loaded_chunk[0::2, :, 0::2]
-                    + loaded_chunk[0::2, :, 1::2]
-                    + loaded_chunk[1::2, :, 0::2]
-                    + loaded_chunk[1::2, :, 1::2]
-                ) / 4
-            elif no_pool == 2:
-                loaded_chunk = (
-                    loaded_chunk[0::2, 0::2, :]
-                    + loaded_chunk[0::2, 1::2, :]
-                    + loaded_chunk[1::2, 0::2, :]
-                    + loaded_chunk[1::2, 1::2, :]
-                ) / 4
-            else:
-                loaded_chunk = (
-                    loaded_chunk[0::2, 0::2, 0::2]
-                    + loaded_chunk[0::2, 0::2, 1::2]
-                    + loaded_chunk[0::2, 1::2, 0::2]
-                    + loaded_chunk[0::2, 1::2, 1::2]
-                    + loaded_chunk[1::2, 0::2, 0::2]
-                    + loaded_chunk[1::2, 0::2, 1::2]
-                    + loaded_chunk[1::2, 1::2, 0::2]
-                    + loaded_chunk[1::2, 1::2, 1::2]
-                ) / 8
-            level_chunk = [
-                x if i == no_pool else x // 2 for i, x in enumerate(level_chunk)
-            ]
+    generate_pyramid(omz, nblevels - 1, mode="mean")
+
     print("")
 
     # Write OME-Zarr multiscale metadata
@@ -250,17 +205,17 @@ def convert(
             {
                 "type": "scale",
                 "scale": [
-                    (1 if no_pool == 0 else 2**n) * vx[0],
-                    (1 if no_pool == 1 else 2**n) * vx[1],
-                    (1 if no_pool == 2 else 2**n) * vx[2],
+                    (1 if no_pool == 0 else 2 ** n) * vx[0],
+                    (1 if no_pool == 1 else 2 ** n) * vx[1],
+                    (1 if no_pool == 2 else 2 ** n) * vx[2],
                 ],
             },
             {
                 "type": "translation",
                 "translation": [
-                    (0 if no_pool == 0 else (2**n - 1)) * vx[0] * 0.5,
-                    (0 if no_pool == 1 else (2**n - 1)) * vx[1] * 0.5,
-                    (0 if no_pool == 2 else (2**n - 1)) * vx[2] * 0.5,
+                    (0 if no_pool == 0 else (2 ** n - 1)) * vx[0] * 0.5,
+                    (0 if no_pool == 1 else (2 ** n - 1)) * vx[1] * 0.5,
+                    (0 if no_pool == 2 else (2 ** n - 1)) * vx[2] * 0.5,
                 ],
             },
         ]
@@ -301,6 +256,298 @@ def convert(
     print("done.")
 
 
+def generate_pyramid(
+        omz,
+        levels: int | None = None,
+        ndim: int = 3,
+        max_load: int = 512,
+        mode: Literal["mean", "median"] = "median",
+) -> list[list[int]]:
+    """
+    Generate the levels of a pyramid in an existing Zarr.
+
+    Parameters
+    ----------
+    path : PathLike | str
+        Path to parent Zarr
+    levels : int
+        Number of additional levels to generate.
+        By default, stop when all dimensions are smaller than their
+        corresponding chunk size.
+    shard : list[int] | bool | {"auto"} | None
+        Shard size.
+        * If `None`, use same shard size as the input array;
+        * If `False`, no dot use sharding;
+        * If `True` or `"auto"`, automatically find shard size;
+        * Otherwise, use provided shard size.
+    ndim : int
+        Number of spatial dimensions.
+    max_load : int
+        Maximum number of voxels to load along each dimension.
+    mode : {"mean", "median"}
+        Whether to use a mean or median moving window.
+
+    Returns
+    -------
+    shapes : list[list[int]]
+        Shapes of all levels, from finest to coarsest, including the
+        existing top level.
+    """
+
+    shape = list(omz["0"].shape)
+    chunk_size = omz["0"].chunks
+
+    # Select windowing function
+    if mode == "median":
+        func = np.median
+    else:
+        assert mode == "mean"
+        func = np.mean
+
+    level = 0
+    batch, shape = shape[:-ndim], shape[-ndim:]
+    allshapes = [shape]
+
+    opt = {
+        "dimension_separator": omz["0"]._dimension_separator,
+        "order": omz["0"]._order,
+        "dtype": omz["0"]._dtype,
+        "fill_value": omz["0"]._fill_value,
+        "compressor": omz["0"]._compressor,
+    }
+
+    while True:
+        level += 1
+
+        # Compute downsampled shape
+        prev_shape, shape = shape, [max(1, x // 2) for x in shape]
+
+        # Stop if seen enough levels or level shape smaller than chunk size
+        if levels is None:
+            if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
+                break
+        elif level > levels:
+            break
+
+        print("Compute level", level, "with shape", shape)
+
+        allshapes.append(shape)
+        omz.create_dataset(str(level), shape=shape, **opt)
+
+        # Iterate across `max_load` chunks
+        # (note that these are unrelared to underlying zarr chunks)
+        grid_shape = [ceildiv(n, max_load) for n in prev_shape]
+        for chunk_index in itertools.product(*[range(x) for x in grid_shape]):
+            print(f"chunk {chunk_index} / {tuple(grid_shape)})", end="\r")
+
+            # Read one chunk of data at the previous resolution
+            slicer = [Ellipsis] + [
+                slice(i * max_load, min((i + 1) * max_load, n))
+                for i, n in zip(chunk_index, prev_shape)
+            ]
+            dat = omz[str(level - 1)][tuple(slicer)]
+
+            # Discard the last voxel along odd dimensions
+            crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
+            slcr = [slice(-1) if x else slice(None) for x in crop]
+            dat = dat[tuple([Ellipsis, *slcr])]
+
+            patch_shape = dat.shape[-3:]
+
+            # Reshape into patches of shape 2x2x2
+            windowed_shape = [
+                x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
+            ]
+            dat = dat.reshape(batch + windowed_shape)
+            # -> last `ndim`` dimensions have shape 2x2x2
+            dat = dat.transpose(
+                list(range(len(batch)))
+                + list(range(len(batch), len(batch) + 2 * ndim, 2))
+                + list(range(len(batch) + 1, len(batch) + 2 * ndim, 2))
+            )
+            # -> flatten patches
+            smaller_shape = [max(n // 2, 1) for n in patch_shape]
+            dat = dat.reshape(batch + smaller_shape + [-1])
+
+            # Compute the median/mean of each patch
+            dtype = dat.dtype
+            dat = func(dat, axis=-1)
+            dat = dat.astype(dtype)
+
+            # Write output
+            slicer = [Ellipsis] + [
+                slice(i * max_load // 2, min((i + 1) * max_load // 2, n))
+                for i, n in zip(chunk_index, shape)
+            ]
+
+            omz[str(level)][tuple(slicer)] = dat
+
+    print("")
+
+    return allshapes
+
+    pass
+
+
+#
+# def generate_pyramid(inp, inp_chunk, nblevels, ni, nj, nk, no_pool, omz):
+#     for i, j, k in product(range(ni), range(nj), range(nk)):
+#         level_chunk = inp_chunk
+#         loaded_chunk = inp[
+#                        k * level_chunk[0]: (k + 1) * level_chunk[0],
+#                        j * level_chunk[1]: (j + 1) * level_chunk[1],
+#                        i * level_chunk[2]: (i + 1) * level_chunk[2],
+#                        ]
+#
+#         out_level = omz["0"]
+#
+#         print(
+#             f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
+#             "/",
+#             f"[{ni:03d}, {nj:03d}, {nk:03d}]",
+#             # f"({1 + level}/{nblevels})",
+#             end="\r",
+#         )
+#
+#         # save current chunk
+#         out_level[
+#         k * level_chunk[0]: k * level_chunk[0] + loaded_chunk.shape[0],
+#         j * level_chunk[1]: j * level_chunk[1] + loaded_chunk.shape[1],
+#         i * level_chunk[2]: i * level_chunk[2] + loaded_chunk.shape[2],
+#         ] = loaded_chunk
+#
+#         for level in range(nblevels):
+#             out_level = omz[str(level)]
+#
+#             print(
+#                 f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
+#                 "/",
+#                 f"[{ni:03d}, {nj:03d}, {nk:03d}]",
+#                 f"({1 + level}/{nblevels})",
+#                 end="\r",
+#             )
+#
+#             # save current chunk
+#             out_level[
+#             k * level_chunk[0]: k * level_chunk[0] + loaded_chunk.shape[0],
+#             j * level_chunk[1]: j * level_chunk[1] + loaded_chunk.shape[1],
+#             i * level_chunk[2]: i * level_chunk[2] + loaded_chunk.shape[2],
+#             ] = loaded_chunk
+#             # ensure divisible by 2
+#             loaded_chunk = loaded_chunk[
+#                 slice(2 * (loaded_chunk.shape[0] // 2) if 0 != no_pool else None),
+#                 slice(2 * (loaded_chunk.shape[1] // 2) if 1 != no_pool else None),
+#                 slice(2 * (loaded_chunk.shape[2] // 2) if 2 != no_pool else None),
+#             ]
+#             # mean pyramid (average each 2x2x2 patch)
+#             if no_pool == 0:
+#                 loaded_chunk = (
+#                                        loaded_chunk[:, 0::2, 0::2]
+#                                        + loaded_chunk[:, 0::2, 1::2]
+#                                        + loaded_chunk[:, 1::2, 0::2]
+#                                        + loaded_chunk[:, 1::2, 1::2]
+#                                ) / 4
+#             elif no_pool == 1:
+#                 loaded_chunk = (
+#                                        loaded_chunk[0::2, :, 0::2]
+#                                        + loaded_chunk[0::2, :, 1::2]
+#                                        + loaded_chunk[1::2, :, 0::2]
+#                                        + loaded_chunk[1::2, :, 1::2]
+#                                ) / 4
+#             elif no_pool == 2:
+#                 loaded_chunk = (
+#                                        loaded_chunk[0::2, 0::2, :]
+#                                        + loaded_chunk[0::2, 1::2, :]
+#                                        + loaded_chunk[1::2, 0::2, :]
+#                                        + loaded_chunk[1::2, 1::2, :]
+#                                ) / 4
+#             else:
+#                 loaded_chunk = (
+#                                        loaded_chunk[0::2, 0::2, 0::2]
+#                                        + loaded_chunk[0::2, 0::2, 1::2]
+#                                        + loaded_chunk[0::2, 1::2, 0::2]
+#                                        + loaded_chunk[0::2, 1::2, 1::2]
+#                                        + loaded_chunk[1::2, 0::2, 0::2]
+#                                        + loaded_chunk[1::2, 0::2, 1::2]
+#                                        + loaded_chunk[1::2, 1::2, 0::2]
+#                                        + loaded_chunk[1::2, 1::2, 1::2]
+#                                ) / 8
+#             level_chunk = [
+#                 x if i == no_pool else x // 2 for i, x in enumerate(level_chunk)
+#             ]
+#
+
+# def generate_pyramid(i, j, k, level_chunk, loaded_chunk, nblevels, ni, nj, nk, no_pool,
+#                      omz):
+#     for level in range(nblevels):
+#         out_level = omz[str(level)]
+#
+#         print(
+#             f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
+#             "/",
+#             f"[{ni:03d}, {nj:03d}, {nk:03d}]",
+#             f"({1 + level}/{nblevels})",
+#             end="\r",
+#         )
+#
+#         # save current chunk
+#         out_level[
+#         k * level_chunk[0]: k * level_chunk[0] + loaded_chunk.shape[0],
+#         j * level_chunk[1]: j * level_chunk[1] + loaded_chunk.shape[1],
+#         i * level_chunk[2]: i * level_chunk[2] + loaded_chunk.shape[2],
+#         ] = loaded_chunk
+#         # ensure divisible by 2
+#         loaded_chunk = loaded_chunk[
+#             slice(2 * (loaded_chunk.shape[0] // 2) if 0 != no_pool else None),
+#             slice(2 * (loaded_chunk.shape[1] // 2) if 1 != no_pool else None),
+#             slice(2 * (loaded_chunk.shape[2] // 2) if 2 != no_pool else None),
+#         ]
+#         # mean pyramid (average each 2x2x2 patch)
+#         if no_pool == 0:
+#             loaded_chunk = (
+#                                    loaded_chunk[:, 0::2, 0::2]
+#                                    + loaded_chunk[:, 0::2, 1::2]
+#                                    + loaded_chunk[:, 1::2, 0::2]
+#                                    + loaded_chunk[:, 1::2, 1::2]
+#                            ) / 4
+#         elif no_pool == 1:
+#             loaded_chunk = (
+#                                    loaded_chunk[0::2, :, 0::2]
+#                                    + loaded_chunk[0::2, :, 1::2]
+#                                    + loaded_chunk[1::2, :, 0::2]
+#                                    + loaded_chunk[1::2, :, 1::2]
+#                            ) / 4
+#         elif no_pool == 2:
+#             loaded_chunk = (
+#                                    loaded_chunk[0::2, 0::2, :]
+#                                    + loaded_chunk[0::2, 1::2, :]
+#                                    + loaded_chunk[1::2, 0::2, :]
+#                                    + loaded_chunk[1::2, 1::2, :]
+#                            ) / 4
+#         else:
+#             loaded_chunk = (
+#                                    loaded_chunk[0::2, 0::2, 0::2]
+#                                    + loaded_chunk[0::2, 0::2, 1::2]
+#                                    + loaded_chunk[0::2, 1::2, 0::2]
+#                                    + loaded_chunk[0::2, 1::2, 1::2]
+#                                    + loaded_chunk[1::2, 0::2, 0::2]
+#                                    + loaded_chunk[1::2, 0::2, 1::2]
+#                                    + loaded_chunk[1::2, 1::2, 0::2]
+#                                    + loaded_chunk[1::2, 1::2, 1::2]
+#                            ) / 8
+#         level_chunk = [
+#             x if i == no_pool else x // 2 for i, x in enumerate(level_chunk)
+#         ]
+
+#
+# def create_level(chunk, inp, nblevels, no_pool, omz, opt):
+#     shape_level = inp.shape
+#     for level in range(1,nblevels,1):
+#         opt["chunks"] = [min(x, chunk) for x in shape_level]
+#         omz.create_dataset(str(level), shape=shape_level, **opt)
+#         shape_level = [x if i == no_pool else x // 2 for i, x in enumerate(shape_level)]
+#
+
 @contextmanager
 def mapmat(fnames, key=None):
     """Load or memory-map an array stored in a .mat file"""
@@ -315,11 +562,13 @@ def mapmat(fnames, key=None):
             f = loadmat(fname)
 
         if key is None:
+            if not len(f.keys()):
+                raise Exception(f"{fname} is empty")
+            key = list(f.keys())[0]
             if len(f.keys()) > 1:
                 warn(
-                    f'More than one key in .mat file {fname}, arbitrarily loading "{f.keys[0]}"'
+                    f'More than one key in .mat file {fname}, arbitrarily loading "{key}"'
                 )
-            key = f.keys()[0]
 
         if key not in f.keys():
             raise Exception(f"Key {key} not found in file {fname}")
