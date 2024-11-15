@@ -258,7 +258,7 @@ def generate_pyramid(
 
 
 def write_ome_metadata(
-    path: str | os.PathLike,
+    omz,
     axes: list[str],
     space_scale: float | list[float] = 1,
     time_scale: float = 1,
@@ -267,6 +267,8 @@ def write_ome_metadata(
     name: str = "",
     pyramid_aligns: str | int | list[str | int] = 2,
     levels: int | None = None,
+    no_pool: int | None = None,
+    multiscales_type : str = ""
 ) -> None:
     """
     Write OME metadata into Zarr.
@@ -298,25 +300,19 @@ def write_ome_metadata(
 
     """
 
-    # Detect zarr version
-
     # Read shape at each pyramid level
-    zname = ".zarray"
     shapes = []
     level = 0
     while True:
         if levels is not None and level > levels:
             break
 
-        zpath = path / str(level) / zname
-        if not zpath.exists():
+        if str(level) not in omz.keys():
             levels = level
             break
 
         level += 1
-        with zpath.open("rb") as f:
-            zarray = json.load(f)
-            shapes += [zarray["shape"]]
+        shapes += omz[str(level)].shape
 
     axis_to_type = {
         "x": "space",
@@ -370,7 +366,7 @@ def write_ome_metadata(
                 for axis in axes
             ],
             "datasets": [],
-            "type": "median window " + "x".join(["2"] * sdim),
+            "type": "median window " + "x".join(["2"] * sdim) if not multiscales_type else multiscales_type,
             "name": name,
         }
     ]
@@ -391,6 +387,7 @@ def write_ome_metadata(
                 else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
             )
             * space_scale[i]
+            if i != no_pool else space_scale[i]
             for i in range(sdim)
         ]
         translation = [0] * bdim + [
@@ -403,6 +400,7 @@ def write_ome_metadata(
             )
             * 0.5
             * space_scale[i]
+            if i != no_pool else 0
             for i in range(sdim)
         ]
 
@@ -417,18 +415,14 @@ def write_ome_metadata(
             },
         ]
 
-    scale = [1] * ndim
+    scale = [1.0] * ndim
     if "t" in axes:
         scale[axes.index("t")] = time_scale
     multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
 
 
     multiscales[0]["version"] = "0.4"
-    with (path / ".zgroup").open("wt") as f:
-        json.dump({"zarr_format": 2}, f, indent=4)
-    with (path / ".zattrs").open("wt") as f:
-        json.dump({"multiscales": multiscales}, f, indent=4)
-
+    omz.attrs["multiscales"] = multiscales
 
 def niftizarr_write_header(
     omz,
