@@ -171,7 +171,7 @@ def convert(
         j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
         i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
-
+    # TODO: no_pool is ignored for now, should add back
     generate_pyramid(omz, nblevels - 1, mode="mean")
 
     print("")
@@ -521,6 +521,243 @@ def generate_pyramid(
 
     pass
 
+def write_ome_metadata(
+    path: str | os.PathLike,
+    axes: list[str],
+    space_scale: float | list[float] = 1,
+    time_scale: float = 1,
+    space_unit: str = "micrometer",
+    time_unit: str = "second",
+    name: str = "",
+    pyramid_aligns: str | int | list[str | int] = 2,
+    levels: int | None = None,
+) -> None:
+    """
+    Write OME metadata into Zarr.
+
+    Parameters
+    ----------
+    path : str | PathLike
+        Path to parent Zarr.
+    axes : list[str]
+        Name of each dimension, in Zarr order (t, c, z, y, x)
+    space_scale : float | list[float]
+        Finest-level voxel size, in Zarr order (z, y, x)
+    time_scale : float
+        Time scale
+    space_unit : str
+        Unit of spatial scale (assumed identical across dimensions)
+    space_time : str
+        Unit of time scale
+    name : str
+        Name attribute
+    pyramid_aligns : float | list[float] | {"center", "edge"}
+        Whether the pyramid construction aligns the edges or the centers
+        of the corner voxels. If a (list of) number, assume that a moving
+        window of that size was used.
+    levels : int
+        Number of existing levels. Default: find out automatically.
+    zarr_version : {2, 3} | None
+        Zarr version. If `None`, guess from existing zarr array.
+
+    """
+
+    # Detect zarr version
+
+    # Read shape at each pyramid level
+    zname = ".zarray"
+    shapes = []
+    level = 0
+    while True:
+        if levels is not None and level > levels:
+            break
+
+        zpath = path / str(level) / zname
+        if not zpath.exists():
+            levels = level
+            break
+
+        level += 1
+        with zpath.open("rb") as f:
+            zarray = json.load(f)
+            shapes += [zarray["shape"]]
+
+    axis_to_type = {
+        "x": "space",
+        "y": "space",
+        "z": "space",
+        "t": "time",
+        "c": "channel",
+    }
+
+    # Number of spatial (s), batch (b) and total (n) dimensions
+    ndim = len(axes)
+    sdim = sum(axis_to_type[axis] == "space" for axis in axes)
+    bdim = ndim - sdim
+
+    if isinstance(pyramid_aligns, (int, str)):
+        pyramid_aligns = [pyramid_aligns]
+    pyramid_aligns = list(pyramid_aligns)
+    if len(pyramid_aligns) < sdim:
+        repeat = pyramid_aligns[:1] * (sdim - len(pyramid_aligns))
+        pyramid_aligns = repeat + pyramid_aligns
+    pyramid_aligns = pyramid_aligns[-sdim:]
+
+    if isinstance(space_scale, (int, float)):
+        space_scale = [space_scale]
+    space_scale = list(space_scale)
+    if len(space_scale) < sdim:
+        repeat = space_scale[:1] * (sdim - len(space_scale))
+        space_scale = repeat + space_scale
+    space_scale = space_scale[-sdim:]
+
+    multiscales = [
+        {
+            "version": "0.4",
+            "axes": [
+                {
+                    "name": axis,
+                    "type": axis_to_type[axis],
+                }
+                if axis_to_type[axis] == "channel"
+                else {
+                    "name": axis,
+                    "type": axis_to_type[axis],
+                    "unit": (
+                        space_unit
+                        if axis_to_type[axis] == "space"
+                        else time_unit
+                        if axis_to_type[axis] == "time"
+                        else None
+                    ),
+                }
+                for axis in axes
+            ],
+            "datasets": [],
+            "type": "median window " + "x".join(["2"] * sdim),
+            "name": name,
+        }
+    ]
+
+    shape = shape0 = shapes[0]
+    for n in range(len(shapes)):
+        shape = shapes[n]
+        multiscales[0]["datasets"].append({})
+        level = multiscales[0]["datasets"][-1]
+        level["path"] = str(n)
+
+        scale = [1] * bdim + [
+            (
+                pyramid_aligns[i] ** n
+                if not isinstance(pyramid_aligns[i], str)
+                else (shape0[bdim + i] / shape[bdim + i])
+                if pyramid_aligns[i][0].lower() == "e"
+                else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
+            )
+            * space_scale[i]
+            for i in range(sdim)
+        ]
+        translation = [0] * bdim + [
+            (
+                pyramid_aligns[i] ** n - 1
+                if not isinstance(pyramid_aligns[i], str)
+                else (shape0[bdim + i] / shape[bdim + i]) - 1
+                if pyramid_aligns[i][0].lower() == "e"
+                else 0
+            )
+            * 0.5
+            * space_scale[i]
+            for i in range(sdim)
+        ]
+
+        level["coordinateTransformations"] = [
+            {
+                "type": "scale",
+                "scale": scale,
+            },
+            {
+                "type": "translation",
+                "translation": translation,
+            },
+        ]
+
+    scale = [1] * ndim
+    if "t" in axes:
+        scale[axes.index("t")] = time_scale
+    multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
+
+
+    multiscales[0]["version"] = "0.4"
+    with (path / ".zgroup").open("wt") as f:
+        json.dump({"zarr_format": 2}, f, indent=4)
+    with (path / ".zattrs").open("wt") as f:
+        json.dump({"multiscales": multiscales}, f, indent=4)
+
+
+
+def niftizarr_write_header(
+    omz,
+    shape: list[int],
+    affine: np.ndarray,
+    dtype: np.dtype | str,
+    unit: Literal["micron", "mm"] | None = None,
+    header: nib.Nifti1Header | nib.Nifti2Header | None = None,
+    nifti_version: Literal[1,2] = 1
+) -> None:
+    """
+    Write NIfTI header in a NIfTI-Zarr file.
+
+    Parameters
+    ----------
+    path : PathLike | str
+        Path to parent Zarr.
+    affine : (4, 4) matrix
+        Orientation matrix.
+    shape : list[int]
+        Array shape, in NIfTI order (x, y, z, t, c).
+    dtype : np.dtype | str
+        Data type.
+    unit : {"micron", "mm"}, optional
+        World unit.
+    header : nib.Nifti1Header | nib.Nifti2Header, optional
+        Pre-instantiated header.
+    zarr_version : int, default=3
+        Zarr version.
+    """
+    # TODO: we do not write the json zattrs, but it should be added in
+    #       once the nifti-zarr package is released
+
+    # If dimensions do not fit in a short (which is often the case), we
+    # use NIfTI 2.
+    if all(x < 32768 for x in shape) or nifti_version == 1:
+        NiftiHeader = nib.Nifti1Header
+    else:
+        NiftiHeader = nib.Nifti2Header
+
+    header = header or NiftiHeader()
+    header.set_data_shape(shape)
+    header.set_data_dtype(dtype)
+    header.set_qform(affine)
+    header.set_sform(affine)
+    if unit:
+        header.set_xyzt_units(nib.nifti1.unit_codes.code[unit])
+    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
+
+
+    metadata = {
+        "chunks": [len(header)],
+        "order": "F",
+        "dtype": "|u1",
+        "fill_value": None,
+        "compressor": None, # TODO: Subject to change compression
+    }
+
+    omz.create_dataset("nifti", data=header, shape=len(header), **metadata)
+
+    print("done.")
+
+
+
 
 #
 # def generate_pyramid(inp, inp_chunk, nblevels, ni, nj, nk, no_pool, omz):
@@ -682,263 +919,3 @@ def generate_pyramid(
 #
 
 
-
-def write_ome_metadata(
-    path: str | os.PathLike,
-    axes: list[str],
-    space_scale: float | list[float] = 1,
-    time_scale: float = 1,
-    space_unit: str = "micrometer",
-    time_unit: str = "second",
-    name: str = "",
-    pyramid_aligns: str | int | list[str | int] = 2,
-    levels: int | None = None,
-    zarr_version: int | None = None,
-) -> None:
-    """
-    Write OME metadata into Zarr.
-
-    Parameters
-    ----------
-    path : str | PathLike
-        Path to parent Zarr.
-    axes : list[str]
-        Name of each dimension, in Zarr order (t, c, z, y, x)
-    space_scale : float | list[float]
-        Finest-level voxel size, in Zarr order (z, y, x)
-    time_scale : float
-        Time scale
-    space_unit : str
-        Unit of spatial scale (assumed identical across dimensions)
-    space_time : str
-        Unit of time scale
-    name : str
-        Name attribute
-    pyramid_aligns : float | list[float] | {"center", "edge"}
-        Whether the pyramid construction aligns the edges or the centers
-        of the corner voxels. If a (list of) number, assume that a moving
-        window of that size was used.
-    levels : int
-        Number of existing levels. Default: find out automatically.
-    zarr_version : {2, 3} | None
-        Zarr version. If `None`, guess from existing zarr array.
-
-    """
-    path = UPath(path)
-
-    # Detect zarr version
-    if not zarr_version:
-        if (path / "0" / "zarr.json").exists():
-            zarr_version = 3
-        elif (path / "0" / ".zarray").exists():
-            zarr_version = 2
-        else:
-            raise FileNotFoundError("No existing array to guess version from")
-
-    # Read shape at each pyramid level
-    zname = "zarr.json" if zarr_version == 3 else ".zarray"
-    shapes = []
-    level = 0
-    while True:
-        if levels is not None and level > levels:
-            break
-
-        zpath = path / str(level) / zname
-        if not zpath.exists():
-            levels = level
-            break
-
-        level += 1
-        with zpath.open("rb") as f:
-            zarray = json.load(f)
-            shapes += [zarray["shape"]]
-
-    axis_to_type = {
-        "x": "space",
-        "y": "space",
-        "z": "space",
-        "t": "time",
-        "c": "channel",
-    }
-
-    # Number of spatial (s), batch (b) and total (n) dimensions
-    ndim = len(axes)
-    sdim = sum(axis_to_type[axis] == "space" for axis in axes)
-    bdim = ndim - sdim
-
-    if isinstance(pyramid_aligns, (int, str)):
-        pyramid_aligns = [pyramid_aligns]
-    pyramid_aligns = list(pyramid_aligns)
-    if len(pyramid_aligns) < sdim:
-        repeat = pyramid_aligns[:1] * (sdim - len(pyramid_aligns))
-        pyramid_aligns = repeat + pyramid_aligns
-    pyramid_aligns = pyramid_aligns[-sdim:]
-
-    if isinstance(space_scale, (int, float)):
-        space_scale = [space_scale]
-    space_scale = list(space_scale)
-    if len(space_scale) < sdim:
-        repeat = space_scale[:1] * (sdim - len(space_scale))
-        space_scale = repeat + space_scale
-    space_scale = space_scale[-sdim:]
-
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {
-                    "name": axis,
-                    "type": axis_to_type[axis],
-                }
-                if axis_to_type[axis] == "channel"
-                else {
-                    "name": axis,
-                    "type": axis_to_type[axis],
-                    "unit": (
-                        space_unit
-                        if axis_to_type[axis] == "space"
-                        else time_unit
-                        if axis_to_type[axis] == "time"
-                        else None
-                    ),
-                }
-                for axis in axes
-            ],
-            "datasets": [],
-            "type": "median window " + "x".join(["2"] * sdim),
-            "name": name,
-        }
-    ]
-
-    shape = shape0 = shapes[0]
-    for n in range(len(shapes)):
-        shape = shapes[n]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
-
-        scale = [1] * bdim + [
-            (
-                pyramid_aligns[i] ** n
-                if not isinstance(pyramid_aligns[i], str)
-                else (shape0[bdim + i] / shape[bdim + i])
-                if pyramid_aligns[i][0].lower() == "e"
-                else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
-            )
-            * space_scale[i]
-            for i in range(sdim)
-        ]
-        translation = [0] * bdim + [
-            (
-                pyramid_aligns[i] ** n - 1
-                if not isinstance(pyramid_aligns[i], str)
-                else (shape0[bdim + i] / shape[bdim + i]) - 1
-                if pyramid_aligns[i][0].lower() == "e"
-                else 0
-            )
-            * 0.5
-            * space_scale[i]
-            for i in range(sdim)
-        ]
-
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": scale,
-            },
-            {
-                "type": "translation",
-                "translation": translation,
-            },
-        ]
-
-    scale = [1] * ndim
-    if "t" in axes:
-        scale[axes.index("t")] = time_scale
-    multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
-
-    if zarr_version == 3:
-        with (path / "zarr.json").open("wt") as f:
-            json.dump(
-                {
-                    "zarr_format": 3,
-                    "node_type": "group",
-                    "attributes": {
-                        # Zarr v2 way of doing it -- neuroglancer wants this
-                        "multiscales": multiscales,
-                        # Zarr RFC-2 recommended way
-                        "ome": {"version": "0.4", "multiscales": multiscales},
-                    },
-                },
-                f,
-                indent=4,
-            )
-    else:
-        multiscales[0]["version"] = "0.4"
-        with (path / ".zgroup").open("wt") as f:
-            json.dump({"zarr_format": 2}, f, indent=4)
-        with (path / ".zattrs").open("wt") as f:
-            json.dump({"multiscales": multiscales}, f, indent=4)
-
-
-
-def niftizarr_write_header(
-    omz,
-    shape: list[int],
-    affine: np.ndarray,
-    dtype: np.dtype | str,
-    unit: Literal["micron", "mm"] | None = None,
-    header: nib.Nifti1Header | nib.Nifti2Header | None = None,
-    nifti_version: Literal[1,2] = 1
-) -> None:
-    """
-    Write NIfTI header in a NIfTI-Zarr file.
-
-    Parameters
-    ----------
-    path : PathLike | str
-        Path to parent Zarr.
-    affine : (4, 4) matrix
-        Orientation matrix.
-    shape : list[int]
-        Array shape, in NIfTI order (x, y, z, t, c).
-    dtype : np.dtype | str
-        Data type.
-    unit : {"micron", "mm"}, optional
-        World unit.
-    header : nib.Nifti1Header | nib.Nifti2Header, optional
-        Pre-instantiated header.
-    zarr_version : int, default=3
-        Zarr version.
-    """
-    # TODO: we do not write the json zattrs, but it should be added in
-    #       once the nifti-zarr package is released
-
-    # If dimensions do not fit in a short (which is often the case), we
-    # use NIfTI 2.
-    if all(x < 32768 for x in shape) or nifti_version == 1:
-        NiftiHeader = nib.Nifti1Header
-    else:
-        NiftiHeader = nib.Nifti2Header
-
-    header = header or NiftiHeader()
-    header.set_data_shape(shape)
-    header.set_data_dtype(dtype)
-    header.set_qform(affine)
-    header.set_sform(affine)
-    if unit:
-        header.set_xyzt_units(nib.nifti1.unit_codes.code[unit])
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-
-
-    metadata = {
-        "chunks": [len(header)],
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None, # TODO: Subject to change
-    }
-
-    omz.create_dataset("nifti", data=header, shape=len(header), **metadata)
-
-    print("done.")
