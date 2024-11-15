@@ -170,7 +170,7 @@ def convert(
         j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
         i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
-    # TODO: no_pool is ignored for now, should add back
+
     generate_pyramid(omz, nblevels - 1, mode="mean")
 
     print("")
