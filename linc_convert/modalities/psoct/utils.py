@@ -307,7 +307,7 @@ def write_ome_metadata(
         if str(level) not in omz.keys():
             levels = level
             break
-
+        shapes += [omz[str(level)].shape,]
         level += 1
 
 
