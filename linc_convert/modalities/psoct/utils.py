@@ -486,6 +486,50 @@ def niftizarr_write_header(
     print("done.")
 
 
+# def write_ome_metadata(nblevels, no_pool, ome_unit, omz, vx):
+#     multiscales = [
+#         {
+#             "version": "0.4",
+#             "axes": [
+#                 {"name": "z", "type": "space", "unit": ome_unit},
+#                 {"name": "y", "type": "space", "unit": ome_unit},
+#                 {"name": "x", "type": "space", "unit": ome_unit},
+#             ],
+#             "datasets": [],
+#             "type": ("2x2x2" if no_pool is None else "2x2") + "mean window",
+#             "name": "",
+#         }
+#     ]
+#     for n in range(nblevels):
+#         multiscales[0]["datasets"].append({})
+#         level = multiscales[0]["datasets"][-1]
+#         level["path"] = str(n)
+#
+#         # With a moving window, the scaling factor is exactly 2, and
+#         # the edges of the top-left voxel are aligned
+#         level["coordinateTransformations"] = [
+#             {
+#                 "type": "scale",
+#                 "scale": [
+#                     (1 if no_pool == 0 else 2 ** n) * vx[0],
+#                     (1 if no_pool == 1 else 2 ** n) * vx[1],
+#                     (1 if no_pool == 2 else 2 ** n) * vx[2],
+#                 ],
+#             },
+#             {
+#                 "type": "translation",
+#                 "translation": [
+#                     (0 if no_pool == 0 else (2 ** n - 1)) * vx[0] * 0.5,
+#                     (0 if no_pool == 1 else (2 ** n - 1)) * vx[1] * 0.5,
+#                     (0 if no_pool == 2 else (2 ** n - 1)) * vx[2] * 0.5,
+#                 ],
+#             },
+#         ]
+#     multiscales[0]["coordinateTransformations"] = [
+#         {"scale": [1.0] * 3, "type": "scale"}
+#     ]
+#     omz.attrs["multiscales"] = multiscales
+
 
 #
 # def generate_pyramid(inp, inp_chunk, nblevels, ni, nj, nk, no_pool, omz):
