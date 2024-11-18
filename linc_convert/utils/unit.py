@@ -1,3 +1,7 @@
+"""
+Converts units between zarr and other specifications
+"""
+
 ome_valid_units = {
     "space": [
         "angstrom",

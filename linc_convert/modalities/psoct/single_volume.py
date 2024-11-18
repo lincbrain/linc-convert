@@ -35,24 +35,24 @@ single_volume = cyclopts.App(name="single_volume", help_format="markdown")
 psoct.command(single_volume)
 
 
-def automap(func):
-    """Decorator to automatically map the array in the mat file"""
+def _automap(func):
+    """Decorator to automatically map the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp, out=None, **kwargs):
+    def wrapper(inp:str, out:str=None, **kwargs:dict):
         if out is None:
             out = os.path.splitext(inp[0])[0]
             out += ".nii.zarr" if kwargs.get("nii", False) else ".ome.zarr"
         kwargs["nii"] = kwargs.get("nii", False) or out.endswith(".nii.zarr")
-        with mapmat(inp, kwargs.get("key", None)) as dat:
+        with _mapmat(inp, kwargs.get("key", None)) as dat:
             return func(dat, out, **kwargs)
 
     return wrapper
 
 
 @contextmanager
-def mapmat(fname, key=None):
-    """Load or memory-map an array stored in a .mat file"""
+def _mapmat(fname: str, key:str=None)->None:
+    """Load or memory-map an array stored in a .mat file."""
     try:
         # "New" .mat file
         f = h5py.File(fname, "r")
@@ -76,7 +76,7 @@ def mapmat(fname, key=None):
 
 
 @single_volume.default
-@automap
+@_automap
 def convert(
     inp: str,
     out: Optional[str] = None,
@@ -209,6 +209,7 @@ def convert(
     ome_unit = to_ome_unit(unit)
     write_ome_metadata(
         omz,
+        axes=("z","y","x"),
         no_pool=no_pool,
         space_unit=ome_unit,
         space_scale=vx,

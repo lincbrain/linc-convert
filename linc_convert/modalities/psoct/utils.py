@@ -28,7 +28,7 @@ def make_json(oct_meta):
     Modality: dBI
     """
 
-    def parse_value_unit(string, n=None):
+    def _parse_value_unit(string:str, n=None):
         number = r"-?(\d+\.?\d*|\d*\.?\d+)(E-?\d+)?"
         value = "x".join([number] * (n or 1))
         match = re.fullmatch(r"(?P<value>" + value + r")(?P<unit>\w*)", string)
@@ -58,41 +58,41 @@ def make_json(oct_meta):
             meta["SampleMedium"] = " ".join(parts)
 
         elif key == "Center Wavelength":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["Wavelength"] = value
             meta["WavelengthUnit"] = unit
 
         elif key == "Axial resolution":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["ResolutionAxial"] = value
             meta["ResolutionAxialUnit"] = unit
 
         elif key == "Lateral resolution":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["ResolutionLateral"] = value
             meta["ResolutionLateralUnit"] = unit
 
         elif key == "Voxel size":
-            value, unit = parse_value_unit(value, n=3)
+            value, unit = _parse_value_unit(value, n=3)
             meta["PixelSize"] = value
             meta["PixelSizeUnits"] = unit
 
         elif key == "Depth focus range":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["DepthFocusRange"] = value
             meta["DepthFocusRangeUnit"] = unit
 
         elif key == "Number of focuses":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["FocusCount"] = int(value)
 
         elif key == "Slice thickness":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             unit = convert_unit(value, unit[:-1], "u")
             meta["SliceThickness"] = value
 
         elif key == "Number of slices":
-            value, unit = parse_value_unit(value)
+            value, unit = _parse_value_unit(value)
             meta["SliceCount"] = int(value)
 
         elif key == "Modality":
@@ -309,7 +309,7 @@ def write_ome_metadata(
             break
 
         level += 1
-        shapes += omz[str(level)].shape
+
 
     axis_to_type = {
         "x": "space",
