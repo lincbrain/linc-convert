@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from functools import wraps
 from itertools import product
-from typing import Optional, List
+from typing import Optional
 from warnings import warn
 
 import cyclopts
@@ -20,11 +20,15 @@ import zarr
 from scipy.io import loadmat
 
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.modalities.psoct.utils import make_json, generate_pyramid, \
-    niftizarr_write_header, write_ome_metadata
+from linc_convert.modalities.psoct.utils import (
+    generate_pyramid,
+    make_json,
+    niftizarr_write_header,
+    write_ome_metadata,
+)
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.orientation import orientation_to_affine, center_affine
-from linc_convert.utils.unit import to_ome_unit, to_nifti_unit
+from linc_convert.utils.orientation import center_affine, orientation_to_affine
+from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr import make_compressor
 
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
@@ -46,23 +50,48 @@ def automap(func):
     return wrapper
 
 
+@contextmanager
+def mapmat(fname, key=None):
+    """Load or memory-map an array stored in a .mat file"""
+    try:
+        # "New" .mat file
+        f = h5py.File(fname, "r")
+    except Exception:
+        # "Old" .mat file
+        f = loadmat(fname)
+
+    if key is None:
+        if not len(f.keys()):
+            raise Exception(f"{fname} is empty")
+        key = list(f.keys())[0]
+        if len(f.keys()) > 1:
+            warn(f'More than one key in .mat file {fname}, arbitrarily loading "{key}"')
+
+    if key not in f.keys():
+        raise Exception(f"Key {key} not found in file {fname}")
+
+    yield f.get(key)
+    if hasattr(f, "close"):
+        f.close()
+
+
 @single_volume.default
 @automap
 def convert(
-        inp: str,
-        out: Optional[str] = None,
-        *,
-        key: Optional[str] = None,
-        meta: str = None,
-        chunk: int = 128,
-        compressor: str = "blosc",
-        compressor_opt: str = "{}",
-        max_load: int = 128,
-        max_levels: int = 5,
-        no_pool: Optional[int] = None,
-        nii: bool = False,
-        orientation: str = "RAS",
-        center: bool = True,
+    inp: str,
+    out: Optional[str] = None,
+    *,
+    key: Optional[str] = None,
+    meta: str = None,
+    chunk: int = 128,
+    compressor: str = "blosc",
+    compressor_opt: str = "{}",
+    max_load: int = 128,
+    max_levels: int = 5,
+    no_pool: Optional[int] = None,
+    nii: bool = False,
+    orientation: str = "RAS",
+    center: bool = True,
 ) -> None:
     """
     This command converts OCT volumes stored in raw matlab files
@@ -97,7 +126,6 @@ def convert(
     center
         Set RAS[0, 0, 0] at FOV center
     """
-
     if isinstance(compressor_opt, str):
         compressor_opt = ast.literal_eval(compressor_opt)
 
@@ -151,10 +179,10 @@ def convert(
     # iterate across input chunks
     for i, j, k in product(range(ni), range(nj), range(nk)):
         loaded_chunk = inp[
-                       k * inp_chunk[0]: (k + 1) * inp_chunk[0],
-                       j * inp_chunk[1]: (j + 1) * inp_chunk[1],
-                       i * inp_chunk[2]: (i + 1) * inp_chunk[2],
-                       ]
+            k * inp_chunk[0] : (k + 1) * inp_chunk[0],
+            j * inp_chunk[1] : (j + 1) * inp_chunk[1],
+            i * inp_chunk[2] : (i + 1) * inp_chunk[2],
+        ]
 
         print(
             f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
@@ -166,9 +194,9 @@ def convert(
 
         # save current chunk
         omz["0"][
-        k * inp_chunk[0]: k * inp_chunk[0] + loaded_chunk.shape[0],
-        j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
-        i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
+            k * inp_chunk[0] : k * inp_chunk[0] + loaded_chunk.shape[0],
+            j * inp_chunk[1] : j * inp_chunk[1] + loaded_chunk.shape[1],
+            i * inp_chunk[2] : i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
 
     generate_pyramid(omz, nblevels - 1, mode="mean")
@@ -179,7 +207,13 @@ def convert(
     print("Write metadata")
     print(unit)
     ome_unit = to_ome_unit(unit)
-    write_ome_metadata(omz, no_pool=no_pool, space_unit=ome_unit,  space_scale=vx, multiscales_type=("2x2x2" if no_pool is None else "2x2") + "mean window")
+    write_ome_metadata(
+        omz,
+        no_pool=no_pool,
+        space_unit=ome_unit,
+        space_scale=vx,
+        multiscales_type=("2x2x2" if no_pool is None else "2x2") + "mean window",
+    )
 
     if not nii:
         print("done.")
@@ -193,52 +227,6 @@ def convert(
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
         affine = center_affine(affine, shape[:3])
-    niftizarr_write_header(omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit), nifti_version=2)
-    # header = nib.Nifti2Header()
-    # header.set_data_shape(shape)
-    # header.set_data_dtype(omz["0"].dtype)
-    # header.set_qform(affine)
-    # header.set_sform(affine)
-    # header.set_xyzt_units(nib.nifti1.unit_codes.code[to_nifti_unit(unit)])
-    # header.structarr["magic"] = b"nz2\0"
-    # header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    # opt = {
-    #     "chunks": [len(header)],
-    #     "dimension_separator": r"/",
-    #     "order": "F",
-    #     "dtype": "|u1",
-    #     "fill_value": None,
-    #     "compressor": None,
-    # }
-    # omz.create_dataset("nifti", data=header, shape=len(header), **opt)
-    # print("done.")
-
-
-
-@contextmanager
-def mapmat(fname, key=None):
-    """Load or memory-map an array stored in a .mat file"""
-    try:
-        # "New" .mat file
-        f = h5py.File(fname, "r")
-    except Exception:
-        # "Old" .mat file
-        f = loadmat(fname)
-
-    if key is None:
-        if not len(f.keys()):
-            raise Exception(f"{fname} is empty")
-        key = list(f.keys())[0]
-        if len(f.keys()) > 1:
-            warn(
-                f'More than one key in .mat file {fname}, arbitrarily loading "{key}"'
-            )
-
-    if key not in f.keys():
-        raise Exception(f"Key {key} not found in file {fname}")
-
-
-    yield f.get(key)
-    if hasattr(f, "close"):
-        f.close()
-
+    niftizarr_write_header(
+        omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit), nifti_version=2
+    )

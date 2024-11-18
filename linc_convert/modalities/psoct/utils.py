@@ -1,6 +1,4 @@
 import itertools
-import json
-import os
 import re
 from typing import Literal
 
@@ -107,12 +105,12 @@ def make_json(oct_meta):
 
 
 def generate_pyramid(
-        omz,
-        levels: int | None = None,
-        ndim: int = 3,
-        max_load: int = 512,
-        mode: Literal["mean", "median"] = "median",
-        no_pyramid_axis: int|str|None = None
+    omz,
+    levels: int | None = None,
+    ndim: int = 3,
+    max_load: int = 512,
+    mode: Literal["mean", "median"] = "median",
+    no_pyramid_axis: int | str | None = None,
 ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
@@ -218,8 +216,8 @@ def generate_pyramid(
                 x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
             ]
             if no_pyramid_axis is not None:
-                windowed_shape[2*no_pyramid_axis] = patch_shape[no_pyramid_axis]
-                windowed_shape[2 * no_pyramid_axis+1] = 1
+                windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
+                windowed_shape[2 * no_pyramid_axis + 1] = 1
 
             dat = dat.reshape(batch + windowed_shape)
             # -> last `ndim`` dimensions have shape 2x2x2
@@ -243,8 +241,8 @@ def generate_pyramid(
             # Write output
             slicer = [Ellipsis] + [
                 slice(i * max_load // 2, min((i + 1) * max_load // 2, n))
-                if axis_index != no_pyramid_axis else
-                slice(i * max_load, min((i + 1) * max_load, n))
+                if axis_index != no_pyramid_axis
+                else slice(i * max_load, min((i + 1) * max_load, n))
                 for i, axis_index, n in zip(chunk_index, range(ndim), shape)
             ]
 
@@ -268,7 +266,7 @@ def write_ome_metadata(
     pyramid_aligns: str | int | list[str | int] = 2,
     levels: int | None = None,
     no_pool: int | None = None,
-    multiscales_type : str = ""
+    multiscales_type: str = "",
 ) -> None:
     """
     Write OME metadata into Zarr.
@@ -299,7 +297,6 @@ def write_ome_metadata(
         Zarr version. If `None`, guess from existing zarr array.
 
     """
-
     # Read shape at each pyramid level
     shapes = []
     level = 0
@@ -366,7 +363,9 @@ def write_ome_metadata(
                 for axis in axes
             ],
             "datasets": [],
-            "type": "median window " + "x".join(["2"] * sdim) if not multiscales_type else multiscales_type,
+            "type": "median window " + "x".join(["2"] * sdim)
+            if not multiscales_type
+            else multiscales_type,
             "name": name,
         }
     ]
@@ -387,7 +386,8 @@ def write_ome_metadata(
                 else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
             )
             * space_scale[i]
-            if i != no_pool else space_scale[i]
+            if i != no_pool
+            else space_scale[i]
             for i in range(sdim)
         ]
         translation = [0] * bdim + [
@@ -400,7 +400,8 @@ def write_ome_metadata(
             )
             * 0.5
             * space_scale[i]
-            if i != no_pool else 0
+            if i != no_pool
+            else 0
             for i in range(sdim)
         ]
 
@@ -420,9 +421,9 @@ def write_ome_metadata(
         scale[axes.index("t")] = time_scale
     multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
 
-
     multiscales[0]["version"] = "0.4"
     omz.attrs["multiscales"] = multiscales
+
 
 def niftizarr_write_header(
     omz,
@@ -431,7 +432,7 @@ def niftizarr_write_header(
     dtype: np.dtype | str,
     unit: Literal["micron", "mm"] | None = None,
     header: nib.Nifti1Header | nib.Nifti2Header | None = None,
-    nifti_version: Literal[1,2] = 1
+    nifti_version: Literal[1, 2] = 1,
 ) -> None:
     """
     Write NIfTI header in a NIfTI-Zarr file.
@@ -472,13 +473,12 @@ def niftizarr_write_header(
         header.set_xyzt_units(nib.nifti1.unit_codes.code[unit])
     header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
 
-
     metadata = {
         "chunks": [len(header)],
         "order": "F",
         "dtype": "|u1",
         "fill_value": None,
-        "compressor": None, # TODO: Subject to change compression
+        "compressor": None,  # TODO: Subject to change compression
     }
 
     omz.create_dataset("nifti", data=header, shape=len(header), **metadata)
@@ -689,5 +689,3 @@ def niftizarr_write_header(
 #         omz.create_dataset(str(level), shape=shape_level, **opt)
 #         shape_level = [x if i == no_pool else x // 2 for i, x in enumerate(shape_level)]
 #
-
-
