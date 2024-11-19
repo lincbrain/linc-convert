@@ -1,6 +1,4 @@
-"""
-Converts units between zarr and other specifications
-"""
+"""Converts units between zarr and other specifications."""
 
 ome_valid_units = {
     "space": [
@@ -200,12 +198,14 @@ unit_time_scale.update(
 
 
 def convert_unit(value: float, src: str, dst: str) -> float:
+    """Convert unit for a value."""
     src = unit_to_scale(src)
     dst = unit_to_scale(dst)
     return value * (src / dst)
 
 
 def to_ome_unit(unit: str) -> str:
+    """Convert unit to ome-zarr spec."""
     if unit in unit_space_short2long:
         unit = unit_space_short2long[unit]
     elif unit in unit_time_short2long:
@@ -218,6 +218,7 @@ def to_ome_unit(unit: str) -> str:
 
 
 def to_nifti_unit(unit: str) -> str:
+    """Convert unit to nifti spec."""
     unit = to_ome_unit(unit)
     return {
         "meter": "meter",
@@ -230,6 +231,7 @@ def to_nifti_unit(unit: str) -> str:
 
 
 def unit_to_scale(unit: str) -> float:
+    """Convert unit to scale."""
     if unit in unit_space_long2short:
         unit = unit_space_long2short[unit]
     elif unit in unit_time_long2short:
