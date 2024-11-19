@@ -37,6 +37,7 @@ tifffile = "*"
 
 [tool.poetry.group.psoct.dependencies]
 h5py = "*"
+scipy = "*"
 
 [tool.poetry.group.dev]
 optional = true
