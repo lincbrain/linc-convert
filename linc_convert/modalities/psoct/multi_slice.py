@@ -51,9 +51,10 @@ def _automap(func: Callable) -> Callable:
 
     return wrapper
 
+
 @contextmanager
-def _mapmat(fnames, key=None):
-    """Load or memory-map an array stored in a .mat file"""
+def _mapmat(fnames: list[str], key: str = None) -> None:
+    """Load or memory-map an array stored in a .mat file."""
     loaded_data = []
 
     for fname in fnames:
@@ -70,7 +71,8 @@ def _mapmat(fnames, key=None):
             key = list(f.keys())[0]
             if len(f.keys()) > 1:
                 warn(
-                    f'More than one key in .mat file {fname}, arbitrarily loading "{key}"'
+                    f"More than one key in .mat file {fname}, "
+                    f'arbitrarily loading "{key}"'
                 )
 
         if key not in f.keys():
@@ -89,7 +91,7 @@ def _mapmat(fnames, key=None):
 @multi_slice.default
 @_automap
 def convert(
-    inp: str,
+    inp: list[str],
     out: Optional[str] = None,
     *,
     key: Optional[str] = None,
@@ -244,4 +246,3 @@ def convert(
     niftizarr_write_header(
         omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit), nifti_version=2
     )
-
