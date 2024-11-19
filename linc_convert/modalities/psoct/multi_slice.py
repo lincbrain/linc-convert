@@ -84,8 +84,8 @@ def _mapmat(fnames: list[str], key: str = None) -> None:
                 f.close()
             break
         loaded_data.append(f.get(key))
-
-    yield np.stack(loaded_data, axis=-1)
+    yield loaded_data
+    # yield np.stack(loaded_data, axis=-1)
 
 
 @multi_slice.default
@@ -163,41 +163,47 @@ def convert(
     omz = zarr.storage.DirectoryStore(out)
     omz = zarr.group(store=omz, overwrite=True)
 
-    if not hasattr(inp, "dtype"):
-        raise Exception("Input is not a numpy array. This is likely unexpected")
-    if len(inp.shape) < 3:
-        raise Exception("Input array is not 3d")
+    if not hasattr(inp[0], "dtype"):
+        raise Exception("Input is not numpy array. This is likely unexpected")
+    if len(inp[0].shape) != 2:
+        raise Exception("Input array is not 2d")
     # Prepare chunking options
     opt = {
         "dimension_separator": r"/",
         "order": "F",
-        "dtype": np.dtype(inp.dtype).str,
+        "dtype": np.dtype(inp[0].dtype).str,
         "fill_value": None,
         "compressor": make_compressor(compressor, **compressor_opt),
     }
-
-    inp_chunk = [min(x, max_load) for x in inp.shape]
-    nk = ceildiv(inp.shape[0], inp_chunk[0])
-    nj = ceildiv(inp.shape[1], inp_chunk[1])
-    ni = ceildiv(inp.shape[2], inp_chunk[2])
+    inp: list = inp
+    inp_shape = (*inp[0].shape, len(inp))
+    inp_chunk = [min(x, max_load) for x in inp_shape]
+    nk = ceildiv(inp_shape[0], inp_chunk[0])
+    nj = ceildiv(inp_shape[1], inp_chunk[1])
+    ni = ceildiv(inp_shape[2], inp_chunk[2])
 
     nblevels = min(
-        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp.shape) if i != no_pool]
+        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp_shape) if i != no_pool]
     )
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
 
-    opt["chunks"] = [min(x, chunk) for x in inp.shape]
+    opt["chunks"] = [min(x, chunk) for x in inp_shape]
 
-    omz.create_dataset(str(0), shape=inp.shape, **opt)
+    omz.create_dataset(str(0), shape=inp_shape, **opt)
 
     # iterate across input chunks
     for i, j, k in product(range(ni), range(nj), range(nk)):
-        loaded_chunk = inp[
-            k * inp_chunk[0] : (k + 1) * inp_chunk[0],
-            j * inp_chunk[1] : (j + 1) * inp_chunk[1],
-            i * inp_chunk[2] : (i + 1) * inp_chunk[2],
-        ]
+        loaded_chunk = np.stack(
+            [
+                inp[index][
+                    k * inp_chunk[0] : (k + 1) * inp_chunk[0],
+                    j * inp_chunk[1] : (j + 1) * inp_chunk[1],
+                ]
+                for index in range(i * inp_chunk[2], (i + 1) * inp_chunk[2])
+            ],
+            axis=-1,
+        )
 
         print(
             f"[{i + 1:03d}, {j + 1:03d}, {k + 1:03d}]",
