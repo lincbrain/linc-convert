@@ -1,4 +1,4 @@
-"""Entry-points for Dark Field microscopy converter."""
+"""Entry-points for polarization-sensitive optical coherence tomography converter."""
 
 from cyclopts import App
 
