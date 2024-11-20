@@ -1,7 +1,7 @@
+import glob
 import os
 import tempfile
 import zipfile
-from glob import glob
 from pathlib import Path
 
 import test_df
@@ -12,7 +12,6 @@ import zarr
 from linc_convert.modalities.df import multi_slice
 from linc_convert.modalities.lsm import mosaic
 from linc_convert.modalities.wk import webknossos_annotation
-
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp_dir:

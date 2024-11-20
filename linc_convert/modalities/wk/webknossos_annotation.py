@@ -1,26 +1,26 @@
 """
-Convert annotations downloaded from webknossos into ome.zarr format following czyx direction 
+Convert annotation downloaded from webknossos into ome.zarr format. 
 
+following czyx direction.
 """
 
 # stdlib
-import os
 import ast
+import json
+import os
+import shutil
+
+import cyclopts
+import numpy as np
 
 # externals
 import wkw
-import json
 import zarr
-import shutil
-import cyclopts
-import numpy as np
-from cyclopts import App
 
 # internals
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr import make_compressor
-
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
 wk.command(webknossos)
@@ -39,21 +39,25 @@ def convert(
     max_load: int = 16384,
 ) -> None:
     """
-    Converts annotations(in .wkw format) from webknossos to ome.zarr format following czyx direction
-    which is the same as underlying dataset. 
+    Convert annotations(in .wkw format) from webknossos to ome.zarr format. 
 
-    It calculates offset from low-res images and set offset for other resolution levels accordingly. 
+    Following czyx direction which is the same as underlying dataset. 
+
+    It calculates offset from low-res images 
+    and set offset for other resolution levels accordingly. 
 
     Parameters
     ----------
     wkw_dir 
-        Path to unzipped manual annotation folder, for example: .../annotation_folder/data_Volume
+        Path to unzipped manual annotation folder, 
+        for example: .../annotation_folder/data_Volume
     ome_dir 
         Path to underlying ome.zarr dataset
     dst 
-        Path to output directory [<INP_{_dsec_}_{initials}>.ome.zarr]
+        Path to output directory [<OME_DIR_{_dsec_}_{initials}>.ome.zarr]
     dic 
-        Dictionary of mapping annotation value to standard value, in case the annotation doesn't follow the standard of 
+        Dictionary of mapping given annotation value to following standard value, 
+        in case the annotation doesn't match the following standard
         0: background
         1: Light Bundle
         2: Moderate Bundle
@@ -62,8 +66,8 @@ def convert(
         5: Moderate Terminal
         6: Dense Terminal
         7: Single Fiber 
-    """
 
+    """
     dic = json.loads(dic)
 
     # load underlying dataset info to get size info 
@@ -78,11 +82,12 @@ def convert(
     size = omz_res.shape[-2:]
     for idx in range(n):
         offset_x, offset_y = 0, 0
-        data = wkw_dataset.read(off = (offset_y, offset_x, idx), shape = [size[1], size[0], 1])
+        data = wkw_dataset.read(off = (offset_y, offset_x, idx), 
+                                shape = [size[1], size[0], 1])
         data = data[0, :, :, 0]
         data = np.transpose(data, (1, 0))
-        [t,b,l,r] = find_borders(data)
-        low_res_offsets.append([t,b,l,r])
+        [t0,b0,l0,r0] = find_borders(data)
+        low_res_offsets.append([t0,b0,l0,r0])
 
     # setup save info 
     basename = os.path.basename(ome_dir)[:-9] 
@@ -130,19 +135,34 @@ def convert(
                 array[0, idx, :1, :1] = np.zeros((1, 1), dtype=np.uint8)
                 continue 
             
-            t, b, l, r = [k*2**(nblevel-level-1) for k in low_res_offsets[idx]]
-            height, width = size[0]-t-b, size[1]-l-r 
+            top, bottom, left, right = [k*2**(nblevel-level-1) 
+                for k in low_res_offsets[idx]]
+            height, width = size[0]-top-bottom, size[1]-left-right
 
-            data = wkw_dataset.read(off = (l, t, idx), shape = [width, height, 1])
+            data = wkw_dataset.read(off = (left, top, idx), shape = [width, height, 1])
             data = data[0, :, :, 0]
             data = np.transpose(data, (1, 0))
             if dic:
-                data = np.array([[dic[data[i][j]] for j in range(data.shape[1])] for i in range(data.shape[0])])
+                data = np.array([[dic[data[i][j]] 
+                      for j in range(data.shape[1])] 
+                      for i in range(data.shape[0])])
             subdat_size = data.shape 
             
-            print('Convert level', level, 'with shape', shape, 'and slice', idx, 'with size', subdat_size)
-            if max_load is None or (subdat_size[-2] < max_load and subdat_size[-1] < max_load):
-                array[0, idx, t: t+subdat_size[-2], l: l+subdat_size[-1]] = data[...]
+            print('Convert level', 
+                  level, 
+                  'with shape', 
+                  shape, 
+                  'and slice', 
+                  idx, 
+                  'with size', 
+                  subdat_size)
+            if max_load is None or (
+                subdat_size[-2] < max_load and subdat_size[-1] < max_load
+                ):
+                array[0, 
+                      idx, 
+                      top: top+subdat_size[-2], 
+                      left: left+subdat_size[-1]] = data[...]
             else:
                 ni = ceildiv(subdat_size[-2], max_load)
                 nj = ceildiv(subdat_size[-1], max_load)
@@ -150,9 +170,22 @@ def convert(
                 for i in range(ni):
                     for j in range(nj):
                         print(f'\r{i+1}/{ni}, {j+1}/{nj}', end=' ')
-                        start_x, end_x = i*max_load, min((i+1)*max_load, subdat_size[-2])
-                        start_y, end_y = j*max_load, min((j+1)*max_load, subdat_size[-1])
-                        array[0, idx,  t + start_x: t + end_x, l + start_y: l + end_y] = data[start_x: end_x, start_y: end_y]
+                        start_x, end_x = i*max_load, 
+                        min(
+                            (i+1)*max_load, 
+                            subdat_size[-2])
+                        
+                        start_y, end_y = j*max_load, 
+                        min(
+                            (j+1)*max_load, 
+                            subdat_size[-1])
+                        array[
+                            0, 
+                            idx,  
+                            top + start_x: top + end_x, 
+                            left + start_y: left + end_y] = data[
+                                start_x: end_x, 
+                                start_y: end_y]
                 print('')
                 
         
@@ -162,14 +195,40 @@ def convert(
 
 
 
-def get_mask_name(level):
+def get_mask_name(level: int) -> str:
+    """
+    Return the name of the mask for a given resolution level.
+
+    Parameters
+    ----------
+    level : int
+        The resolution level for which to return the mask name.
+
+    Returns
+    -------
+    str
+        The name of the mask for the given level.
+    """
     if level == 0:
         return '1'
     else:
         return f'{2**level}-{2**level}-1'
 
 
-def cal_distance(img):
+def cal_distance(img: np.ndarray) -> int:
+    """
+    Return the distance of non-zero values to the top border.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The array to calculate distance of object inside to border
+
+    Returns
+    -------
+    int
+        The distance of non-zero to the top border
+    """
     m = img.shape[0]
     for i in range(m):
         cnt = np.sum(img[i, :])
@@ -178,12 +237,25 @@ def cal_distance(img):
     return m  
 
 
-def find_borders(img):
+def find_borders(img: np.ndarray) -> np.ndarray:
+    """
+    Return the distances of non-zero values to four borders.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        The array to calculate distance of object inside to border
+
+    Returns
+    -------
+    int
+        The distance of non-zero values to four borders
+    """
     if np.max(img) == 0:
         return [-1, -1, -1, -1]
-    t = cal_distance(img)
-    b = cal_distance(img[::-1]) 
-    l = cal_distance(np.rot90(img, k=3)) 
-    r = cal_distance(np.rot90(img, k=1))
+    top = cal_distance(img)
+    bottom = cal_distance(img[::-1]) 
+    left = cal_distance(np.rot90(img, k=3)) 
+    right = cal_distance(np.rot90(img, k=1))
 
-    return [max(0, k-1) for k in [t, b, l, r]]
+    return [max(0, k-1) for k in [top, bottom, left, right]]
