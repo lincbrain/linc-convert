@@ -229,8 +229,8 @@ def convert(
         multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
 
     for n in range(nblevel):
-        shape0 = omz["0"].shape[2:]
-        shape = omz[str(n)].shape[2:]
+        shape0 = omz["0"].shape[-2:]
+        shape = omz[str(n)].shape[-2:]
         multiscales[0]["datasets"].append({})
         level = multiscales[0]["datasets"][-1]
         level["path"] = str(n)
@@ -246,7 +246,7 @@ def convert(
                 + [
                     1.0,
                     (shape0[0] / shape[0]) * vxh,
-                    (shape0[0] / shape[0]) * vxw,
+                    (shape0[1] / shape[1]) * vxw,
                 ],
             },
             {
@@ -255,7 +255,7 @@ def convert(
                 + [
                     0.0,
                     (shape0[0] / shape[0] - 1) * vxh * 0.5,
-                    (shape0[0] / shape[0] - 1) * vxw * 0.5,
+                    (shape0[1] / shape[1] - 1) * vxw * 0.5,
                 ],
             },
         ]
