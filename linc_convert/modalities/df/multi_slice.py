@@ -229,7 +229,7 @@ def convert(
         multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
 
     for n in range(nblevel):
-        shape0 = omz['0'].shape[2:]
+        shape0 = omz["0"].shape[2:]
         shape = omz[str(n)].shape[2:]
         multiscales[0]["datasets"].append({})
         level = multiscales[0]["datasets"][-1]
