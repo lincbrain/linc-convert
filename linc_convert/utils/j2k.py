@@ -9,7 +9,7 @@ import numpy as np
 from glymur import Jp2k
 
 # internals
-from linc_convert.utils.math import ceildiv
+from linc_convert.utils.custom_math import ceildiv
 
 
 def get_pixelsize(j2k: Jp2k) -> tuple[float, float]:

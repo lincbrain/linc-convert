@@ -2,13 +2,27 @@ name: linc-convert
 channels:
   - conda-forge
 dependencies:
-  - python
-  - ipython
-  - typer
-  - numpy
-  - glymur
-  - zarr
-  - nibabel
-  - tifffile
+  - python=3.12
+  - ipython=8.22.2
+  - typer=0.12.2
+  - numpy=1.26.4
+  - glymur=0.12.9.post2
+  - zarr=2.17.1
+  - nibabel=5.2.1
+  - tifffile=2024.4.18
+  - pandas=2.2.2
+  - scipy=1.13.0
+  - fsspec=2024.10.0
+  - pip
   - pip:
-    - cyclopts
+      - cyclopts==2.5.0
+      - rich==13.7.1
+      - universal_pathlib==0.2.5
+      - matplotlib==3.8.4
+      - dask==2024.4.2
+      - distributed==2024.4.2
+      - imagecodecs==2024.1.1
+      - pyarrow==15.0.2
+      - pyarrow-hotfix==0.6
+      - rich-rst==1.2.0
+      - tensorstore==0.1.68

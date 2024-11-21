@@ -17,7 +17,7 @@ import tensorstore as ts
 from upath import UPath
 
 # internals
-from linc_convert.utils.math import ceildiv
+from linc_convert.utils.custom_math import ceildiv
 
 
 def make_compressor(name: str, **prm: dict) -> numcodecs.abc.Codec:
