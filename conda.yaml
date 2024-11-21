@@ -10,5 +10,6 @@ dependencies:
   - zarr
   - nibabel
   - tifffile
+  - wkw
   - pip:
     - cyclopts
