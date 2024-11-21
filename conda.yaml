@@ -14,5 +14,6 @@ dependencies:
   - pytest
   - ruff
   - tifffile
+  - pip
   - pip:
     - cyclopts
