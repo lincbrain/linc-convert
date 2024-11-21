@@ -8,10 +8,13 @@ known_instances = {"linc": DandiInstance(
 )}
 
 
-os.environ["DANDI_API_KEY"] = "021b9298a490b4c4fcfa020f7f672ae571a8f1f2"
+os.environ["DANDI_API_KEY"] = ""
 
 
 def download_dandiset_file(dandiset_id, file_path, output_dir, instance="linc"):
+
+
+    
     """
     Downloads a specific file from a DANDI dataset using the specified instance.
 
