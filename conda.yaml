@@ -2,7 +2,7 @@ name: linc-convert
 channels:
   - conda-forge
 dependencies:
-  - python
+  - python=3.10
   - ipython
   - typer
   - numpy
@@ -10,5 +10,10 @@ dependencies:
   - zarr
   - nibabel
   - tifffile
+  - tensorstore
+  - pytest
+  - ruff
+  - tifffile
+  - pip
   - pip:
     - cyclopts
