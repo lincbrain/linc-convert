@@ -12,9 +12,6 @@ os.environ["DANDI_API_KEY"] = ""
 
 
 def download_dandiset_file(dandiset_id, file_path, output_dir, instance="linc"):
-
-
-    
     """
     Downloads a specific file from a DANDI dataset using the specified instance.
 
@@ -33,7 +30,7 @@ def download_dandiset_file(dandiset_id, file_path, output_dir, instance="linc"):
     os.makedirs(output_dir, exist_ok=True)
 
     # Download the file
-    with DandiAPIClient(dandi_instance.api, token="021b9298a490b4c4fcfa020f7f672ae571a8f1f2") as client:
+    with DandiAPIClient(dandi_instance.api, token="") as client:
         asset = client.get_dandiset(dandiset_id, "draft").get_asset_by_path(file_path)
         if not asset:
             raise FileNotFoundError(f"File '{file_path}' not found in dandiset '{dandiset_id}'.")
