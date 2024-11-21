@@ -39,6 +39,12 @@ optional = true
 [tool.poetry.group.lsm.dependencies]
 tifffile = "*"
 
+[tool.poetry.group.psoct]
+optional = true
+[tool.poetry.group.psoct.dependencies]
+h5py = "*"
+scipy = "*"
+
 [tool.poetry.group.dev]
 optional = true
 [tool.poetry.group.dev.dependencies]
