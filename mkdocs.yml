@@ -1,0 +1,56 @@
+site_name: LINC Convert Documentation
+repo_name: "lincbrain/linc-convert"
+repo_url: "https://github.com/lincbrain/linc-convert"
+copyright: "CC-BY 4.0"
+use_directory_urls: true
+site_url: https://convert.lincbrain.org
+
+# Material theme
+theme:
+  name: "material"
+  language: "en"
+  favicon: img/linc.logo.color+white.notext+square.png
+  logo: img/linc.logo.color+black.alpha.notext.png
+  palette:
+    primary: "deep purple"
+    accent: "purple"
+  features:
+    - toc.integrate
+
+# Pages
+nav:
+  - Welcome: "index.md"
+  - API: api/
+  - Contribute documentation: "contribute.md"
+  - About this doc: "about.md"
+
+# List of extensions
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.magiclink
+  - toc:
+      permalink: True
+
+# List of plugins
+plugins:
+  - search
+  - open-in-new-tab
+
+# Customize theme
+extra:
+  generator: false
+  analytics:
+    provider: google
+    property: G-RJKYSKFW0P
+  social:
+    - icon: material/home
+      link: https://connects.mgh.harvard.edu/
+      name: Homepage
+    - icon: fontawesome/brands/slack
+      link: https://mit-lincbrain.slack.com/
+      name: Slack
+    - icon: fontawesome/brands/github
+      link: https://github.com/lincbrain
+      name: GitHub
