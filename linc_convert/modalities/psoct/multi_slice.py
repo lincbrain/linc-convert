@@ -11,7 +11,7 @@ import math
 import os
 from functools import wraps
 from itertools import product
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 from warnings import warn
 
 import cyclopts
@@ -53,7 +53,7 @@ def _automap(func: Callable) -> Callable:
 
 class _ArrayWrapper:
 
-    def _get_key(self, f) -> str:
+    def _get_key(self, f: Mapping) -> str:
         key = self.key
         if key is None:
             if not len(f.keys()):
@@ -75,7 +75,7 @@ class _ArrayWrapper:
 
 class _H5ArrayWrapper(_ArrayWrapper):
 
-    def __init__(self, file, key) -> None:
+    def __init__(self, file: h5py.File, key: str | None) -> None:
         self.file = file
         self.key = key
         self.array = file.get(self._get_key(self.file))
@@ -102,13 +102,13 @@ class _H5ArrayWrapper(_ArrayWrapper):
     def __len__(self) -> int:
         return len(self.array)
 
-    def __getitem__(self, index) -> np.ndarray:
+    def __getitem__(self, index: object) -> np.ndarray:
         return self.array[index]
 
 
 class _MatArrayWrapper(_ArrayWrapper):
 
-    def __init__(self, file, key) -> None:
+    def __init__(self, file: str, key: str | None) -> None:
         self.file = file
         self.key = key
         self.array = None
@@ -140,7 +140,7 @@ class _MatArrayWrapper(_ArrayWrapper):
             self.load()
         return len(self.array)
 
-    def __getitem__(self, index) -> np.ndarray:
+    def __getitem__(self, index: object) -> np.ndarray:
         if self.array is None:
             self.load()
         return self.array[index]
