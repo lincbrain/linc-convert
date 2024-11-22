@@ -37,6 +37,17 @@ markdown_extensions:
 plugins:
   - search
   - open-in-new-tab
+  - gen-files:
+      scripts:
+      - docs/scripts/gen_ref_pages.py 
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ['linc_convert']
+          options:
+            show_source: true
 
 # Customize theme
 extra:
