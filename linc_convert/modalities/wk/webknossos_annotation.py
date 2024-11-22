@@ -26,7 +26,7 @@ wk.command(webknossos)
 def convert(
     wkw_dir: str = None,
     ome_dir: str = None,
-    dst: str = None,
+    out: str = None,
     dic: str = None,
     *,
     chunk: int = 1024,
@@ -48,7 +48,7 @@ def convert(
         in .wkw format. For example: .../annotation_folder/data_Volume.
     ome_dir : str
         Path to the underlying ome.zarr dataset, following the BIDS naming standard.
-    dst : str
+    out : str
         Path to the output directory for saving the converted ome.zarr.
         The ome.zarr file name is generated automatically based on ome_dir
         and the initials of the annotator.
@@ -93,7 +93,7 @@ def convert(
     # setup save info
     basename = os.path.basename(ome_dir)[:-9]
     initials = wkw_dir.split("/")[-2][:2]
-    out = os.path.join(dst, basename + "_dsec_" + initials + ".ome.zarr")
+    out = os.path.join(out, basename + "_dsec_" + initials + ".ome.zarr")
     if os.path.exists(out):
         shutil.rmtree(out)
     os.makedirs(out, exist_ok=True)
