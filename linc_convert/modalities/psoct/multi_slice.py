@@ -52,14 +52,13 @@ def _automap(func: Callable) -> Callable:
 
 
 class _ArrayWrapper:
-
     def _get_key(self, f: Mapping) -> str:
         key = self.key
         if key is None:
             if not len(f.keys()):
                 raise Exception(f"{self.file} is empty")
             for key in f.keys():
-                if key[:1] != '_':
+                if key[:1] != "_":
                     break
             if len(f.keys()) > 1:
                 warn(
@@ -74,19 +73,18 @@ class _ArrayWrapper:
 
 
 class _H5ArrayWrapper(_ArrayWrapper):
-
     def __init__(self, file: h5py.File, key: str | None) -> None:
         self.file = file
         self.key = key
         self.array = file.get(self._get_key(self.file))
 
     def __del__(self) -> None:
-        if hasattr(self.file, 'close'):
+        if hasattr(self.file, "close"):
             self.file.close()
 
     def load(self) -> np.ndarray:
         self.array = self.array[...]
-        if hasattr(self.file, 'close'):
+        if hasattr(self.file, "close"):
             self.file.close()
         self.file = None
         return self.array
@@ -107,14 +105,13 @@ class _H5ArrayWrapper(_ArrayWrapper):
 
 
 class _MatArrayWrapper(_ArrayWrapper):
-
     def __init__(self, file: str, key: str | None) -> None:
         self.file = file
         self.key = key
         self.array = None
 
     def __del__(self) -> None:
-        if hasattr(self.file, 'close'):
+        if hasattr(self.file, "close"):
             self.file.close()
 
     def load(self) -> np.ndarray:
@@ -261,9 +258,7 @@ def convert(
     ni = len(inp)
 
     nblevels = min(
-        [int(math.ceil(math.log2(x)))
-         for i, x in enumerate(inp_shape)
-         if i != no_pool]
+        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp_shape) if i != no_pool]
     )
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
@@ -274,12 +269,11 @@ def convert(
 
     # iterate across input chunks
     for i in range(ni):
-
         for j, k in product(range(nj), range(nk)):
             loaded_chunk = inp[i][
                 ...,
-                k * inp_chunk[0]: (k + 1) * inp_chunk[0],
-                j * inp_chunk[1]: (j + 1) * inp_chunk[1],
+                k * inp_chunk[0] : (k + 1) * inp_chunk[0],
+                j * inp_chunk[1] : (j + 1) * inp_chunk[1],
             ]
 
             print(
@@ -293,8 +287,8 @@ def convert(
             # save current chunk
             omz["0"][
                 ...,
-                k * inp_chunk[0]: k * inp_chunk[0] + loaded_chunk.shape[0],
-                j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
+                k * inp_chunk[0] : k * inp_chunk[0] + loaded_chunk.shape[0],
+                j * inp_chunk[1] : j * inp_chunk[1] + loaded_chunk.shape[1],
                 i,
             ] = loaded_chunk
 
@@ -314,9 +308,7 @@ def convert(
         no_pool=no_pool,
         space_unit=ome_unit,
         space_scale=vx,
-        multiscales_type=(
-            ("2x2x2" if no_pool is None else "2x2") + "mean window"
-        ),
+        multiscales_type=(("2x2x2" if no_pool is None else "2x2") + "mean window"),
     )
 
     if not nii:
@@ -332,6 +324,5 @@ def convert(
     if center:
         affine = center_affine(affine, shape[:3])
     niftizarr_write_header(
-        omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit),
-        nifti_version=2
+        omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit), nifti_version=2
     )
