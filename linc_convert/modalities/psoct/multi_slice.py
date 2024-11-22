@@ -262,7 +262,11 @@ def convert(
     ni = len(inp)
 
     nblevels = min(
-        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp_shape[-3:]) if i != no_pool]
+        [
+            int(math.ceil(math.log2(x)))
+            for i, x in enumerate(inp_shape[-3:])
+            if i != no_pool
+        ]
     )
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
