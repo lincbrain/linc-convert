@@ -176,6 +176,7 @@ def convert(
     nii: bool = False,
     orientation: str = "RAS",
     center: bool = True,
+    dtype: str | None = None,
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -215,6 +216,8 @@ def convert(
         Orientation of the volume
     center
         Set RAS[0, 0, 0] at FOV center
+    dtype
+        Data type to write into
     """
     if isinstance(compressor_opt, str):
         compressor_opt = ast.literal_eval(compressor_opt)
@@ -243,10 +246,11 @@ def convert(
     if len(inp[0].shape) < 2:
         raise Exception("Input array is not 2d:", inp[0].shape)
     # Prepare chunking options
+    dtype = dtype or np.dtype(inp[0].dtype).str
     opt = {
         "dimension_separator": r"/",
         "order": "F",
-        "dtype": np.dtype(inp[0].dtype).str,
+        "dtype": dtype,
         "fill_value": None,
         "compressor": make_compressor(compressor, **compressor_opt),
     }
