@@ -47,7 +47,12 @@ plugins:
         python:
           paths: ['linc_convert']
           options:
-            show_source: true
+            docstring_style: numpy
+            show_source: false
+            merge_init_into_class: true
+            separate_signature: true
+            members_order: source
+            show_root_heading: true
 
 # Customize theme
 extra:
