@@ -1,3 +1,5 @@
+"""Create a navigation file and markdown files for API docs."""
+
 from pathlib import Path
 
 import mkdocs_gen_files
