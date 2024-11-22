@@ -44,7 +44,8 @@ def download_dandiset_file(dandiset_id, file_path, output_dir, instance="linc"):
 # Example usage:
 download_dandiset_file(
     dandiset_id="000004",
-    file_path="derivatives/AI7_EH5f1_z01_y01_demixed/AI7_EH5f1_z01_y01_demixed_plane001_c1.tiff",
-    output_dir="./downloads",
+    file_path="derivatives/AI7_EH5f1_z01_y01_demixed/AI7_EH5f1_z01_y01_demixed_plane001_c2.tiff",
+    output_dir=".",
     instance="linc"
 )
+

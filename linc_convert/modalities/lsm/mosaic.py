@@ -11,6 +11,7 @@ import os
 import re
 from glob import glob
 from typing import Literal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # externals
 import cyclopts
@@ -30,6 +31,19 @@ from linc_convert.utils.zarr import (
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
 
+def write_plane(tswriter, subc, zstart, subz, ystart, yx_shape, dat):
+    """Write a single plane of data into the Zarr file."""
+    try:
+        with ts.Transaction() as txn:
+            tswriter.with_transaction(txn)[
+                subc,
+                zstart + subz,
+                slice(ystart, ystart + yx_shape[0]),
+                slice(None),
+            ] = dat
+    except Exception as e:
+        print(f"Error writing plane: {e}")
+        raise
 
 @mosaic.default
 def convert(
@@ -186,13 +200,18 @@ def convert(
 
             for fname in planes_filenames:
                 parsed = PLANE_PATTERN.fullmatch(os.path.basename(fname))
-                all_chunks_info["planes"][i]["fname"] += [fname]
-                all_chunks_info["planes"][i]["z"] += [int(parsed.group("z"))]
-                all_chunks_info["planes"][i]["c"] += [int(parsed.group("c"))]
+                # Update the dictionary with filename and parsed metadata
+                all_chunks_info["planes"][i]["fname"].append(fname)
+                all_chunks_info["planes"][i]["z"].append(int(parsed.group("z")))
+                all_chunks_info["planes"][i]["c"].append(int(parsed.group("c")))
 
-                f = TiffFile(fname)
-                dtype = f.pages[0].dtype
-                yx_shape = f.pages[0].shape
+                # Unpack the TIFF data
+                with TiffFile(fname) as tiff:
+                    data = tiff.asarray()  # Unpack the entire TIFF data into memory
+                    dtype = data.dtype  # Extract data type
+                    yx_shape = data.shape[-2:]  # Get the shape (last two dimensions are Y and X)
+
+                # Update the dictionary with unpacked shape
                 all_chunks_info["planes"][i]["yx_shape"].append(yx_shape)
 
             nplanes = max(all_chunks_info["planes"][i]["z"])
@@ -243,38 +262,42 @@ def convert(
 
     tswriter = ts.open(wconfig).result()
 
-    for i, dirname in enumerate(all_chunks_info["dirname"]):
-        chunkz = all_chunks_info["z"][i] - 1
-        chunky = all_chunks_info["y"][i] - 1
-        planes = all_chunks_info["planes"][i]
-        for j, fname in enumerate(planes["fname"]):
-            subz = planes["z"][j] - 1
-            subc = planes["c"][j] - 1
-            yx_shape = planes["yx_shape"][j]
+    with ThreadPoolExecutor() as executor:
+        futures = []
 
-            zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
-            ystart = sum(
-                shape[1] for subshapes in allshapes for shape in subshapes[:chunky]
-            )
+        for i, dirname in enumerate(all_chunks_info["dirname"]):
+            chunkz = all_chunks_info["z"][i] - 1
+            chunky = all_chunks_info["y"][i] - 1
+            planes = all_chunks_info["planes"][i]
 
-            print(
-                f"Write plane ({subc:4d}, {zstart + subz:4d}, "
-                f"{ystart:4d}:{ystart + yx_shape[0]:4d})",
-                end="\r",
-            )
+            for j, fname in enumerate(planes["fname"]):
+                subz = planes["z"][j] - 1
+                subc = planes["c"][j] - 1
+                yx_shape = planes["yx_shape"][j]
 
-            dat = TiffFile(fname).asarray()
+                zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
+                ystart = sum(
+                    shape[1] for subshapes in allshapes for shape in subshapes[:chunky]
+                )
+
+                print(
+                    f"Queueing write plane ({subc:4d}, {zstart + subz:4d}, "
+                    f"{ystart:4d}:{ystart + yx_shape[0]:4d})",
+                    end="\r",
+                )
+
+                # Load data and submit the write task
+                dat = TiffFile(fname).asarray()
+                futures.append(
+                    executor.submit(write_plane, tswriter, subc, zstart, subz, ystart, yx_shape, dat)
+                )
+
+        # Wait for all tasks to complete
+        for future in as_completed(futures):
             try:
-                with ts.Transaction() as txn:
-                    tswriter.with_transaction(txn)[
-                        subc,
-                        zstart + subz,
-                        slice(ystart, ystart + yx_shape[0]),
-                        slice(None),
-                    ] = dat
-            except Exception:
-                print("")
-                raise
+                future.result()  # Raise any exceptions from the task
+            except Exception as e:
+                print(f"Error in parallel write: {e}")
 
     print("")
 
