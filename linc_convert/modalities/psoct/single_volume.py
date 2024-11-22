@@ -66,11 +66,13 @@ def _mapmat(fname: str, key: str = None) -> None:
         if not len(f.keys()):
             raise Exception(f"{fname} is empty")
         for key in f.keys():
-            if key[:1] != '_':
+            if key[:1] != "_":
                 break
         if len(f.keys()) > 1:
-            warn(f'More than one key in .mat file {fname}, '
-                 f'arbitrarily loading "{key}"')
+            warn(
+                f"More than one key in .mat file {fname}, "
+                f'arbitrarily loading "{key}"'
+            )
 
     if key not in f.keys():
         raise Exception(f"Key {key} not found in file {fname}")
@@ -174,9 +176,7 @@ def convert(
     ni = ceildiv(inp.shape[2], inp_chunk[2])
 
     nblevels = min(
-        [int(math.ceil(math.log2(x)))
-         for i, x in enumerate(inp.shape)
-         if i != no_pool]
+        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp.shape) if i != no_pool]
     )
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
@@ -188,9 +188,9 @@ def convert(
     # iterate across input chunks
     for i, j, k in product(range(ni), range(nj), range(nk)):
         loaded_chunk = inp[
-            k * inp_chunk[0]: (k + 1) * inp_chunk[0],
-            j * inp_chunk[1]: (j + 1) * inp_chunk[1],
-            i * inp_chunk[2]: (i + 1) * inp_chunk[2],
+            k * inp_chunk[0] : (k + 1) * inp_chunk[0],
+            j * inp_chunk[1] : (j + 1) * inp_chunk[1],
+            i * inp_chunk[2] : (i + 1) * inp_chunk[2],
         ]
 
         print(
@@ -203,9 +203,9 @@ def convert(
 
         # save current chunk
         omz["0"][
-            k * inp_chunk[0]: k * inp_chunk[0] + loaded_chunk.shape[0],
-            j * inp_chunk[1]: j * inp_chunk[1] + loaded_chunk.shape[1],
-            i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
+            k * inp_chunk[0] : k * inp_chunk[0] + loaded_chunk.shape[0],
+            j * inp_chunk[1] : j * inp_chunk[1] + loaded_chunk.shape[1],
+            i * inp_chunk[2] : i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
 
     generate_pyramid(omz, nblevels - 1, mode="mean")
@@ -222,9 +222,7 @@ def convert(
         no_pool=no_pool,
         space_unit=ome_unit,
         space_scale=vx,
-        multiscales_type=(
-            ("2x2x2" if no_pool is None else "2x2") + "mean window"
-        ),
+        multiscales_type=(("2x2x2" if no_pool is None else "2x2") + "mean window"),
     )
 
     if not nii:
@@ -240,6 +238,5 @@ def convert(
     if center:
         affine = center_affine(affine, shape[:3])
     niftizarr_write_header(
-        omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit),
-        nifti_version=2
+        omz, shape, affine, omz["0"].dtype, to_nifti_unit(unit), nifti_version=2
     )
