@@ -4,6 +4,7 @@ repo_url: "https://github.com/lincbrain/linc-convert"
 copyright: "CC-BY 4.0"
 use_directory_urls: true
 site_url: https://convert.lincbrain.org
+edit_uri: blob/main/docs/
 
 # Material theme
 theme:
@@ -16,6 +17,9 @@ theme:
     accent: "purple"
   features:
     - toc.integrate
+
+watch:
+  - ../linc_convert
 
 # Pages
 nav:
