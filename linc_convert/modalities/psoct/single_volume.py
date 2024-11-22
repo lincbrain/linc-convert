@@ -208,7 +208,7 @@ def convert(
             i * inp_chunk[2]: i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
 
-    generate_pyramid(omz, nblevels - 1, mode="mean")
+    generate_pyramid(omz, nblevels - 1, mode="mean", no_pyramid_axis=no_pool)
 
     print("")
 

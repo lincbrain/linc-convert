@@ -294,7 +294,7 @@ def convert(
 
         inp[i] = None  # no ref count -> delete array
 
-    generate_pyramid(omz, nblevels - 1, mode="mean")
+    generate_pyramid(omz, nblevels - 1, mode="mean", no_pyramid_axis=no_pool)
 
     print("")
 
