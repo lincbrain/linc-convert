@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from functools import wraps
 from itertools import product
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 from warnings import warn
 
 import cyclopts
@@ -38,10 +38,10 @@ psoct.command(single_volume)
 
 
 def _automap(func: Callable) -> Callable:
-    """Decorator to automatically map the array in the mat file."""  # noqa: D401
+    """Automatically map the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp: str, out: str = None, **kwargs: dict) -> Any:  # noqa: ANN401
+    def wrapper(inp: str, out: str = None, **kwargs: dict) -> None:
         if out is None:
             out = os.path.splitext(inp[0])[0]
             out += ".nii.zarr" if kwargs.get("nii", False) else ".ome.zarr"
@@ -65,9 +65,14 @@ def _mapmat(fname: str, key: str = None) -> None:
     if key is None:
         if not len(f.keys()):
             raise Exception(f"{fname} is empty")
-        key = list(f.keys())[0]
+        for key in f.keys():
+            if key[:1] != "_":
+                break
         if len(f.keys()) > 1:
-            warn(f'More than one key in .mat file {fname}, arbitrarily loading "{key}"')
+            warn(
+                f"More than one key in .mat file {fname}, "
+                f'arbitrarily loading "{key}"'
+            )
 
     if key not in f.keys():
         raise Exception(f"Key {key} not found in file {fname}")
@@ -153,9 +158,9 @@ def convert(
     omz = zarr.group(store=omz, overwrite=True)
 
     if not hasattr(inp, "dtype"):
-        raise Exception("Input is not a numpy array. This is likely unexpected")
+        raise Exception("Input is not a numpy array. This is unexpected.")
     if len(inp.shape) < 3:
-        raise Exception("Input array is not 3d")
+        raise Exception("Input array is not 3d:", inp.shape)
     # Prepare chunking options
     opt = {
         "dimension_separator": r"/",
@@ -203,7 +208,7 @@ def convert(
             i * inp_chunk[2] : i * inp_chunk[2] + loaded_chunk.shape[2],
         ] = loaded_chunk
 
-    generate_pyramid(omz, nblevels - 1, mode="mean")
+    generate_pyramid(omz, nblevels - 1, mode="mean", no_pyramid_axis=no_pool)
 
     print("")
 
@@ -217,7 +222,7 @@ def convert(
         no_pool=no_pool,
         space_unit=ome_unit,
         space_scale=vx,
-        multiscales_type=("2x2x2" if no_pool is None else "2x2") + "mean window",
+        multiscales_type=(("2x2x2" if no_pool is None else "2x2") + "mean window"),
     )
 
     if not nii:

@@ -203,16 +203,23 @@ def generate_pyramid(
                 slice(i * max_load, min((i + 1) * max_load, n))
                 for i, n in zip(chunk_index, prev_shape)
             ]
+            fullshape = omz[str(level - 1)].shape
             dat = omz[str(level - 1)][tuple(slicer)]
 
             # Discard the last voxel along odd dimensions
-            crop = [0 if x == 1 else x % 2 for x in dat.shape[-ndim:]]
+            crop = [
+                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape)
+            ]
             # Don't crop the axis not down-sampling
             # cannot do if not no_pyramid_axis since it could be 0
             if no_pyramid_axis is not None:
                 crop[no_pyramid_axis] = 0
             slcr = [slice(-1) if x else slice(None) for x in crop]
             dat = dat[tuple([Ellipsis, *slcr])]
+
+            if any(n == 0 for n in dat.shape):
+                # last strip had a single voxel, nothing to do
+                continue
 
             patch_shape = dat.shape[-ndim:]
 
@@ -234,7 +241,7 @@ def generate_pyramid(
             # -> flatten patches
             smaller_shape = [max(n // 2, 1) for n in patch_shape]
             if no_pyramid_axis is not None:
-                smaller_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
+                smaller_shape[no_pyramid_axis] = patch_shape[no_pyramid_axis]
 
             dat = dat.reshape(batch + smaller_shape + [-1])
 
