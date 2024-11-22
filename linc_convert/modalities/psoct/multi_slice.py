@@ -183,8 +183,12 @@ def convert(
     """
     Matlab to OME-Zarr.
 
-    Convert OCT volumes in raw matlab files
-    into a pyramidal OME-ZARR (or NIfTI-Zarr) hierarchy.
+    Convert OCT volumes in raw matlab files into a pyramidal
+    OME-ZARR (or NIfTI-Zarr) hierarchy.
+
+    This command assumes that each slice in a volume is stored in a
+    different mat file. All slices must have the same shape, and will
+    be concatenated into a 3D Zarr.
 
     Parameters
     ----------
@@ -207,7 +211,7 @@ def convert(
     max_levels
         Maximum number of pyramid levels
     no_pool
-        Index of dimension to not pool when building pyramid
+        Index of dimension to not pool when building pyramid.
     nii
         Convert to nifti-zarr. True if path ends in ".nii.zarr"
     orientation
