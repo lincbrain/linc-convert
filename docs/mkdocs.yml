@@ -4,6 +4,8 @@ repo_url: "https://github.com/lincbrain/linc-convert"
 copyright: "CC-BY 4.0"
 use_directory_urls: true
 site_url: https://convert.lincbrain.org
+docs_dir: .
+site_dir: html
 edit_uri: blob/main/docs/
 
 # Material theme
@@ -44,7 +46,7 @@ plugins:
   - section-index
   - gen-files:
       scripts:
-      - docs/scripts/gen_ref_pages.py 
+      - scripts/gen_ref_pages.py 
   - literate-nav:
       nav_file: navigation.md
   - mkdocstrings:
