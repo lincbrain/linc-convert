@@ -11,6 +11,8 @@ import os
 import re
 from glob import glob
 from typing import Literal
+from multiprocessing import Pool
+from functools import partial
 
 # externals
 import cyclopts
@@ -30,6 +32,33 @@ from linc_convert.utils.zarr import (
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
 
+def write_plane_multiprocess(tswriter, fname, subc, zstart, subz, ystart, yx_shape):
+    """Write a single plane of data into the Zarr file (multiprocessing)."""
+
+    with TiffFile(fname) as tiff:
+        dat = tiff.asarray()
+
+    try:
+        with ts.Transaction() as txn:
+            tswriter.with_transaction(txn)[
+                subc,
+                zstart + subz,
+                slice(ystart, ystart + yx_shape[0]),
+                slice(None),
+            ] = dat
+    except Exception as e:
+        print(f"Error writing plane: {e}")
+        raise
+
+def monitor_and_wait(futures):
+    """Monitor resource usage and wait for completion of a batch of futures."""
+    print("\nProcessing batch...")
+    for future in as_completed(futures):
+        try:
+            future.result()  # Raise any exceptions from the task
+        except Exception as e:
+            print(f"Error in parallel write: {e}")
+    futures.clear()
 
 @mosaic.default
 def convert(
@@ -186,13 +215,18 @@ def convert(
 
             for fname in planes_filenames:
                 parsed = PLANE_PATTERN.fullmatch(os.path.basename(fname))
-                all_chunks_info["planes"][i]["fname"] += [fname]
-                all_chunks_info["planes"][i]["z"] += [int(parsed.group("z"))]
-                all_chunks_info["planes"][i]["c"] += [int(parsed.group("c"))]
+                # Update the dictionary with filename and parsed metadata
+                all_chunks_info["planes"][i]["fname"].append(fname)
+                all_chunks_info["planes"][i]["z"].append(int(parsed.group("z")))
+                all_chunks_info["planes"][i]["c"].append(int(parsed.group("c")))
 
-                f = TiffFile(fname)
-                dtype = f.pages[0].dtype
-                yx_shape = f.pages[0].shape
+                # Unpack the TIFF data
+                with TiffFile(fname) as tiff:
+                    data = tiff.asarray()  # Unpack the entire TIFF data into memory
+                    dtype = data.dtype  # Extract data type
+                    yx_shape = data.shape[-2:]  # Get the shape (last two dimensions are Y and X)
+
+                # Update the dictionary with unpacked shape
                 all_chunks_info["planes"][i]["yx_shape"].append(yx_shape)
 
             nplanes = max(all_chunks_info["planes"][i]["z"])
@@ -243,10 +277,12 @@ def convert(
 
     tswriter = ts.open(wconfig).result()
 
+    tasks = []
     for i, dirname in enumerate(all_chunks_info["dirname"]):
         chunkz = all_chunks_info["z"][i] - 1
         chunky = all_chunks_info["y"][i] - 1
         planes = all_chunks_info["planes"][i]
+
         for j, fname in enumerate(planes["fname"]):
             subz = planes["z"][j] - 1
             subc = planes["c"][j] - 1
@@ -258,23 +294,16 @@ def convert(
             )
 
             print(
-                f"Write plane ({subc:4d}, {zstart + subz:4d}, "
+                f"Queueing write plane ({subc:4d}, {zstart + subz:4d}, "
                 f"{ystart:4d}:{ystart + yx_shape[0]:4d})",
                 end="\r",
             )
 
-            dat = TiffFile(fname).asarray()
-            try:
-                with ts.Transaction() as txn:
-                    tswriter.with_transaction(txn)[
-                        subc,
-                        zstart + subz,
-                        slice(ystart, ystart + yx_shape[0]),
-                        slice(None),
-                    ] = dat
-            except Exception:
-                print("")
-                raise
+            tasks.append((tswriter, fname, subc, zstart, subz, ystart, yx_shape))
+            
+    # write_func = partial(write_plane_multiprocess, tswriter)
+    with Pool(processes=8) as pool:
+        pool.starmap(write_plane_multiprocess, tasks)
 
     print("")
 
