@@ -37,6 +37,7 @@ markdown_extensions:
 plugins:
   - search
   - open-in-new-tab
+  - section-index
   - gen-files:
       scripts:
       - docs/scripts/gen_ref_pages.py 
