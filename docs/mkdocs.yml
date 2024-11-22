@@ -53,7 +53,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ['../linc_convert']
+          paths: ['../../linc_convert']
           options:
             docstring_style: numpy
             show_source: false
