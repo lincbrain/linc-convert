@@ -32,8 +32,12 @@ from linc_convert.utils.zarr import (
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
 
-def write_plane_multiprocess(tswriter, subc, zstart, subz, ystart, yx_shape, dat):
+def write_plane_multiprocess(tswriter, fname, subc, zstart, subz, ystart, yx_shape):
     """Write a single plane of data into the Zarr file (multiprocessing)."""
+
+    with TiffFile(fname) as tiff:
+        dat = tiff.asarray()
+
     try:
         with ts.Transaction() as txn:
             tswriter.with_transaction(txn)[
@@ -295,12 +299,11 @@ def convert(
                 end="\r",
             )
 
-            dat = TiffFile(fname).asarray()
-            tasks.append((subc, zstart, subz, ystart, yx_shape, dat))
-
-    write_func = partial(write_plane_multiprocess, tswriter)
+            tasks.append((tswriter, fname, subc, zstart, subz, ystart, yx_shape))
+            
+    # write_func = partial(write_plane_multiprocess, tswriter)
     with Pool(processes=8) as pool:
-        pool.starmap(write_func, tasks)
+        pool.starmap(write_plane_multiprocess, tasks)
 
     print("")
 
