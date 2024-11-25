@@ -23,7 +23,7 @@ from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr import make_compressor
-
+from linc_convert.models.zarr_config import ZarrConfig
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
 
@@ -31,13 +31,9 @@ lsm.command(mosaic)
 @mosaic.default
 def convert(
     inp: str,
-    out: str = None,
     *,
-    chunk: int = 128,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
+    zarr_config: ZarrConfig,
     max_load: int = 512,
-    nii: bool = False,
     orientation: str = "coronal",
     center: bool = True,
     thickness: float | None = None,
@@ -91,6 +87,12 @@ def convert(
     voxel_size
         Voxel size along the X, Y and Z dimension, in micron.
     """
+    out: str = zarr_config.out
+    chunk: int = zarr_config.chunk
+    compressor: str = zarr_config.compressor
+    compressor_opt: str = zarr_config.compressor_opt
+    print(compressor_opt, type(compressor_opt))
+    nii: bool = zarr_config.nii
     if isinstance(compressor_opt, str):
         compressor_opt = ast.literal_eval(compressor_opt)
 
@@ -242,69 +244,74 @@ def convert(
 
     # build pyramid using median windows
     level = 0
-    while any(x > 1 for x in omz[str(level)].shape[-3:]):
-        prev_array = omz[str(level)]
-        prev_shape = prev_array.shape[-3:]
-        level += 1
+    # while any(x > 1 for x in omz[str(level)].shape[-3:]):
+    #     prev_array = omz[str(level)]
+    #     prev_shape = prev_array.shape[-3:]
+    #     level += 1
 
-        new_shape = list(map(lambda x: max(1, x // 2), prev_shape))
-        if all(x < chunk for x in new_shape):
-            break
-        print("Compute level", level, "with shape", new_shape)
-        omz.create_dataset(str(level), shape=[nchannels, *new_shape], **opt)
-        new_array = omz[str(level)]
+    #     new_shape = list(map(lambda x: max(1, x // 2), prev_shape))
+    #     if all(x < chunk for x in new_shape):
+    #         break
+    #     print("Compute level", level, "with shape", new_shape)
+    #     omz.create_dataset(str(level), shape=[nchannels, *new_shape], **opt)
+    #     new_array = omz[str(level)]
 
-        nz, ny, nx = prev_array.shape[-3:]
-        ncz = ceildiv(nz, max_load)
-        ncy = ceildiv(ny, max_load)
-        ncx = ceildiv(nx, max_load)
+    #     nz, ny, nx = prev_array.shape[-3:]
+    #     ncz = ceildiv(nz, max_load)
+    #     ncy = ceildiv(ny, max_load)
+    #     ncx = ceildiv(nx, max_load)
 
-        for cz in range(ncz):
-            for cy in range(ncy):
-                for cx in range(ncx):
-                    print(f"chunk ({cz}, {cy}, {cx}) / ({ncz}, {ncy}, {ncx})", end="\r")
+    #     for cz in range(ncz):
+    #         for cy in range(ncy):
+    #             for cx in range(ncx):
+    #                 print(f"chunk ({cz}, {cy}, {cx}) / ({ncz}, {ncy}, {ncx})", end="\r")
 
-                    dat = prev_array[
-                        ...,
-                        cz * max_load : (cz + 1) * max_load,
-                        cy * max_load : (cy + 1) * max_load,
-                        cx * max_load : (cx + 1) * max_load,
-                    ]
-                    crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
-                    slicer = [slice(-1) if x else slice(None) for x in crop]
-                    dat = dat[(Ellipsis, *slicer)]
-                    pz, py, px = dat.shape[-3:]
+    #                 dat = prev_array[
+    #                     ...,
+    #                     cz * max_load : (cz + 1) * max_load,
+    #                     cy * max_load : (cy + 1) * max_load,
+    #                     cx * max_load : (cx + 1) * max_load,
+    #                 ]
+    #                 crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
+    #                 slicer = [slice(-1) if x else slice(None) for x in crop]
+    #                 dat = dat[(Ellipsis, *slicer)]
+    #                 pz, py, px = dat.shape[-3:]
 
-                    dat = dat.reshape(
-                        [
-                            nchannels,
-                            max(pz // 2, 1),
-                            min(pz, 2),
-                            max(py // 2, 1),
-                            min(py, 2),
-                            max(px // 2, 1),
-                            min(px, 2),
-                        ]
-                    )
-                    dat = dat.transpose([0, 1, 3, 5, 2, 4, 6])
-                    dat = dat.reshape(
-                        [
-                            nchannels,
-                            max(pz // 2, 1),
-                            max(py // 2, 1),
-                            max(px // 2, 1),
-                            -1,
-                        ]
-                    )
-                    dat = np.median(dat, -1)
+    #                 dat = dat.reshape(
+    #                     [
+    #                         nchannels,
+    #                         max(pz // 2, 1),
+    #                         min(pz, 2),
+    #                         max(py // 2, 1),
+    #                         min(py, 2),
+    #                         max(px // 2, 1),
+    #                         min(px, 2),
+    #                     ]
+    #                 )
+    #                 dat = dat.transpose([0, 1, 3, 5, 2, 4, 6])
+    #                 dat = dat.reshape(
+    #                     [
+    #                         nchannels,
+    #                         max(pz // 2, 1),
+    #                         max(py // 2, 1),
+    #                         max(px // 2, 1),
+    #                         -1,
+    #                     ]
+    #                 )
+    #                 dat = np.median(dat, -1)
 
-                    new_array[
-                        ...,
-                        cz * max_load // 2 : (cz + 1) * max_load // 2,
-                        cy * max_load // 2 : (cy + 1) * max_load // 2,
-                        cx * max_load // 2 : (cx + 1) * max_load // 2,
-                    ] = dat
-
+    #                 new_array[
+    #                     ...,
+    #                     cz * max_load // 2 : (cz + 1) * max_load // 2,
+    #                     cy * max_load // 2 : (cy + 1) * max_load // 2,
+    #                     cx * max_load // 2 : (cx + 1) * max_load // 2,
+    #                 ] = dat
+    # 
+    nxyz = np.array(fullshape)
+    default_layers = int(np.ceil(np.log2(np.max(nxyz / chunk)))) + 1
+    nblevel = max(default_layers, 1)
+    from linc_convert.modalities.psoct._utils import generate_pyramid
+    generate_pyramid(omz, levels=nblevel-1,ndim = len(fullshape)+1)
     print("")
     nblevel = level
 

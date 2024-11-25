@@ -27,6 +27,8 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
         return False
     if zarr1.attrs != zarr2.attrs:
         print("attrs mismatch")
+        print(dict(zarr1.attrs))
+        print(dict(zarr2.attrs))
         return False
 
     # Compare each array in both archives
