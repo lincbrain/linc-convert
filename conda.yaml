@@ -10,6 +10,7 @@ dependencies:
   - zarr
   - nibabel
   - tifffile
+  - wkw
   - tensorstore
   - pytest
   - ruff

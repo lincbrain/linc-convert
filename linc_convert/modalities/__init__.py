@@ -1,4 +1,5 @@
 """Converters for all imaging modalities."""
 
-__all__ = ["df", "lsm", "psoct"]
-from . import df, lsm, psoct
+__all__ = ["df", "lsm", "wk", "psoct"]
+from . import df, lsm, wk, psoct
+
