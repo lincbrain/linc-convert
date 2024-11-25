@@ -19,7 +19,7 @@ def _write_test_data(directory: str) -> None:
 
 
 def test_df(tmp_path):
-    _write_test_data(tmp_path)
+    # _write_test_data(tmp_path)
     with zipfile.ZipFile("data/df_input.zip", "r") as z:
         z.extractall(tmp_path)
     output_zarr = tmp_path / "output.zarr"
