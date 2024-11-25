@@ -16,5 +16,7 @@ dependencies:
   - ruff
   - tifffile
   - pip
+  - h5py
+  - scipy
   - pip:
     - cyclopts
