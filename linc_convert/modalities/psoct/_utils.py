@@ -156,6 +156,7 @@ def generate_pyramid(
         "dtype": omz["0"]._dtype,
         "fill_value": omz["0"]._fill_value,
         "compressor": omz["0"]._compressor,
+        "chunks": omz["0"].chunks,
     }
 
     # Select windowing function
@@ -190,7 +191,7 @@ def generate_pyramid(
         print("Compute level", level, "with shape", shape)
 
         allshapes.append(shape)
-        omz.create_dataset(str(level), shape=shape, **opt)
+        omz.create_dataset(str(level), shape=batch + shape, **opt)
 
         # Iterate across `max_load` chunks
         # (note that these are unrelared to underlying zarr chunks)

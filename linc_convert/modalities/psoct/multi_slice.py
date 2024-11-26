@@ -262,7 +262,11 @@ def convert(
     ni = len(inp)
 
     nblevels = min(
-        [int(math.ceil(math.log2(x))) for i, x in enumerate(inp_shape) if i != no_pool]
+        [
+            int(math.ceil(math.log2(x)))
+            for i, x in enumerate(inp_shape[-3:])
+            if i != no_pool
+        ]
     )
     nblevels = min(nblevels, int(math.ceil(math.log2(max_load))))
     nblevels = min(nblevels, max_levels)
@@ -291,8 +295,8 @@ def convert(
             # save current chunk
             omz["0"][
                 ...,
-                k * inp_chunk[0] : k * inp_chunk[0] + loaded_chunk.shape[0],
-                j * inp_chunk[1] : j * inp_chunk[1] + loaded_chunk.shape[1],
+                k * inp_chunk[-3] : k * inp_chunk[-3] + loaded_chunk.shape[-2],
+                j * inp_chunk[-2] : j * inp_chunk[-2] + loaded_chunk.shape[-1],
                 i,
             ] = loaded_chunk
 
@@ -308,7 +312,7 @@ def convert(
     ome_unit = to_ome_unit(unit)
     write_ome_metadata(
         omz,
-        axes=["z", "y", "x"],
+        axes=(["c"] if len(inp_shape) == 4 else []) + ["z", "y", "x"],
         no_pool=no_pool,
         space_unit=ome_unit,
         space_scale=vx,
