@@ -24,7 +24,7 @@ packages = [{include = "linc_convert"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-cyclopts = "^2.0.0"
+cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
