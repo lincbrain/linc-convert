@@ -22,7 +22,7 @@ from tifffile import TiffFile
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr import make_compressor
+from linc_convert.utils.zarr.compressor import make_compressor
 
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)

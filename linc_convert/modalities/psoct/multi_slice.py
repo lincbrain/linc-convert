@@ -30,7 +30,7 @@ from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr import make_compressor
+from linc_convert.utils.zarr.compressor import make_compressor
 
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
 psoct.command(multi_slice)
