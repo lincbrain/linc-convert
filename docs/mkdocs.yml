@@ -8,7 +8,6 @@ docs_dir: "."
 site_dir: "../site"
 edit_uri: "blob/main/docs/"
 
-# Material theme
 theme:
   name: "material"
   language: "en"
@@ -23,14 +22,12 @@ theme:
 watch:
   - ../linc_convert
 
-# Pages
 nav:
   - Welcome: "index.md"
   - API: api/
   - Contribute documentation: "contribute.md"
   - About this doc: "about.md"
 
-# List of extensions
 markdown_extensions:
   - admonition
   - pymdownx.details
@@ -39,7 +36,6 @@ markdown_extensions:
   - toc:
       permalink: True
 
-# List of plugins
 plugins:
   - search
   - open-in-new-tab
@@ -62,7 +58,6 @@ plugins:
             members_order: source
             show_root_heading: true
 
-# Customize theme
 extra:
   generator: false
   analytics:
