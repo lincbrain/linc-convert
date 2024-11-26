@@ -23,6 +23,7 @@ from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr.compressor import make_compressor
+from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
@@ -31,13 +32,9 @@ lsm.command(mosaic)
 @mosaic.default
 def convert(
     inp: str,
-    out: str = None,
     *,
-    chunk: int = 128,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
+    zarr_config: ZarrConfig,
     max_load: int = 512,
-    nii: bool = False,
     orientation: str = "coronal",
     center: bool = True,
     thickness: float | None = None,
@@ -72,18 +69,8 @@ def convert(
         Path to the root directory, which contains a collection of
         subfolders named `*_z{:02d}_y{:02d}*`, each containing a
         collection of files named `*_plane{:03d}_c{:d}.tiff`.
-    out
-        Path to the output Zarr directory [<INP>.ome.zarr]
-    chunk
-        Output chunk size
-    compressor : {blosc, zlib, raw}
-        Compression method
-    compressor_opt
-        Compression options
     max_load
         Maximum input chunk size when building pyramid
-    nii
-        Convert to nifti-zarr. True if path ends in ".nii.zarr".
     orientation
         Orientation of the slice
     center
@@ -91,6 +78,12 @@ def convert(
     voxel_size
         Voxel size along the X, Y and Z dimension, in micron.
     """
+    out: str = zarr_config.out
+    chunk: int = zarr_config.chunk[0]
+    compressor: str = zarr_config.compressor
+    compressor_opt: str = zarr_config.compressor_opt
+    nii: bool = zarr_config.nii
+
     if isinstance(compressor_opt, str):
         compressor_opt = ast.literal_eval(compressor_opt)
 

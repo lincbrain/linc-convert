@@ -22,6 +22,7 @@ from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr.compressor import make_compressor
+from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 ss = App(name="singleslice", help_format="markdown")
 df.command(ss)
@@ -30,13 +31,9 @@ df.command(ss)
 @ss.default
 def convert(
     inp: str,
-    out: str | None = None,
     *,
-    chunk: int = 1024,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
+    zarr_config: ZarrConfig,
     max_load: int = 16384,
-    nii: bool = False,
     orientation: str = "coronal",
     center: bool = True,
     thickness: float | None = None,
@@ -71,18 +68,8 @@ def convert(
     ----------
     inp
         Path to the input JP2 file
-    out
-        Path to the output Zarr directory [<INP>.ome.zarr]
-    chunk
-        Output chunk size
-    compressor : {blosc, zlib, raw}
-        Compression method
-    compressor_opt
-        Compression options
     max_load
         Maximum input chunk size
-    nii
-        Convert to nifti-zarr. True if path ends in ".nii.zarr"
     orientation
         Orientation of the slice
     center
@@ -90,6 +77,12 @@ def convert(
     thickness
         Slice thickness
     """
+    out: str = zarr_config.out
+    chunk: int = zarr_config.chunk
+    compressor: str = zarr_config.compressor
+    compressor_opt: str = zarr_config.compressor_opt
+    nii: bool = zarr_config.nii
+
     if not out:
         out = os.path.splitext(inp)[0]
         out += ".nii.zarr" if nii else ".ome.zarr"

@@ -32,6 +32,7 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr.compressor import make_compressor
+from linc_convert.utils.zarr.zarr_config import ZarrConfig, _ZarrConfig
 
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
 psoct.command(single_volume)
@@ -41,13 +42,13 @@ def _automap(func: Callable) -> Callable:
     """Automatically map the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp: str, out: str = None, **kwargs: dict) -> None:
-        if out is None:
-            out = os.path.splitext(inp[0])[0]
-            out += ".nii.zarr" if kwargs.get("nii", False) else ".ome.zarr"
-        kwargs["nii"] = kwargs.get("nii", False) or out.endswith(".nii.zarr")
+    def wrapper(inp: str, zarr_config: _ZarrConfig, **kwargs: dict) -> None:
+        if zarr_config.out is None:
+            zarr_config.out = os.path.splitext(inp[0])[0]
+            zarr_config.out += ".nii.zarr" if zarr_config.nii else ".ome.zarr"
+        # kwargs["nii"] = kwargs.get("nii", False) or out.endswith(".nii.zarr")
         with _mapmat(inp, kwargs.get("key", None)) as dat:
-            return func(dat, out, **kwargs)
+            return func(dat, zarr_config=zarr_config, **kwargs)
 
     return wrapper
 
@@ -86,17 +87,13 @@ def _mapmat(fname: str, key: str = None) -> None:
 @_automap
 def convert(
     inp: str,
-    out: Optional[str] = None,
     *,
+    zarr_config: ZarrConfig,
     key: Optional[str] = None,
     meta: str = None,
-    chunk: int = 128,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
     max_load: int = 128,
     max_levels: int = 5,
     no_pool: Optional[int] = None,
-    nii: bool = False,
     orientation: str = "RAS",
     center: bool = True,
 ) -> None:
@@ -135,6 +132,12 @@ def convert(
     center
         Set RAS[0, 0, 0] at FOV center
     """
+    out: str = zarr_config.out
+    chunk: int = zarr_config.chunk
+    compressor: str = zarr_config.compressor
+    compressor_opt: str = zarr_config.compressor_opt
+    nii: bool = zarr_config.nii
+
     if isinstance(compressor_opt, str):
         compressor_opt = ast.literal_eval(compressor_opt)
 

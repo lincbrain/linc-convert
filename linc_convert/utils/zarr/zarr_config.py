@@ -1,7 +1,7 @@
 """Configuration related to output Zarr Archive."""
 
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from cyclopts import Parameter
 
@@ -38,7 +38,7 @@ class _ZarrConfig:
 
     """
 
-    out: str = ""
+    out: Optional[str] = None
     chunk: tuple[int] = (128,)
     shard: list[int | str] | None = None
     version: Literal[2, 3] = 3

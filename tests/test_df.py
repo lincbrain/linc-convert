@@ -7,6 +7,7 @@ import numpy as np
 from helper import _cmp_zarr_archives
 
 from linc_convert.modalities.df import multi_slice
+from linc_convert.utils.zarr.zarr_config import _ZarrConfig
 
 
 def _write_test_data(directory: str) -> None:
@@ -25,5 +26,5 @@ def test_df(tmp_path):
     output_zarr = tmp_path / "output.zarr"
     files = glob.glob(os.path.join(tmp_path, "*.jp2"))
     files.sort()
-    multi_slice.convert(files, str(output_zarr))
+    multi_slice.convert(files, zarr_config=_ZarrConfig(str(output_zarr)))
     assert _cmp_zarr_archives(str(output_zarr), "data/df.zarr.zip")
