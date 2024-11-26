@@ -30,3 +30,4 @@ for path in sorted(src.rglob("*.py")):
 
 with mkdocs_gen_files.open(root / "docs/api/navigation.md", "w") as nav_file: 
     nav_file.writelines(nav.build_literate_nav())
+    
