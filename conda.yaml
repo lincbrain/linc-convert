@@ -19,4 +19,4 @@ dependencies:
   - h5py
   - scipy
   - pip:
-    - cyclopts
+    - cyclopts>=3.0.0
