@@ -1,2 +1,13 @@
 linc
 LINC
+DANDI
+PIs
+Hillman
+Yendiki
+cortico
+subcortical
+OME
+Zarr
+txt
+http
+webserver
