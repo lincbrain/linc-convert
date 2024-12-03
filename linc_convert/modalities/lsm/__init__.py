@@ -3,7 +3,7 @@
 try:
     import tifffile as _  # noqa: F401
 
-    __all__ = ["cli", "mosaic"]
-    from . import cli, mosaic
+    __all__ = ["cli", "mosaic", "multi_slice"]
+    from . import cli, mosaic, multi_slice
 except ImportError:
     pass
