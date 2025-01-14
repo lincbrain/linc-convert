@@ -14,8 +14,18 @@ theme:
   favicon: img/linc.logo.color+white.notext+square.png
   logo: img/linc.logo.color+black.alpha.notext.png
   palette:
-    primary: "deep purple"
-    accent: "purple"
+    - scheme: default
+      toggle: 
+        icon: material/weather-night
+        name: Dark mode
+      primary: "deep purple"
+      accent: "purple"
+    - scheme: slate
+      toggle: 
+        icon: material/weather-sunny
+        name: Light mode
+      primary: "deep purple"
+      accent: "purple"
   features:
     - toc.integrate
 
