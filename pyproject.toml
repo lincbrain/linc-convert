@@ -29,11 +29,27 @@ numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
 
+
+[tool.poetry.group.df]
+optional = true
 [tool.poetry.group.df.dependencies]
 glymur = "*"
 
+[tool.poetry.group.lsm]
+optional = true
 [tool.poetry.group.lsm.dependencies]
 tifffile = "*"
+
+[tool.poetry.group.psoct]
+optional = true
+[tool.poetry.group.psoct.dependencies]
+h5py = "*"
+scipy = "*"
+
+[tool.poetry.group.wk]
+optional = true
+[tool.poetry.group.wk.dependencies]
+wkw = "*" 
 
 [tool.poetry.group.dev]
 optional = true

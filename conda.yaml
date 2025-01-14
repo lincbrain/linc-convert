@@ -10,10 +10,13 @@ dependencies:
   - zarr
   - nibabel
   - tifffile
+  - wkw
   - tensorstore
   - pytest
   - ruff
   - tifffile
   - pip
+  - h5py
+  - scipy
   - pip:
     - cyclopts

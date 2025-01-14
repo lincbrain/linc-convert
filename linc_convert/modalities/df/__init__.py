@@ -1,5 +1,9 @@
 """Dark Field microscopy converters."""
 
-__all__ = ["cli", "multi_slice", "single_slice"]
+try:
+    import glymur as _  # noqa: F401
 
-from . import cli, multi_slice, single_slice
+    __all__ = ["cli", "multi_slice", "single_slice"]
+    from . import cli, multi_slice, single_slice
+except ImportError:
+    pass

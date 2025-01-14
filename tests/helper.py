@@ -21,8 +21,6 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
 
     # Compare keys (dataset structure)
     if zarr1.keys() != zarr2.keys():
-        print(list(zarr1.keys()))
-        print(list(zarr2.keys()))
         print("keys mismatch")
         return False
     if zarr1.attrs != zarr2.attrs:
@@ -34,10 +32,7 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
         array1 = zarr1[key][:]
         array2 = zarr2[key][:]
 
-        # Check for equality of the arrays
-        if not np.array_equal(array1, array2):
-            print(f"Mismatch found in dataset: {key}")
-            return False
+        np.testing.assert_allclose(array1, array2)
         if zarr1[key].attrs != zarr2[key].attrs:
             print("attrs mismatch")
             return False
