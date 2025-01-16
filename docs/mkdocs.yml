@@ -1,9 +1,9 @@
-site_name: LINC Convert Documentation
+site_name: LINC Convert
 repo_name: "lincbrain/linc-convert"
 repo_url: "https://github.com/lincbrain/linc-convert"
 copyright: "CC-BY 4.0"
 use_directory_urls: true
-site_url: https://convert.lincbrain.org
+site_url: https://docs.lincbrain.org/linc-convert
 docs_dir: "."
 site_dir: "../site"
 edit_uri: "blob/main/docs/"
@@ -29,9 +29,6 @@ theme:
   features:
     - toc.integrate
 
-watch:
-  - ../linc_convert
-
 nav:
   - Welcome: "index.md"
   - API: api/
@@ -46,10 +43,6 @@ markdown_extensions:
   - toc:
       permalink: True
 
-# validation:
-#   links:
-#     absolute_links: relative_to_docs
-
 plugins:
   - search
   - open-in-new-tab
@@ -59,7 +52,7 @@ plugins:
       scripts:
       - scripts/gen_ref_pages.py 
   - literate-nav:
-      nav_file: navigation.md
+      nav_file: api.md
   - mkdocstrings:
       handlers:
         python:
