@@ -4,9 +4,6 @@ repo_url: "https://github.com/lincbrain/linc-convert"
 copyright: "CC-BY 4.0"
 use_directory_urls: true
 site_url: https://docs.lincbrain.org/linc-convert
-docs_dir: "."
-site_dir: "../site"
-edit_uri: "blob/main/docs/"
 
 theme:
   name: "material"
@@ -44,13 +41,12 @@ plugins:
   - same-dir
   - gen-files:
       scripts:
-      - scripts/gen_ref_pages.py 
+      - docs/scripts/gen_ref_pages.py 
   - literate-nav:
       nav_file: api.md
   - mkdocstrings:
       handlers:
         python:
-          paths: [..]
           options:
             docstring_style: numpy
             show_source: false
