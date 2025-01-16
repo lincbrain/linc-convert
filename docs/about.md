@@ -2,7 +2,7 @@
 
 ## Acknowledgements
 
-Thank you to the DANDI Archive project for setting up the documentation framework that is utilized here.  See the [DANDI Handbook](https://www.dandiarchive.org/handbook/) for more information.
+Thank you to the DANDI Archive project for setting up the documentation framework that is utilized here.  See the [DANDI Docs](https://docs.dandiarchive.org) for more information.
 
 ## License
 
