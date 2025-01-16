@@ -29,12 +29,6 @@ theme:
   features:
     - toc.integrate
 
-nav:
-  - Welcome: "index.md"
-  - API: api/
-  - Contribute documentation: "contribute.md"
-  - About this doc: "about.md"
-
 markdown_extensions:
   - admonition
   - pymdownx.details
@@ -52,7 +46,6 @@ plugins:
       scripts:
       - scripts/gen_ref_pages.py 
   - literate-nav:
-      nav_file: api.md
   - mkdocstrings:
       handlers:
         python:
