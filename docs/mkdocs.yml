@@ -53,7 +53,7 @@ plugins:
   - same-dir
   - gen-files:
       scripts:
-      - docs/scripts/gen_ref_pages.py 
+      - scripts/gen_ref_pages.py 
   - literate-nav:
       nav_file: navigation.md
   - mkdocstrings:
