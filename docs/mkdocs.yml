@@ -34,7 +34,7 @@ watch:
 
 nav:
   - Welcome: "index.md"
-  - API: api/
+  - API: docs/api/
   - Contribute documentation: "contribute.md"
   - About this doc: "about.md"
 
@@ -45,6 +45,10 @@ markdown_extensions:
   - pymdownx.magiclink
   - toc:
       permalink: True
+
+# validation:
+#   links:
+#     absolute_links: relative_to_docs
 
 plugins:
   - search
