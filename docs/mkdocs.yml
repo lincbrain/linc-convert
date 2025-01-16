@@ -34,7 +34,7 @@ watch:
 
 nav:
   - Welcome: "index.md"
-  - API: docs/api/
+  - API: api/
   - Contribute documentation: "contribute.md"
   - About this doc: "about.md"
 
@@ -59,7 +59,7 @@ plugins:
       scripts:
       - scripts/gen_ref_pages.py 
   - literate-nav:
-      nav_file: navigation.md
+      nav_file: api/navigation.md
   - mkdocstrings:
       handlers:
         python:
