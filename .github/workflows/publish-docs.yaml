@@ -20,6 +20,6 @@ jobs:
         uses: mhausenblas/mkdocs-deploy-gh-pages@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CUSTOM_DOMAIN: convert.lincbrain.org
+          CUSTOM_DOMAIN: docs.lincbrain.org/linc-convert
           CONFIG_FILE: docs/mkdocs.yml
           REQUIREMENTS: docs/requirements.txt
