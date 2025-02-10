@@ -1,4 +1,4 @@
-"""Zarr utilities."""
+"""Functions for zarr compression."""
 
 import numcodecs
 import numcodecs.abc
