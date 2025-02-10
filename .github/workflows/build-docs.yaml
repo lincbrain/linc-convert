@@ -1,0 +1,23 @@
+name: Build MkDocs
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v1
+
+      - name: Install version of Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' 
+
+      - name: Install requirements
+        run: pip install -r docs/requirements.txt
+
+      - name: Build docs
+        run: mkdocs build -f docs/mkdocs.yml

@@ -1,0 +1,76 @@
+site_name: LINC Convert
+repo_name: "lincbrain/linc-convert"
+repo_url: "https://github.com/lincbrain/linc-convert"
+copyright: "CC-BY 4.0"
+use_directory_urls: true
+site_url: https://docs.lincbrain.org/linc-convert
+docs_dir: "."
+site_dir: "../site"
+edit_uri: "blob/main/docs/"
+
+theme:
+  name: "material"
+  language: "en"
+  favicon: img/linc.logo.color+white.notext+square.png
+  logo: img/linc.logo.color+black.alpha.notext.png
+  palette:
+    - scheme: default
+      toggle: 
+        icon: material/weather-night
+        name: Dark mode
+      primary: "deep purple"
+      accent: "purple"
+    - scheme: slate
+      toggle: 
+        icon: material/weather-sunny
+        name: Light mode
+      primary: "deep purple"
+      accent: "purple"
+  features:
+    - toc.integrate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.magiclink
+  - toc:
+      permalink: True
+
+plugins:
+  - search
+  - open-in-new-tab
+  - section-index
+  - same-dir
+  - gen-files:
+      scripts:
+      - scripts/gen_ref_pages.py 
+  - literate-nav:
+      nav_file: api.md
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [..]
+          options:
+            docstring_style: numpy
+            show_source: false
+            merge_init_into_class: true
+            separate_signature: true
+            members_order: source
+            show_root_heading: true
+
+extra:
+  generator: false
+  analytics:
+    provider: google
+    property: G-RJKYSKFW0P
+  social:
+    - icon: material/home
+      link: https://connects.mgh.harvard.edu/
+      name: Homepage
+    - icon: fontawesome/brands/slack
+      link: https://mit-lincbrain.slack.com/
+      name: Slack
+    - icon: fontawesome/brands/github
+      link: https://github.com/lincbrain
+      name: GitHub
