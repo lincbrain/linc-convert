@@ -20,6 +20,7 @@ import numpy as np
 import zarr
 from scipy.io import loadmat
 
+from linc_convert import utils
 from linc_convert.modalities.psoct._utils import (
     generate_pyramid,
     make_json,
@@ -31,7 +32,7 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr.compressor import make_compressor
-from linc_convert.utils.zarr.zarr_config import ZarrConfig, _ZarrConfig
+from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
 psoct.command(multi_slice)
@@ -41,12 +42,13 @@ def _automap(func: Callable) -> Callable:
     """Automatically maps the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp: list[str], zarr_config: _ZarrConfig, **kwargs: dict) -> callable:
-        if zarr_config.out is None:
-            zarr_config.out = os.path.splitext(inp[0])[0]
-            zarr_config.out += ".nii.zarr" if zarr_config.nii else ".ome.zarr"
+    def wrapper(inp: list[str], out: str, **kwargs: dict) -> callable:
+        print(kwargs)
+        if out is None:
+            out = os.path.splitext(inp[0])[0]
+            out += ".nii.zarr" if kwargs.get("nii", False) else ".ome.zarr"
         dat = _mapmat(inp, kwargs.get("key", None))
-        return func(dat, zarr_config=zarr_config, **kwargs)
+        return func(dat, out=out, **kwargs)
 
     return wrapper
 
@@ -164,7 +166,8 @@ def _mapmat(fnames: list[str], key: str = None) -> list[_ArrayWrapper]:
 def convert(
     inp: list[str],
     *,
-    zarr_config: ZarrConfig,
+        out: str,
+        zarr_config: ZarrConfig = None,
     key: Optional[str] = None,
     meta: str = None,
     max_load: int = 128,
@@ -173,6 +176,7 @@ def convert(
     orientation: str = "RAS",
     center: bool = True,
     dtype: str | None = None,
+        **kwargs
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -188,6 +192,8 @@ def convert(
     ----------
     inp
         Path to the input mat file
+    out
+        Path to the output Zarr directory [<INP>.ome.zarr]
     key
         Key of the array to be extracted, default to first key found
     meta
@@ -205,7 +211,8 @@ def convert(
     dtype
         Data type to write into
     """
-    out: str = zarr_config.out
+    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
+
     chunk: int = zarr_config.chunk[0]
     compressor: str = zarr_config.compressor
     compressor_opt: str = zarr_config.compressor_opt

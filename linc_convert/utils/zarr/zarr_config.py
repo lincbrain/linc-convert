@@ -1,9 +1,10 @@
 """Configuration related to output Zarr Archive."""
 
-from dataclasses import dataclass
-from typing import Annotated, Literal, Optional
+from dataclasses import dataclass, replace
+from typing import Annotated, Literal
 
 from cyclopts import Parameter
+from typing_extensions import Unpack
 
 
 @dataclass
@@ -13,8 +14,6 @@ class _ZarrConfig:
 
     Parameters
     ----------
-    out
-        Path to the output Zarr directory [<INP>.ome.zarr]
     chunk
         Output chunk size.
         Behavior depends on the number of values provided:
@@ -38,7 +37,6 @@ class _ZarrConfig:
 
     """
 
-    out: Optional[str] = None
     chunk: tuple[int] = (128,)
     shard: list[int | str] | None = None
     version: Literal[2, 3] = 3
@@ -49,7 +47,15 @@ class _ZarrConfig:
 
     def __post_init__(self) -> None:
         print(self)
-        self.nii |= self.out.endswith(".nii.zarr")
+        # self.nii |= self.out.endswith(".nii.zarr")
 
 
 ZarrConfig = Annotated[_ZarrConfig, Parameter(name="*")]
+
+
+def update(zarr_config: ZarrConfig, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
+    if zarr_config is None:
+        zarr_config = _ZarrConfig()
+    print(zarr_config)
+    replace(zarr_config, **kwargs)
+    return zarr_config

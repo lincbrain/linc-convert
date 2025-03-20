@@ -21,6 +21,7 @@ import numpy as np
 import zarr
 from scipy.io import loadmat
 
+from linc_convert import utils
 from linc_convert.modalities.psoct._utils import (
     generate_pyramid,
     make_json,
@@ -32,7 +33,7 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr.compressor import make_compressor
-from linc_convert.utils.zarr.zarr_config import ZarrConfig, _ZarrConfig
+from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
 psoct.command(single_volume)
@@ -42,10 +43,10 @@ def _automap(func: Callable) -> Callable:
     """Automatically map the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp: str, zarr_config: _ZarrConfig, **kwargs: dict) -> None:
-        if zarr_config.out is None:
-            zarr_config.out = os.path.splitext(inp[0])[0]
-            zarr_config.out += ".nii.zarr" if zarr_config.nii else ".ome.zarr"
+    def wrapper(inp: str, out: str, **kwargs: dict) -> None:
+        if out is None:
+            out = os.path.splitext(inp[0])[0]
+            out += ".nii.zarr" if kwargs.get("nii", False) else ".ome.zarr"
         # kwargs["nii"] = kwargs.get("nii", False) or out.endswith(".nii.zarr")
         with _mapmat(inp, kwargs.get("key", None)) as dat:
             return func(dat, zarr_config=zarr_config, **kwargs)
@@ -88,7 +89,8 @@ def _mapmat(fname: str, key: str = None) -> None:
 def convert(
     inp: str,
     *,
-    zarr_config: ZarrConfig,
+        out: str,
+        zarr_config: ZarrConfig = None,
     key: Optional[str] = None,
     meta: str = None,
     max_load: int = 128,
@@ -96,6 +98,7 @@ def convert(
     no_pool: Optional[int] = None,
     orientation: str = "RAS",
     center: bool = True,
+        kwargs
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -132,7 +135,7 @@ def convert(
     center
         Set RAS[0, 0, 0] at FOV center
     """
-    out: str = zarr_config.out
+    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
     chunk: int = zarr_config.chunk
     compressor: str = zarr_config.compressor
     compressor_opt: str = zarr_config.compressor_opt
