@@ -2,8 +2,8 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
-from helper import _cmp_zarr_archives
 
+from helper import _cmp_zarr_archives
 from linc_convert.modalities.lsm import mosaic
 
 
@@ -24,5 +24,5 @@ def _write_test_data(directory: str) -> None:
 def test_lsm(tmp_path):
     _write_test_data(tmp_path)
     output_zarr = tmp_path / "output.zarr"
-    mosaic.convert(str(tmp_path), str(output_zarr))
+    mosaic.convert(str(tmp_path), out=str(output_zarr))
     assert _cmp_zarr_archives(str(output_zarr), "data/lsm.zarr.zip")
