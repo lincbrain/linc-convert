@@ -166,8 +166,8 @@ def _mapmat(fnames: list[str], key: str = None) -> list[_ArrayWrapper]:
 def convert(
     inp: list[str],
     *,
-        out: str,
-        zarr_config: ZarrConfig = None,
+    out: str,
+    zarr_config: ZarrConfig = None,
     key: Optional[str] = None,
     meta: str = None,
     max_load: int = 128,

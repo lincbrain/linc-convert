@@ -42,8 +42,8 @@ df.command(ms)
 def convert(
     inp: list[str],
     *,
-        out: str,
-        zarr_config: ZarrConfig = None,
+    out: str,
+    zarr_config: ZarrConfig = None,
     max_load: int = 16384,
     orientation: str = "coronal",
     center: bool = True,

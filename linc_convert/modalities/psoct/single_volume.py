@@ -89,8 +89,8 @@ def _mapmat(fname: str, key: str = None) -> None:
 def convert(
     inp: str,
     *,
-        out: str,
-        zarr_config: ZarrConfig = None,
+    out: str,
+    zarr_config: ZarrConfig = None,
     key: Optional[str] = None,
     meta: str = None,
     max_load: int = 128,

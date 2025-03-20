@@ -34,8 +34,8 @@ df.command(ss)
 def convert(
     inp: str,
     *,
-        out: str,
-        zarr_config: ZarrConfig = None,
+    out: str,
+    zarr_config: ZarrConfig = None,
     max_load: int = 16384,
     orientation: str = "coronal",
     center: bool = True,
