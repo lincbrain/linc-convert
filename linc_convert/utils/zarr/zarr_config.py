@@ -46,7 +46,7 @@ class _ZarrConfig:
     driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"
 
     def __post_init__(self) -> None:
-        print(self)
+        pass
         # self.nii |= self.out.endswith(".nii.zarr")
 
 
@@ -56,6 +56,5 @@ ZarrConfig = Annotated[_ZarrConfig, Parameter(name="*")]
 def update(zarr_config: ZarrConfig, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
     if zarr_config is None:
         zarr_config = _ZarrConfig()
-    print(zarr_config)
     replace(zarr_config, **kwargs)
     return zarr_config
