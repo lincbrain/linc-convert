@@ -186,11 +186,11 @@ def convert(
 
         pages = f.pages
         dat = f.asarray()
-        if len(all_chunks_info["y"]) != 1:
-            if chunky != 0 and overlap != 0:
+        if len(set(all_chunks_info["y"])) != 1 and overlap!=0:
+            if chunky != 0:
                 dat = dat[:, overlap // 2 :, :]
-            elif chunky != len(all_chunks_info["y"]) - 1 and overlap != 0:
-                dat = dat[:, : -overlap // 2 - (overlap - 2 * (overlap // 2)), :]
+            if chunky != max(all_chunks_info["y"])-1:
+                dat = dat[:, :-overlap // 2 - (overlap - 2 * (overlap // 2)), :]
 
         zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
         ystart = sum(shape[1] - overlap for shape in allshapes[chunkz][:chunky])
