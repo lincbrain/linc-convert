@@ -135,7 +135,7 @@ def convert(
         all_tiles_info.append(tile)
         # check no duplication
         if (tile.y, tile.z) in tiles_info_by_index:
-            raise ValueError("Duplicate tile")
+            raise ValueError(f"Duplicate tile, file {tile.filename} conflicts with {tiles_info_by_index[(tile.y, tile.z)].filename}")
         tiles_info_by_index[(tile.y, tile.z)] = tile
 
     # default output name
@@ -147,27 +147,39 @@ def convert(
     # parse all individual file names
     z_tiles = set(tile.z for tile in all_tiles_info)
     y_tiles = set(tile.y for tile in all_tiles_info)
+    min_y_tile, max_y_tile = min(y_tiles), max(y_tiles)
+    min_z_tile, max_z_tile = min(z_tiles), max(z_tiles)
     num_y_tiles, num_z_tiles = len(y_tiles), len(z_tiles)
 
-    # tile array is y,z,x
+    all_shapes = np.empty((num_y_tiles, num_z_tiles, 3), dtype=int)
+
     shapes_x = defaultdict(list)
     dtypes = defaultdict(list)
     shapes_y_by_z = defaultdict(lambda: defaultdict(list))
     shapes_z_by_y = defaultdict(lambda: defaultdict(list))
 
-    for z_tile in range(1, num_z_tiles+1):
-        for y_tile in range(1, num_y_tiles+1):
+    expected_sx = 0
+    expected_sy = {}
+    expected_sz = {}
+    for z_tile in range(min_z_tile, max_z_tile + 1):
+        for y_tile in range(min_y_tile, max_y_tile + 1):
+            rel_y_tile_idx = y_tile - min_y_tile
+            rel_z_tile_idx = z_tile - min_z_tile
+
             tile = tiles_info_by_index.get((y_tile, z_tile))
             if tile is None:
                 warnings.warn(f"Missing tile {y_tile}, {z_tile}")
                 continue
             reader = tile.reader
+            # tile array is x, z, y
             sx, sz, sy = reader.spool_shape
             sx *= len(list(reader._get_spool_names_in_order()))
-            print(sx, sy, sz)
             dt = reader.dtype
-            # Collect X shapes and dtypes.
-            shapes_x[sx].append((y_tile, z_tile))
+            # Collect shapes and dtypes.
+            all_shapes[rel_y_tile_idx, rel_z_tile_idx] = sx, sy, sz
+            expected_sx = sx
+            expected_sy[y_tile] = sy
+            expected_sz[z_tile] = sz
             dtypes[dt].append((y_tile, z_tile))
 
             # Collect Y shapes per z_tile.
@@ -175,32 +187,34 @@ def convert(
             # Collect Z shapes per y_tile.
             shapes_z_by_y[y_tile][sz].append((y_tile, z_tile))
 
-    # Check consistency for X shapes and dtypes.
-    if len(shapes_x) != 1:
-        raise ValueError(
-            "Incompatible X shapes, got x lengths:\n" + str(dict(shapes_x)))
     if len(dtypes) != 1:
         warnings.warn("Two or more dtypes in tiles:\n" + str(dict(dtypes)))
 
-    # Check consistency for Y shapes along each z_tile.
-    for z_tile, shapes_y in shapes_y_by_z.items():
-        if len(shapes_y) != 1:
-            raise ValueError(
-                f"Incompatible Y shapes at Z={z_tile}:\n" + str(dict(shapes_y)))
-
-    # Check consistency for Z shapes along each y_tile.
-    for y_tile, shapes_z in shapes_z_by_y.items():
-        if len(shapes_z) != 1:
-            raise ValueError(
-                f"Incompatible Z shapes at Y={y_tile}:\n" + str(dict(shapes_z)))
+    diff_sx = (all_shapes[:,:,0]!=expected_sx)
+    if diff_sx.any():
+        y_idxs, z_idxs = np.where(diff_sx)
+        raise ValueError(
+            f"Inconsistent x shapes at indices: {list(zip(y_idxs, z_idxs))}")
+    for y_tile in range(min_y_tile, max_y_tile + 1):
+        if y_tile not in expected_sy:
+            raise ValueError(f"Missing y tile {y_tile}")
+        diff_sy = (all_shapes[:, :, 1] != expected_sy[y_tile])
+        if diff_sy.any():
+            y_idxs, z_idxs = np.where(diff_sy)
+            raise ValueError(f"Inconsistent y shapes at tiles: {list(zip(y_idxs, z_idxs))}")
+    for z_tile in range(min_z_tile, max_z_tile + 1):
+        if z_tile not in expected_sz:
+            raise ValueError(f"Missing z tile {z_tile}")
+        diff_sz = (all_shapes[:, :, 2] != expected_sz[z_tile])
+        if diff_sy.any():
+            y_idxs, z_idxs = np.where(diff_sz)
+            raise ValueError(f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}")
 
     # Calculate full shapes using the assumption that the first tile in each direction represents the size.
     # Note: This assumes that a tile at index (y_tile, 1) or (1, z_tile) exists.
     full_shape_x = next(iter(shapes_x))
-    full_shape_y = sum(tiles_info_by_index[(y_tile, 1)].reader.spool_shape[2] for y_tile in
-                       range(1, num_y_tiles + 1)) - (num_y_tiles-1) * overlap
-    full_shape_z = sum(tiles_info_by_index[(1, z_tile)].reader.spool_shape[1] for z_tile in
-                       range(1, num_z_tiles + 1))
+    full_shape_y = sum(expected_sy.values()) - (num_y_tiles-1) * overlap
+    full_shape_z = sum(expected_sz.values())
     fullshape = [full_shape_z, full_shape_y, full_shape_x]
 
     dtype = next(iter(dtypes))
@@ -225,18 +239,24 @@ def convert(
     print("Write level 0 with shape", fullshape)
 
     for i, tile_info in enumerate(all_tiles_info):
+        rel_y_tile_idx = tile_info.y - min_y_tile
+        rel_z_tile_idx = tile_info.z - min_z_tile
         tile_z  = tile_info.z - 1
         tile_y = tile_info.y - 1
         dat = tile_info.reader.assemble()
         
         if num_y_tiles != 1 and overlap != 0:
-            if tile_info.y != min(y_tiles):
+            # if not first y tile, crop half overlapped rows at the beginning
+            if tile_info.y != min_y_tile:
                 dat = dat[:, overlap // 2:, :]
-            if tile_info.y != max(y_tiles):
+            # if not last y tile, crop half overlapped rows at the end
+            # if overlap is odd, we need to crop an extra row
+            if tile_info.z != max_z_tile:
                 dat = dat[:, :-overlap // 2 - (overlap % 2), :]
-
-        zstart = sum(tiles_info_by_index[(1, z+1)].reader.spool_shape[1] for z in range(tile_z))
-        ystart = sum(tiles_info_by_index[(y+1, tile_info.z)].spool_shape[2] - overlap for y in range(tile_y))
+        ystart = sum(expected_sy[min_y_tile+y_idx] - overlap for y_idx in range(rel_y_tile_idx))
+        zstart = sum(expected_sz[min_z_tile+z_idx] for z_idx in range(rel_z_tile_idx))
+        # zstart = sum(tiles_info_by_index[(1, z+1)].reader.spool_shape[1] for z in range(tile_z))
+        # ystart = sum(tiles_info_by_index[(y+1, tile_info.z)].spool_shape[2] - overlap for y in range(tile_y))
 
         if tile_y != 0:
             ystart += overlap // 2
