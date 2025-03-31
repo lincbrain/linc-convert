@@ -152,7 +152,6 @@ def convert(
 
     all_shapes = np.empty((num_y_tiles, num_z_tiles, 3), dtype=int)
 
-    shapes_x = defaultdict(list)
     dtypes = defaultdict(list)
     shapes_y_by_z = defaultdict(lambda: defaultdict(list))
     shapes_z_by_y = defaultdict(lambda: defaultdict(list))
@@ -213,7 +212,7 @@ def convert(
 
     # Calculate full shapes using the assumption that the first tile in each direction represents the size.
     # Note: This assumes that a tile at index (y_tile, 1) or (1, z_tile) exists.
-    full_shape_x = next(iter(shapes_x))
+    full_shape_x = expected_sx
     full_shape_y = sum(expected_sy.values()) - (num_y_tiles - 1) * overlap
     full_shape_z = sum(expected_sz.values())
     fullshape = [full_shape_z, full_shape_y, full_shape_x]
