@@ -13,14 +13,17 @@ import nibabel as nib
 import numpy as np
 import scipy.io
 import zarr
+from niizarr._nii2zarr import write_ome_metadata
+from niizarr import default_nifti_header, write_nifti_header
 
-from linc_convert import utils
 # internals
+from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr.compressor import make_compressor
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.zarr.generate_pyramid import generate_pyramid
 
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
@@ -43,7 +46,6 @@ def convert(
         max_load: int = 512,
         orientation: str = "coronal",
         center: bool = True,
-        thickness: float | None = None,
         voxel_size: list[float] = (1, 1, 1),
         **kwargs
 ) -> None:
@@ -269,164 +271,28 @@ def convert(
         array[slicer] = dat
     print("")
 
-    if max_load % 2:
-        max_load += 1
     # build pyramid using median windows
-    level = 0
-    while any(x > 1 for x in omz[str(level)].shape[-3:]):
-        prev_array = omz[str(level)]
-        prev_shape = prev_array.shape[-3:]
-        level += 1
+    generate_pyramid(omz)
 
-        new_shape = list(map(lambda x: max(1, x // 2), prev_shape))
-        if all(x < chunk for x in new_shape):
-            break
-        print("Compute level", level, "with shape", new_shape)
-        omz.create_dataset(str(level), shape=new_shape, **opt)
-        new_array = omz[str(level)]
+    write_ome_metadata(omz, axes = ["z","y","x"],space_scale=voxel_size)
 
-        nz, ny, nx = prev_array.shape[-3:]
-        ncz = ceildiv(nz, max_load)
-        ncy = ceildiv(ny, max_load)
-        ncx = ceildiv(nx, max_load)
-
-        for cz in range(ncz):
-            for cy in range(ncy):
-                for cx in range(ncx):
-                    print(f"chunk ({cz}, {cy}, {cx}) / ({ncz}, {ncy}, {ncx})", end="\r")
-
-                    dat = prev_array[
-                          ...,
-                          cz * max_load: (cz + 1) * max_load,
-                          cy * max_load: (cy + 1) * max_load,
-                          cx * max_load: (cx + 1) * max_load,
-                          ]
-                    crop = [0 if x == 1 else x % 2 for x in dat.shape[-3:]]
-                    slicer = [slice(-1) if x else slice(None) for x in crop]
-                    dat = dat[(Ellipsis, *slicer)]
-                    pz, py, px = dat.shape[-3:]
-
-                    dat = dat.reshape(
-                        [
-                            max(pz // 2, 1),
-                            min(pz, 2),
-                            max(py // 2, 1),
-                            min(py, 2),
-                            max(px // 2, 1),
-                            min(px, 2),
-                        ]
-                    )
-                    dat = dat.transpose([0, 2, 4, 1, 3, 5])
-                    dat = dat.reshape(
-                        [
-                            max(pz // 2, 1),
-                            max(py // 2, 1),
-                            max(px // 2, 1),
-                            -1,
-                        ]
-                    )
-                    dat = np.median(dat, -1)
-
-                    new_array[
-                    ...,
-                    cz * max_load // 2: (cz + 1) * max_load // 2,
-                    cy * max_load // 2: (cy + 1) * max_load // 2,
-                    cx * max_load // 2: (cx + 1) * max_load // 2,
-                    ] = dat
-
-    print("")
-    nblevel = level
-
-    # Write OME-Zarr multiscale metadata
-    print("Write metadata")
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
-            "datasets": [],
-            "type": "median window 2x2x2",
-            "name": "",
-        }
-    ]
-
-    voxel_size = list(map(float, reversed(voxel_size)))
-    factor = [1] * 3
-    for n in range(nblevel):
-        shape = omz[str(n)].shape[-3:]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
-
-        # We made sure that the downsampling level is exactly 2
-        # However, once a dimension has size 1, we stop downsampling.
-        if n > 0:
-            shape_prev = omz[str(n - 1)].shape[-3:]
-            if shape_prev[0] != shape[0]:
-                factor[0] *= 2
-            if shape_prev[1] != shape[1]:
-                factor[1] *= 2
-            if shape_prev[2] != shape[2]:
-                factor[2] *= 2
-
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": [
-                    factor[0] * voxel_size[0],
-                    factor[1] * voxel_size[1],
-                    factor[2] * voxel_size[2],
-                ],
-            },
-            {
-                "type": "translation",
-                "translation": [
-                    (factor[0] - 1) * voxel_size[0] * 0.5,
-                    (factor[1] - 1) * voxel_size[1] * 0.5,
-                    (factor[2] - 1) * voxel_size[2] * 0.5,
-                ],
-            },
-        ]
-    multiscales[0]["coordinateTransformations"] = [
-        {"scale": [1.0] * 3, "type": "scale"}
-    ]
-    omz.attrs["multiscales"] = multiscales
-
+    # Write NIfTI-Zarr header:
     if not nii:
-        print("done.")
         return
 
-    # Write NIfTI-Zarr header
-    # NOTE: we use nifti2 because dimensions typically do not fit in a short
-    # TODO: we do not write the json zattrs, but it should be added in
-    #       once the nifti-zarr package is released
+    header = default_nifti_header(omz["0"], omz)
     shape = list(reversed(omz["0"].shape))
     shape = shape[:3] + [1] + shape[3:]  # insert time dimension
     affine = orientation_to_affine(orientation, *voxel_size)
     if center:
         affine = center_affine(affine, shape[:3])
-    header = nib.Nifti2Header()
     header.set_data_shape(shape)
     header.set_data_dtype(omz["0"].dtype)
     header.set_qform(affine)
     header.set_sform(affine)
     header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
-    header.structarr["magic"] = b"nz2\0"
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    opt = {
-        "chunks": [len(header)],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None,
-    }
-    omz.create_dataset("nifti", data=header, shape=shape, **opt)
-    print("done.")
 
+    write_nifti_header(omz, header)
 
 def read_spool_files(scan_path: str, scan_name: str, mat_path: str,
                      no_load: bool = False) -> np.ndarray:
