@@ -1,8 +1,12 @@
 # stdlib
 import ast
+import configparser
+import io
 import math
+import os
 import re
 import time
+import warnings
 from collections import namedtuple, defaultdict
 from configparser import ConfigParser
 from glob import glob
@@ -13,17 +17,16 @@ import nibabel as nib
 import numpy as np
 import scipy.io
 import zarr
-from niizarr._nii2zarr import write_ome_metadata
 from niizarr import default_nifti_header, write_nifti_header
+from niizarr._nii2zarr import write_ome_metadata
 
 # internals
 from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr.compressor import make_compressor
-from linc_convert.utils.zarr.zarr_config import ZarrConfig
 from linc_convert.utils.zarr.generate_pyramid import generate_pyramid
+from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
@@ -150,15 +153,13 @@ def convert(
     min_z_tile, max_z_tile = min(z_tiles), max(z_tiles)
     num_y_tiles, num_z_tiles = len(y_tiles), len(z_tiles)
 
-    all_shapes = np.empty((num_y_tiles, num_z_tiles, 3), dtype=int)
-
+    # store dtypes in each tile where keys are dtypes and values are the tile indices
     dtypes = defaultdict(list)
-    shapes_y_by_z = defaultdict(lambda: defaultdict(list))
-    shapes_z_by_y = defaultdict(lambda: defaultdict(list))
-
     expected_sx = 0
     expected_sy = {}
     expected_sz = {}
+    all_shapes = np.empty((num_y_tiles, num_z_tiles, 3), dtype=int)
+
     for z_tile in range(min_z_tile, max_z_tile + 1):
         for y_tile in range(min_y_tile, max_y_tile + 1):
             rel_y_tile_idx = y_tile - min_y_tile
@@ -179,11 +180,6 @@ def convert(
             expected_sy[y_tile] = sy
             expected_sz[z_tile] = sz
             dtypes[dt].append((y_tile, z_tile))
-
-            # Collect Y shapes per z_tile.
-            shapes_y_by_z[z_tile][sy].append((y_tile, z_tile))
-            # Collect Z shapes per y_tile.
-            shapes_z_by_y[y_tile][sz].append((y_tile, z_tile))
 
     if len(dtypes) != 1:
         warnings.warn("Two or more dtypes in tiles:\n" + str(dict(dtypes)))
@@ -210,8 +206,7 @@ def convert(
             raise ValueError(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}")
 
-    # Calculate full shapes using the assumption that the first tile in each direction represents the size.
-    # Note: This assumes that a tile at index (y_tile, 1) or (1, z_tile) exists.
+    # Calculate full shape
     full_shape_x = expected_sx
     full_shape_y = sum(expected_sy.values()) - (num_y_tiles - 1) * overlap
     full_shape_z = sum(expected_sz.values())
@@ -272,7 +267,6 @@ def convert(
 
     # build pyramid using median windows
     generate_pyramid(omz)
-
     write_ome_metadata(omz, axes = ["z","y","x"],space_scale=voxel_size)
 
     # Write NIfTI-Zarr header:
@@ -428,12 +422,7 @@ def read_spool_files(scan_path: str, scan_name: str, mat_path: str,
     return scape_data
 
 
-# from compression_tools.alt_zip import alt_zip
-import configparser
-import numpy as np
-import io
-import warnings
-import os
+
 
 
 class SpoolSetInterpreter:
@@ -441,10 +430,13 @@ class SpoolSetInterpreter:
     def __init__(self, compression_tools_zip_file):
         if os.path.isfile(compression_tools_zip_file) and \
                 os.path.splitext(compression_tools_zip_file)[-1] == '.zip':
-            self.type = '.zip'
-            self.compression_tools_zip_file = compression_tools_zip_file
-            self.location = compression_tools_zip_file
-            self.spool_set = alt_zip(self.location)
+            # I will first block this support or we need extra dependencies
+            pass
+            # from compression_tools.alt_zip import alt_zip
+            # self.type = '.zip'
+            # self.compression_tools_zip_file = compression_tools_zip_file
+            # self.location = compression_tools_zip_file
+            # self.spool_set = alt_zip(self.location)
         elif os.path.isdir(compression_tools_zip_file):
             self.type = 'dir'
             self.parent = compression_tools_zip_file
