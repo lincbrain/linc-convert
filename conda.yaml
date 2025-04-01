@@ -1,15 +1,16 @@
-name: linc-convert-dev
+name: linc-convert
 channels:
   - conda-forge
 dependencies:
-  - python
+  - python=3.10
   - ipython
   - typer
   - numpy
   - glymur
-  - zarr>=3
+  - zarr
   - nibabel
   - tifffile
+  - wkw
   - tensorstore
   - pytest
   - ruff
