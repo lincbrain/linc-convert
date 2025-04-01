@@ -28,7 +28,7 @@ cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
-
+nifti-zarr = "*"
 
 [tool.poetry.group.df]
 optional = true
