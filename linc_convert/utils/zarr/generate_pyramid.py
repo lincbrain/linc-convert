@@ -8,10 +8,12 @@ import zarr
 
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.unit import convert_unit
+from linc_convert.utils.zarr.zarr_config import create_array
 
 
 def generate_pyramid(
     omz: zarr.Group,
+    zarr_config,
     levels: int | None = None,
     ndim: int = 3,
     max_load: int = 512,
@@ -23,8 +25,8 @@ def generate_pyramid(
 
     Parameters
     ----------
-    path : PathLike | str
-        Path to parent Zarr
+    omz : zarr.Group
+
     levels : int
         Number of additional levels to generate.
         By default, stop when all dimensions are smaller than their
@@ -53,15 +55,17 @@ def generate_pyramid(
 
     # Read properties from base level
     shape = list(omz["0"].shape)
+    dtype = omz["0"].dtype
     chunk_size = omz["0"].chunks
-    opt = {
-        "dimension_separator": omz["0"]._dimension_separator,
-        "order": omz["0"]._order,
-        "dtype": omz["0"]._dtype,
-        "fill_value": omz["0"]._fill_value,
-        "compressor": omz["0"]._compressor,
-        "chunks": omz["0"].chunks,
-    }
+    # arr:zarr.Array = omz["0"]
+    # opt = {
+    #     "dimension_separator": omz["0"]._dimension_separator,
+    #     "order": omz["0"]._order,
+    #     "dtype": omz["0"]._dtype,
+    #     "fill_value": omz["0"]._fill_value,
+    #     "compressor": omz["0"]._compressor,
+    #     "chunks": omz["0"].chunks,
+    # }
 
     # Select windowing function
     if mode == "median":
@@ -95,8 +99,8 @@ def generate_pyramid(
         print("Compute level", level, "with shape", shape)
 
         allshapes.append(shape)
-        omz.create_dataset(str(level), shape=batch + shape, **opt)
-
+        # omz.create_dataset(str(level), shape=batch + shape, **opt)
+        create_array(omz,str(level), shape= batch+shape, zarr_config=zarr_config, dtype= dtype)
         # Iterate across `max_load` chunks
         # (note that these are unrelared to underlying zarr chunks)
         grid_shape = [ceildiv(n, max_load) for n in prev_shape]
