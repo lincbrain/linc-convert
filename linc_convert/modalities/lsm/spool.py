@@ -125,7 +125,7 @@ def convert(
             int(parsed.group("z")),
             parsed.group("suffix"),
             tile_folder_name,
-            SpoolSetInterpreter(tile_folder_name)
+            SpoolSetInterpreter(tile_folder_name, tile_folder_name+"_info.mat")
         )
         all_tiles_info.append(tile)
         # Check for duplicate tiles
@@ -162,9 +162,7 @@ def convert(
                 warnings.warn(f"Missing tile {y_tile}, {z_tile}")
                 continue
             reader = tile.reader
-            # tile array is x, z, y
-            sx, sz, sy = reader.spool_shape
-            sx *= len(list(reader._get_spool_names_in_order()))
+            sz, sy, sx = reader.assembled_spool_shape
             dt = reader.dtype
             # Collect shapes and dtypes.
             rel_y, rel_z = y_tile - min_y_tile, z_tile - min_z_tile
@@ -230,7 +228,7 @@ def convert(
     # Populate Zarr array from tiles
     for i, tile_info in enumerate(all_tiles_info):
         rel_y, rel_z = tile_info.y - min_y_tile, tile_info.z - min_z_tile
-        dat = tile_info.reader.assemble()
+        dat = tile_info.reader.assemble_cropped()
         if num_y_tiles != 1 and overlap != 0:
             # if not first y tile, crop half overlapped rows at the beginning
             if tile_info.y != min_y_tile:

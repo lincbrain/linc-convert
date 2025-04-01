@@ -6,24 +6,28 @@ import warnings
 from glob import glob
 
 import numpy as np
+from scipy.io import loadmat
+
+from linc_convert.utils.math import ceildiv
 
 
 class SpoolSetInterpreter:
 
-    def __init__(self, compression_tools_zip_file):
-        if os.path.isfile(compression_tools_zip_file) and \
-                os.path.splitext(compression_tools_zip_file)[-1] == '.zip':
-            # I will first block this support or we need extra dependencies
+    def __init__(self, spool_set_path, info_file=None):
+        if os.path.isfile(spool_set_path) and \
+                os.path.splitext(spool_set_path)[-1] == '.zip':
+            # I will first block zip support or we need extra dependencies
+            raise NotImplementedError("Zip storage is not supported.")
             pass
             # from compression_tools.alt_zip import alt_zip
             # self.type = '.zip'
             # self.compression_tools_zip_file = compression_tools_zip_file
             # self.location = compression_tools_zip_file
             # self.spool_set = alt_zip(self.location)
-        elif os.path.isdir(compression_tools_zip_file):
+        elif os.path.isdir(spool_set_path):
             self.type = 'dir'
-            self.parent = compression_tools_zip_file
-            self.file_list = glob(os.path.join(compression_tools_zip_file, '*'))
+            self.parent = spool_set_path
+            self.file_list = glob(os.path.join(spool_set_path, '*'))
             self.spool_set = tuple([os.path.split(x)[-1] for x in self.file_list])
         else:
             assert False, 'The input data structure is not a ZIP file or Directory'
@@ -33,6 +37,34 @@ class SpoolSetInterpreter:
         self._get_acquisitionparameters_str()
         self._get_config()
         self._extract_config_values()
+
+        if info_file is not None:
+            if os.path.isfile(info_file):
+                self._load_info_file(info_file)
+            else:
+                warnings.warn('ERROR: Info file not found.')
+        self.assembled_spool_shape = (self.numDepths,
+                                      self.spool_shape[2],
+                                      self.spool_shape[0]*len(self.spool_files),
+                                      )
+    def _load_info_file(self, info_file):
+        loaded_info = loadmat(info_file)
+        info = loaded_info.get("info", None)
+        if info is None:
+            warnings.warn("ERROR: 'info' structure not found in the MAT file.")
+            return None
+        try:
+            num_total_frames = int(info['camera'][0][0]['kineticSeriesLength'])
+            num_bg_frames = int(info['camera'][0][0]['backgroundFramesNum'])
+
+        except (KeyError, IndexError, ValueError) as e:
+            warnings.warn(
+                f"ERROR: Unable to extract frame information from info file. {e}")
+            return None
+        num_frames_per_spool = int(self.config['multiimage']['ImagesPerFile'])
+        num_frames_to_load = num_total_frames - num_bg_frames
+        num_frames_to_load = ceildiv(num_frames_to_load, num_frames_per_spool)
+        self.spool_files = self.spool_files[:num_frames_to_load]
 
     def _make_filename_from_spool_set(self, spool_entry):
         return os.path.join(self.parent, spool_entry)
@@ -75,11 +107,10 @@ class SpoolSetInterpreter:
         self.config.read_file(buf)
 
     def _extract_config_values(self):
-        self.acquisition_metadata = {}
+        self.acquisition_metadata = {'height': self.config.getint('data', 'AOIHeight'),
+                                     'width': self.config.getint('data', 'AOIWidth'),
+                                     'stride': self.config.getint('data', 'AOIStride')}
         # ini info
-        self.acquisition_metadata['height'] = self.config.getint('data', 'AOIHeight')
-        self.acquisition_metadata['width'] = self.config.getint('data', 'AOIWidth')
-        self.acquisition_metadata['stride'] = self.config.getint('data', 'AOIStride')
         dtype = self.config.get('data', 'PixelEncoding')
 
         if dtype == 'Mono16':
@@ -111,6 +142,7 @@ class SpoolSetInterpreter:
         numColumns = numLatPix
 
         self.spool_shape = (numFramesPerSpool, numRows, numColumns)
+        self.numDepths = numDepths
 
     def _load_spool_file(self, spool_file_name):
         if self.type == '.zip':
@@ -165,4 +197,8 @@ class SpoolSetInterpreter:
             stop = start + axis_0_shape
             canvas[start:stop] = spool_file
         print(canvas.shape)
-        return canvas.transpose(1, 2, 0)
+        return canvas
+
+    # this is the modified version for lsm pipeline
+    def assemble_cropped(self):
+        return self.assemble().transpose(1, 2, 0)[:self.numDepths,:,:]
