@@ -65,10 +65,7 @@ class SpoolSetInterpreter:
 
     @property
     def entries(self):
-        if self.type == '.zip':
-            return self.spool_set.entries
-        elif self.type == 'dir':
-            return self.spool_set
+        return self.spool_set
 
     def _what_spool_format(self):
         if 'Spooled files.sifx' in self.entries:
