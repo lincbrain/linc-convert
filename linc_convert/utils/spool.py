@@ -16,14 +16,8 @@ class SpoolSetInterpreter:
     def __init__(self, spool_set_path, info_file=None):
         if os.path.isfile(spool_set_path) and \
                 os.path.splitext(spool_set_path)[-1] == '.zip':
-            # I will first block zip support or we need extra dependencies
             raise NotImplementedError("Zip storage is not supported.")
             pass
-            # from compression_tools.alt_zip import alt_zip
-            # self.type = '.zip'
-            # self.compression_tools_zip_file = compression_tools_zip_file
-            # self.location = compression_tools_zip_file
-            # self.spool_set = alt_zip(self.location)
         elif os.path.isdir(spool_set_path):
             self.type = 'dir'
             self.parent = spool_set_path
