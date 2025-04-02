@@ -86,12 +86,9 @@ class SpoolSetInterpreter:
         )
 
     def _get_acquisitionparameters_str(self):
-        if self.type == '.zip':
-            ini = self.spool_set['acquisitionmetadata.ini']
-        elif self.type == 'dir':
-            file = self._make_filename_from_spool_set('acquisitionmetadata.ini')
-            with open(file, 'rb') as f:
-                ini = f.read()
+        file = self._make_filename_from_spool_set('acquisitionmetadata.ini')
+        with open(file, 'rb') as f:
+            ini = f.read()
         ini = ini.decode('UTF-8-sig')  # Encoding for acquisitionmetadata.ini
         self.acquisitionparameters_str = ini
 
