@@ -57,8 +57,8 @@ class SpoolSetInterpreter:
             return None
         num_frames_per_spool = int(self.config['multiimage']['ImagesPerFile'])
         num_frames_to_load = num_total_frames - num_bg_frames
-        num_frames_to_load = ceildiv(num_frames_to_load, num_frames_per_spool)
-        self.spool_files = self.spool_files[:num_frames_to_load]
+        num_spool_files_to_load = ceildiv(num_frames_to_load, num_frames_per_spool)
+        self.spool_files = self.spool_files[:num_spool_files_to_load]
 
     def _make_filename_from_spool_set(self, spool_entry):
         return os.path.join(self.parent, spool_entry)
