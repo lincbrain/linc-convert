@@ -23,8 +23,8 @@ def generate_pyramid(
 
     Parameters
     ----------
-    path : PathLike | str
-        Path to parent Zarr
+    omz : zarr.Group
+        Zarr group object
     levels : int
         Number of additional levels to generate.
         By default, stop when all dimensions are smaller than their
