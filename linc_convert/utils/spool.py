@@ -133,13 +133,10 @@ class SpoolSetInterpreter:
         self.numDepths = numDepths
 
     def _load_spool_file(self, spool_file_name):
-        if self.type == '.zip':
-            array = np.frombuffer(self.spool_set[spool_file_name], dtype=self.dtype)
-        elif self.type == 'dir':
-            file = self._make_filename_from_spool_set(spool_file_name)
-            print(f'Reading file {spool_file_name}')
-            with open(file, 'rb') as f:
-                array = np.frombuffer(f.read(), dtype=self.dtype)
+        file = self._make_filename_from_spool_set(spool_file_name)
+        print(f'Reading file {spool_file_name}')
+        with open(file, 'rb') as f:
+            array = np.frombuffer(f.read(), dtype=self.dtype)
         return np.reshape(array, self.spool_shape)
 
     def __getitem__(self, key):
