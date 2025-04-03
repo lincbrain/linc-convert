@@ -1,3 +1,11 @@
+"""
+The following script is derived from https://github.com/CBI-PITT/holis_tools/blob/main/holis_tools/zyla_spool_reader.py.
+
+Copyright (c) 2021, Alan M Watson
+
+For more information, see the [`holis_tools` LICENCE](https://github.com/CBI-PITT/holis_tools/blob/main/LICENCE)
+"""
+
 # stdlib
 import configparser
 import io
