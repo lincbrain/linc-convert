@@ -1,5 +1,4 @@
 # stdlib
-import ast
 import os
 import re
 import warnings
@@ -10,7 +9,6 @@ from glob import glob
 import cyclopts
 import nibabel as nib
 import numpy as np
-import zarr
 from niizarr import default_nifti_header, write_nifti_header
 from niizarr._nii2zarr import write_ome_metadata
 
@@ -19,10 +17,8 @@ from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.spool import SpoolSetInterpreter
-from linc_convert.utils.zarr.compressor import make_compressor
-from linc_convert.utils.zarr.generate_pyramid import generate_pyramid
-from linc_convert.utils.zarr.zarr_config import ZarrConfig, open_zarr_group, \
-    create_array
+from linc_convert.utils.zarr import (create_array, generate_pyramid, open_zarr_group,
+                                     ZarrConfig)
 
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
@@ -76,12 +72,16 @@ def convert(
         subfolders named `*_run{:d}__z{:02d}_y{:02d}*`, each containing a
         collection of spool files named '{:010d}spool.dat'.
         TODO: add instrution for metadata file and info file
+    overlap
+        Overlap pixel between y slices
     orientation
         Orientation of the slice
     center
         Set RAS[0, 0, 0] at FOV center
     voxel_size
         Voxel size along the X, Y and Z dimension, in micron.
+    zarr_config
+        config related to zarr
     kwargs
         used for internal api
     """
@@ -241,6 +241,7 @@ def convert(
     if not zarr_config.nii:
         return
 
+    # TODO: header has some problem with unit when deal with zarr 2, furthur debugging needed
     header, _ = default_nifti_header(omz["0"], omz.attrs.get("ome", omz.attrs).get("multiscales", None))
     shape = list(reversed(omz["0"].shape))
     shape = shape[:3] + [1] + shape[3:]  # insert time dimension

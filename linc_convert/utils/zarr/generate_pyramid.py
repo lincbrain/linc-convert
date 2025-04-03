@@ -3,8 +3,11 @@ from typing import Literal
 
 import numpy as np
 import zarr
+from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 
 from linc_convert.utils.math import ceildiv
+from linc_convert.utils.zarr.create_array import \
+    dimension_separator_to_chunk_key_encoding
 
 
 def generate_pyramid(
@@ -162,18 +165,27 @@ def generate_pyramid(
 
 
 def get_zarray_options(base_level):
-    return dict(
+    opts = dict(
         dtype=base_level.dtype,
         chunks=base_level.chunks,
         shards=base_level.shards,
         filters=base_level.filters,
         compressors=base_level.compressors,
-        serializer=base_level.serializer,
         fill_value=base_level.fill_value,
         order=base_level.order,
-        # zarr_format=base_level.metadata.zarr_format,
         attributes=base_level.metadata.attributes,
-        chunk_key_encoding=base_level.metadata.chunk_key_encoding,
-        dimension_names=base_level.metadata.dimension_names,
         overwrite=True,
     )
+    if isinstance(base_level.metadata, ArrayV2Metadata):
+        opts_extra = dict(
+        chunk_key_encoding = dimension_separator_to_chunk_key_encoding(base_level.metadata.dimension_separator, 2)
+        )
+    elif isinstance(base_level.metadata, ArrayV3Metadata):
+        opts_extra = dict(
+            chunk_key_encoding=base_level.metadata.chunk_key_encoding,
+            serializer=base_level.serializer,
+            dimension_names=base_level.metadata.dimension_names, )
+    else:
+        opts_extra = {}
+    opts.update(**opts_extra)
+    return opts
