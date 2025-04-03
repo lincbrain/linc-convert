@@ -1,20 +1,15 @@
 import itertools
-import re
-from typing import Any, Literal
+from typing import Literal
 
-import nibabel as nib
 import numpy as np
 import zarr
 
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.unit import convert_unit
-from linc_convert.utils.zarr.zarr_config import create_array
 
 
 def generate_pyramid(
     omz: zarr.Group,
-    zarr_config,
-    levels: int | None = None,
+    levels: int = -1,
     ndim: int = 3,
     max_load: int = 512,
     mode: Literal["mean", "median"] = "median",
@@ -54,18 +49,10 @@ def generate_pyramid(
         max_load += 1
 
     # Read properties from base level
-    shape = list(omz["0"].shape)
-    dtype = omz["0"].dtype
-    chunk_size = omz["0"].chunks
-    # arr:zarr.Array = omz["0"]
-    # opt = {
-    #     "dimension_separator": omz["0"]._dimension_separator,
-    #     "order": omz["0"]._order,
-    #     "dtype": omz["0"]._dtype,
-    #     "fill_value": omz["0"]._fill_value,
-    #     "compressor": omz["0"]._compressor,
-    #     "chunks": omz["0"].chunks,
-    # }
+    base_level = omz["0"]
+    shape = list(base_level.shape)
+    chunk_size = base_level.chunks
+    opts = get_zarray_options(base_level)
 
     # Select windowing function
     if mode == "median":
@@ -90,7 +77,7 @@ def generate_pyramid(
                 shape.append(max(1, length // 2))
 
         # Stop if seen enough levels or level shape smaller than chunk size
-        if levels is None:
+        if levels == -1:
             if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
                 break
         elif level > levels:
@@ -99,8 +86,8 @@ def generate_pyramid(
         print("Compute level", level, "with shape", shape)
 
         allshapes.append(shape)
-        # omz.create_dataset(str(level), shape=batch + shape, **opt)
-        create_array(omz,str(level), shape= batch+shape, zarr_config=zarr_config, dtype= dtype)
+        omz.create_array(str(level), shape=batch + shape, **opts)
+
         # Iterate across `max_load` chunks
         # (note that these are unrelared to underlying zarr chunks)
         grid_shape = [ceildiv(n, max_load) for n in prev_shape]
@@ -174,4 +161,19 @@ def generate_pyramid(
     return allshapes
 
 
-
+def get_zarray_options(base_level):
+    return dict(
+        dtype=base_level.dtype,
+        chunks=base_level.chunks,
+        shards=base_level.shards,
+        filters=base_level.filters,
+        compressors=base_level.compressors,
+        serializer=base_level.serializer,
+        fill_value=base_level.fill_value,
+        order=base_level.order,
+        # zarr_format=base_level.metadata.zarr_format,
+        attributes=base_level.metadata.attributes,
+        chunk_key_encoding=base_level.metadata.chunk_key_encoding,
+        dimension_names=base_level.metadata.dimension_names,
+        overwrite=True,
+    )

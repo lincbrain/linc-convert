@@ -2,11 +2,10 @@
 from typing import Any
 
 import zarr.codecs
-from zarr import abc
 
-def make_compressor(name: str, **prm: dict) -> Any:
+
+def make_compressor(name: str | None, **prm: dict) -> Any:
     """Build compressor object from name and options."""
-    # TODO: we should use `numcodecs.get_codec` instead`
     if not isinstance(name, str):
         return name
 

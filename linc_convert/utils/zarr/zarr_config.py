@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 import numpy as np
 import zarr
 from cyclopts import Parameter
+from numpy._typing import DTypeLike
 from typing_extensions import Unpack
 
 from linc_convert.utils.zarr.compressor import make_compressor
@@ -29,10 +30,18 @@ class _ZarrConfig:
         * one:   used for all spatial dimensions
         * three: used for spatial dimensions ([z, y, x])
         * four+:  used for channels and spatial dimensions ([c, z, y, x])
+        If `"auto"`, find chunk size smaller than 1 MB (TODO: not implemented)
+    chunk_channels:
+        Put channels in different chunk.
+        If False, combine all channels in a single chunk.
+    chunk_time :
+        Put timepoints in different chunk.
+        If False, combine all timepoints in a single chunk.
     shard
         Output shard size.
         If `"auto"`, find shard size that ensures files smaller than 2TB,
         assuming a compression ratio or 2.
+
     version
         Zarr version to use. If `shard` is used, 3 is required.
     compressor : {blosc, zlib|gzip, raw}
@@ -53,10 +62,10 @@ class _ZarrConfig:
     zarr_version: Literal[2, 3] = 3
     chunk: tuple[int] = (128,)
     chunk_channels: bool = False
-    chunk_time: bool = False
+    chunk_time: bool = True
     shard: tuple[int] | Literal["auto"] | None = None
     shard_channel: bool = False
-    shard_time: bool = False
+    shard_time: bool = True
     dimension_separator: Literal[".", "/"] = "/"
     order: Literal["C", "F"] = "C"
     compressor: Literal["blosc", "zlib", None] = "blosc"
@@ -92,6 +101,7 @@ class _ZarrConfig:
         replace(self, **kwargs)
         return self
 
+
 ZarrConfig = Annotated[_ZarrConfig, Parameter(name="*")]
 
 
@@ -111,7 +121,7 @@ def create_array(
         name: str,
         shape: tuple,
         zarr_config: ZarrConfig,
-        dtype: np.dtype = np.int32,
+        dtype: DTypeLike = np.int32,
         data=None
 ) -> zarr.Array:
     compressor = zarr_config.compressor
@@ -153,7 +163,7 @@ def create_array(
 
 def compute_zarr_layout(
         shape: tuple,
-        dtype: np.dtype,
+        dtype: DTypeLike,
         zarr_config: ZarrConfig
 ) -> tuple[tuple, tuple | None]:
     ndim = len(shape)

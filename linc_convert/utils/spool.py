@@ -137,7 +137,7 @@ class SpoolSetInterpreter:
             array = np.frombuffer(self.spool_set[spool_file_name], dtype=self.dtype)
         elif self.type == 'dir':
             file = self._make_filename_from_spool_set(spool_file_name)
-            print(f'Reading file {spool_file_name}')
+            # print(f'Reading file {spool_file_name}')
             with open(file, 'rb') as f:
                 array = np.frombuffer(f.read(), dtype=self.dtype)
         return np.reshape(array, self.spool_shape)
@@ -184,7 +184,6 @@ class SpoolSetInterpreter:
             start = idx * axis_0_shape
             stop = start + axis_0_shape
             canvas[start:stop] = spool_file
-        print(canvas.shape)
         return canvas
 
     # this is the modified version for lsm pipeline

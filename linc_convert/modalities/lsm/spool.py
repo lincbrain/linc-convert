@@ -234,7 +234,7 @@ def convert(
     print("")
 
     # Generate Zarr pyramid and metadata
-    generate_pyramid(omz, zarr_config)
+    generate_pyramid(omz, levels=zarr_config.levels)
     write_ome_metadata(omz, axes = ["z","y","x"],space_scale=voxel_size)
 
     # Write NIfTI-Zarr header:
