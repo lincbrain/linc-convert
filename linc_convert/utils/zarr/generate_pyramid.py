@@ -98,7 +98,7 @@ def generate_pyramid(
         omz.create_dataset(str(level), shape=batch + shape, **opt)
 
         # Iterate across `max_load` chunks
-        # (note that these are unrelared to underlying zarr chunks)
+        # (note that these are unrelated to underlying zarr chunks)
         grid_shape = [ceildiv(n, max_load) for n in prev_shape]
         for chunk_index in itertools.product(*[range(x) for x in grid_shape]):
             print(f"chunk {chunk_index} / {tuple(grid_shape)})", end="\r")
