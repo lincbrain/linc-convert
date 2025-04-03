@@ -127,8 +127,6 @@ class SpoolSetInterpreter:
         if numDepths % 2:  # if there is an odd number of rows ->  KPEDIT - odd rows means 1 less column for some reason
             numRows = numDepths + 1
 
-        numColumns = numLatPix
-
         self.spool_shape = (numFramesPerSpool, numRows, numColumns)
         self.numDepths = numDepths
 
