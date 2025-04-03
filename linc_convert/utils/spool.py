@@ -166,16 +166,14 @@ class SpoolSetInterpreter:
         10 digits (0000000000,1000000000,20000000000,...,1020000000,2020000000,3020000000,...) + spool.dat
         '''
         spool_files = self._list_spool_files()
-        misses = 0
         for idx in range(len(spool_files)):
             # Convert index to string, pad with zeros to 10 digits and reverse
-            tmp = str(idx + misses).zfill(10)[::-1]
+            tmp = str(idx).zfill(10)[::-1]
             tmp = f'{tmp}spool.dat'
             if tmp in spool_files:
                 yield tmp
             else:
                 warnings.warn(f"{tmp} not located in spool directory")
-                misses += 1
 
     def assemble(self):
         axis_0_shape = self.spool_shape[0]

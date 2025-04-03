@@ -1,18 +1,15 @@
 import itertools
-import re
-from typing import Any, Literal
+from typing import Literal
 
-import nibabel as nib
 import numpy as np
 import zarr
 
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.unit import convert_unit
 
 
 def generate_pyramid(
     omz: zarr.Group,
-    levels: int | None = None,
+    levels: int = -1,
     ndim: int = 3,
     max_load: int = 512,
     mode: Literal["mean", "median"] = "median",
@@ -35,7 +32,9 @@ def generate_pyramid(
         Maximum number of voxels to load along each dimension.
     mode : {"mean", "median"}
         Whether to use a mean or median moving window.
-
+    no_pyramid_axis : int | str | None
+        Axis that should not be downsampled. If None, downsample
+        across all three dimensions.
     Returns
     -------
     shapes : list[list[int]]
@@ -80,7 +79,7 @@ def generate_pyramid(
                 shape.append(max(1, length // 2))
 
         # Stop if seen enough levels or level shape smaller than chunk size
-        if levels is None:
+        if levels == -1:
             if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
                 break
         elif level > levels:
