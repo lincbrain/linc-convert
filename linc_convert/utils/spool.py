@@ -120,10 +120,10 @@ class SpoolSetInterpreter:
         imageBytes = self.acquisition_metadata['nbytes']
         numFramesPerSpool = self.acquisition_metadata['images']
 
-        numRows = numDepths + 2
-
         if numDepths % 2:  # if there is an odd number of rows ->  KPEDIT - odd rows means 1 less column for some reason
             numRows = numDepths + 1
+        else:
+            numRows = numDepths + 2
 
         self.spool_shape = (numFramesPerSpool, numRows, numColumns)
         self.numDepths = numDepths
