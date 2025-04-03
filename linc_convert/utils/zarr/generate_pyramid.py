@@ -16,7 +16,7 @@ def generate_pyramid(
     ndim: int = 3,
     max_load: int = 512,
     mode: Literal["mean", "median"] = "median",
-    no_pyramid_axis: int | str | None = None,
+    no_pyramid_axis: int | None = None,
 ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
