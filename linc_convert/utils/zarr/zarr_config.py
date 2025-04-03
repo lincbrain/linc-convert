@@ -151,9 +151,15 @@ def create_array(
     return arr
 
 
-def compute_zarr_layout(shape: tuple, dtype: np.dtype, zarr_config: ZarrConfig):
-    chunk = zarr_config.chunk
-    if len(shape) == 5:
+def compute_zarr_layout(
+        shape: tuple,
+        dtype: np.dtype,
+        zarr_config: ZarrConfig
+) -> tuple[tuple, tuple | None]:
+    ndim = len(shape)
+    if ndim == 5:
+        if zarr_config.no_time:
+            raise ValueError('no_time is not supported for 5D data')
         chunk_tc = (
             1 if zarr_config.chunk_time else shape[0],
             1 if zarr_config.chunk_channels else shape[1],
@@ -162,41 +168,40 @@ def compute_zarr_layout(shape: tuple, dtype: np.dtype, zarr_config: ZarrConfig):
             chunk_tc[0] if zarr_config.shard_time else shape[0],
             chunk_tc[1] if zarr_config.shard_channel else shape[1]
         )
-        if zarr_config.no_time:
-            raise ValueError('no_time is not supported for 5D data')
 
-    elif len(shape) == 4:
+    elif ndim == 4:
         if zarr_config.no_time:
             chunk_tc = (1 if zarr_config.chunk_channels else shape[0],)
             shard_tc = (chunk_tc[0] if zarr_config.shard_channel else shape[0],)
         else:
             chunk_tc = (1 if zarr_config.chunk_time else shape[0],)
             shard_tc = (chunk_tc[0] if zarr_config.shard_time else shape[0],)
-    elif len(shape) == 3:
+    elif ndim == 3:
         chunk_tc = tuple()
         shard_tc = tuple()
     else:
         raise ValueError("Zarr layout only supports 3+ dimensions.")
 
-    if len(chunk) > len(shape):
+    chunk = zarr_config.chunk
+    if len(chunk) > ndim:
         raise ValueError("Provided chunk size has more dimension than data")
-    if len(zarr_config.chunk) != len(shape):
+    if len(zarr_config.chunk) != ndim:
         chunk = chunk_tc + chunk + chunk[-1:] * max(0, 3 - len(chunk))
 
     shard = zarr_config.shard
 
-    if shard is None:
-        return chunk, shard
-    if isinstance(shard, tuple) and len(shard) == len(shape):
-        return chunk, shard
-    if isinstance(shard, tuple) and len(shard) > len(shape):
+    if isinstance(shard, tuple) and len(shard) > ndim:
         raise ValueError("Provided shard size has more dimension than data")
+    # If shard is not used or is fully specified, return early.
+    if shard is None or (isinstance(shard, tuple) and len(shard) == ndim):
+        return chunk, shard
+
     chunk_spatial = chunk[-3:]
     if shard == "auto":
+        # Compute auto shard sizes based on the file size limit.
         itemsize = dtype.itemsize
         chunk_size = np.prod(chunk_spatial) * itemsize
         shard_size = np.prod(shard_tc) * chunk_size
-        # total_chunks_allowed = SHARD_FILE_SIZE_LIMIT / shard_size
         B_multiplier = SHARD_FILE_SIZE_LIMIT / shard_size
         multiplier = int(B_multiplier ** (1 / 3))
         if multiplier < 1:
@@ -238,8 +243,7 @@ def compute_zarr_layout(shape: tuple, dtype: np.dtype, zarr_config: ZarrConfig):
             # Remove dimensions that have reached or exceeded the data size.
             free_dims = [i for i in free_dims if
                          M[i] * chunk_spatial[i] < shape_spatial[i]]
-        auto_shard_spatial = tuple(M[i] * chunk_spatial[i] for i in range(dims))
-        shard = auto_shard_spatial
+        shard = tuple(M[i] * chunk_spatial[i] for i in range(dims))
 
     shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))
     return chunk, shard
