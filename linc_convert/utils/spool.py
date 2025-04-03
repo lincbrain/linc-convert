@@ -116,7 +116,7 @@ class SpoolSetInterpreter:
                                                                  'ImagesPerFile')
 
         numDepths = self.acquisition_metadata['height']
-        numLatPix = self.acquisition_metadata['stride'] // 2
+        numColumns = self.acquisition_metadata['stride'] // 2
         imageBytes = self.acquisition_metadata['nbytes']
         numFramesPerSpool = self.acquisition_metadata['images']
 
