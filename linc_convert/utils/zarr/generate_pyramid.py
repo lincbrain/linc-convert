@@ -29,12 +29,6 @@ def generate_pyramid(
         Number of additional levels to generate.
         By default, stop when all dimensions are smaller than their
         corresponding chunk size.
-    shard : list[int] | bool | {"auto"} | None
-        Shard size.
-        * If `None`, use same shard size as the input array;
-        * If `False`, no dot use sharding;
-        * If `True` or `"auto"`, automatically find shard size;
-        * Otherwise, use provided shard size.
     ndim : int
         Number of spatial dimensions.
     max_load : int
