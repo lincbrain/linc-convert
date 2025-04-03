@@ -241,7 +241,7 @@ def convert(
     if not zarr_config.nii:
         return
 
-    header = default_nifti_header(omz["0"], omz)
+    header, _ = default_nifti_header(omz["0"], omz.attrs.get("ome", omz.attrs).get("multiscales", None))
     shape = list(reversed(omz["0"].shape))
     shape = shape[:3] + [1] + shape[3:]  # insert time dimension
     affine = orientation_to_affine(orientation, *voxel_size)
