@@ -119,8 +119,6 @@ class SpoolSetInterpreter:
         numLatPix = self.acquisition_metadata['stride'] // 2
         imageBytes = self.acquisition_metadata['nbytes']
         numFramesPerSpool = self.acquisition_metadata['images']
-        startIndex = self.acquisition_metadata['nbytes']
-        imageSize = self.acquisition_metadata['nbytes']
 
         numRows = numDepths + 2
 
