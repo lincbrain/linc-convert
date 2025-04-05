@@ -78,8 +78,6 @@ def convert(
         collection of files named `*_plane{:03d}_c{:d}.tiff`.
     out
         Path to the output Zarr directory [<INP>.ome.zarr]
-    max_load
-        Maximum input chunk size when building pyramid
     orientation
         Orientation of the slice
     center
