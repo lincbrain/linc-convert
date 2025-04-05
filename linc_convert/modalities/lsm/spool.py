@@ -41,7 +41,6 @@ def convert(
         out: str,
         zarr_config: ZarrConfig = None,
         overlap: int = 30,
-        max_load: int = 512,
         orientation: str = "coronal",
         center: bool = True,
         voxel_size: list[float] = (1, 1, 1),
