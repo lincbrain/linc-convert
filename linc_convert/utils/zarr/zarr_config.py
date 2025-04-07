@@ -2,11 +2,14 @@
 import os
 from dataclasses import dataclass, replace
 from typing import Annotated, Literal
+from typing_extensions import Unpack
+import logging
 
 from cyclopts import Parameter
-from typing_extensions import Unpack
 
+logger = logging.getLogger(__name__)
 
+@Parameter(name="*")
 @dataclass
 class ZarrConfig:
     """
@@ -73,7 +76,7 @@ class ZarrConfig:
     driver : {"zarr-python", "tensorstore", "zarrita"}
         library used for Zarr IO Operation
     """
-    out: str = None
+    out: Annotated[str, Parameter(name=["--out", "-o"])] = None
     zarr_version: Literal[2, 3] = 3
     chunk: tuple[int] = (128,)
     chunk_channels: bool = False
@@ -115,10 +118,6 @@ class ZarrConfig:
     def update(self, **kwargs):
         replace(self, **kwargs)
         return self
-
-
-ZarrConfig = Annotated[ZarrConfig, Parameter(name="*")]
-
 
 def update(zarr_config: ZarrConfig|None, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
     if zarr_config is None:
