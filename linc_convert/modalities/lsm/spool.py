@@ -76,7 +76,7 @@ def convert(
         subfolders named `*_y{:02d}_z{:02d}*`, each containing a
         collection of files named `*spool.dat`.
     out
-        Path to the output Zarr directory [<INP>.ome.zarr]
+        Path to the output Zarr directory [<INP>.ome.zarr] or <INP>.nii.zarr]
     orientation
         Orientation of the slice
     center
