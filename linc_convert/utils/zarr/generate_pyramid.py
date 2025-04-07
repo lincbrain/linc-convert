@@ -7,7 +7,7 @@ import zarr
 from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.zarr import dimension_separator_to_chunk_key_encoding
+from .create_array import dimension_separator_to_chunk_key_encoding
 
 
 def generate_pyramid(

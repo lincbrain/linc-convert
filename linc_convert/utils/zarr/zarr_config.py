@@ -98,7 +98,8 @@ class ZarrConfig:
     # driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"
 
     def __post_init__(self) -> None:
-        self.nii |= self.out.endswith(".nii.zarr")
+        if self.out:
+            self.nii |= self.out.endswith(".nii.zarr")
         if self.zarr_version == 2:
             if self.shard or self.shard_channels or self.shard_time:
                 raise NotImplementedError("Shard is not supported for Zarr 2.")
