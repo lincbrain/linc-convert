@@ -1,10 +1,13 @@
 import itertools
 from typing import Literal
 
+import nibabel as nib
 import numpy as np
 import zarr
+from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 
 from linc_convert.utils.math import ceildiv
+from linc_convert.utils.zarr import dimension_separator_to_chunk_key_encoding
 
 
 def generate_pyramid(
@@ -32,9 +35,7 @@ def generate_pyramid(
         Maximum number of voxels to load along each dimension.
     mode : {"mean", "median"}
         Whether to use a mean or median moving window.
-    no_pyramid_axis : int | None
-        Axis that should not be downsampled. If None, downsample
-        across all three dimensions.
+
     Returns
     -------
     shapes : list[list[int]]
@@ -45,16 +46,10 @@ def generate_pyramid(
         max_load += 1
 
     # Read properties from base level
-    shape = list(omz["0"].shape)
-    chunk_size = omz["0"].chunks
-    opt = {
-        "dimension_separator": omz["0"]._dimension_separator,
-        "order": omz["0"]._order,
-        "dtype": omz["0"]._dtype,
-        "fill_value": omz["0"]._fill_value,
-        "compressor": omz["0"]._compressor,
-        "chunks": omz["0"].chunks,
-    }
+    base_level = omz["0"]
+    shape = list(base_level.shape)
+    chunk_size = base_level.chunks
+    opts = get_zarray_options(base_level)
 
     # Select windowing function
     if mode == "median":
@@ -88,7 +83,7 @@ def generate_pyramid(
         print("Compute level", level, "with shape", shape)
 
         allshapes.append(shape)
-        omz.create_dataset(str(level), shape=batch + shape, **opt)
+        omz.create_array(str(level), shape=batch + shape, **opts)
 
         # Iterate across `max_load` chunks
         # (note that these are unrelated to underlying zarr chunks)
@@ -163,4 +158,28 @@ def generate_pyramid(
     return allshapes
 
 
-
+def get_zarray_options(base_level):
+    opts = dict(
+        dtype=base_level.dtype,
+        chunks=base_level.chunks,
+        shards=base_level.shards,
+        filters=base_level.filters,
+        compressors=base_level.compressors,
+        fill_value=base_level.fill_value,
+        order=base_level.order,
+        attributes=base_level.metadata.attributes,
+        overwrite=True,
+    )
+    if isinstance(base_level.metadata, ArrayV2Metadata):
+        opts_extra = dict(
+        chunk_key_encoding = dimension_separator_to_chunk_key_encoding(base_level.metadata.dimension_separator, 2)
+        )
+    elif isinstance(base_level.metadata, ArrayV3Metadata):
+        opts_extra = dict(
+            chunk_key_encoding=base_level.metadata.chunk_key_encoding,
+            serializer=base_level.serializer,
+            dimension_names=base_level.metadata.dimension_names, )
+    else:
+        opts_extra = {}
+    opts.update(**opts_extra)
+    return opts

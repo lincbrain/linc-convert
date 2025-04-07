@@ -22,12 +22,7 @@ import zarr
 from scipy.io import loadmat
 
 from linc_convert import utils
-from linc_convert.modalities.psoct._utils import (
-    generate_pyramid,
-    make_json,
-    niftizarr_write_header,
-    write_ome_metadata,
-)
+from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
@@ -98,7 +93,7 @@ def convert(
     no_pool: Optional[int] = None,
     orientation: str = "RAS",
     center: bool = True,
-        kwargs
+    **kwargs
 ) -> None:
     """
     Matlab to OME-Zarr.
