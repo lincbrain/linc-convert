@@ -32,7 +32,7 @@ def generate_pyramid(
         Maximum number of voxels to load along each dimension.
     mode : {"mean", "median"}
         Whether to use a mean or median moving window.
-    no_pyramid_axis : int | str | None
+    no_pyramid_axis : int | None
         Axis that should not be downsampled. If None, downsample
         across all three dimensions.
     Returns
