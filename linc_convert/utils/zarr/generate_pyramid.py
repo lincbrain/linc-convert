@@ -1,14 +1,17 @@
 import itertools
-from typing import Literal
+import logging
+import math
+from typing import Literal, Optional
 
-import nibabel as nib
 import numpy as np
+import tqdm
 import zarr
 from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 
 from linc_convert.utils.math import ceildiv
 from .create_array import dimension_separator_to_chunk_key_encoding
 
+logger = logging.getLogger(__name__)
 
 def generate_pyramid(
     omz: zarr.Group,
@@ -16,7 +19,7 @@ def generate_pyramid(
     ndim: int = 3,
     max_load: int = 512,
     mode: Literal["mean", "median"] = "median",
-    no_pyramid_axis: int | None = None,
+    no_pyramid_axis: Optional[int] = None,
 ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
@@ -35,7 +38,8 @@ def generate_pyramid(
         Maximum number of voxels to load along each dimension.
     mode : {"mean", "median"}
         Whether to use a mean or median moving window.
-
+    no_pyramid_axis: int | None
+        # TODO:
     Returns
     -------
     shapes : list[list[int]]
@@ -47,71 +51,56 @@ def generate_pyramid(
 
     # Read properties from base level
     base_level = omz["0"]
-    shape = list(base_level.shape)
+    base_shape = list(base_level.shape)
     chunk_size = base_level.chunks
     opts = get_zarray_options(base_level)
 
     # Select windowing function
-    if mode == "median":
-        func = np.median
-    else:
-        assert mode == "mean"
-        func = np.mean
+    window_func = {"median": np.median, "mean": np.mean}[mode]
 
-    level = 0
-    batch, shape = shape[:-ndim], shape[-ndim:]
-    allshapes = [shape]
+    batch_shape, spatial_shape = base_shape[:-ndim], base_shape[-ndim:]
+    all_shapes = [spatial_shape]
 
-    while True:
-        level += 1
+    # Compute default number of levels based on chunk size
+    if levels == -1:
+        levels = default_levels(spatial_shape, chunk_size[-ndim:], no_pyramid_axis)
 
+    for lvl in tqdm.tqdm(range(1, levels + 1)):
         # Compute downsampled shape
-        prev_shape, shape = shape, []
-        for i, length in enumerate(prev_shape):
-            if i == no_pyramid_axis:
-                shape.append(length)
-            else:
-                shape.append(max(1, length // 2))
+        prev_shape = spatial_shape
+        spatial_shape = next_level_shape(prev_shape, no_pyramid_axis)
+        all_shapes.append(spatial_shape)
+        logger.info("Compute level", lvl, "with shape", spatial_shape)
 
-        # Stop if seen enough levels or level shape smaller than chunk size
-        if levels == -1:
-            if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
-                break
-        elif level > levels:
-            break
-
-        print("Compute level", level, "with shape", shape)
-
-        allshapes.append(shape)
-        omz.create_array(str(level), shape=batch + shape, **opts)
+        arr = omz.create_array(str(lvl), shape=batch_shape + spatial_shape, **opts)
 
         # Iterate across `max_load` chunks
         # (note that these are unrelated to underlying zarr chunks)
         grid_shape = [ceildiv(n, max_load) for n in prev_shape]
-        for chunk_index in itertools.product(*[range(x) for x in grid_shape]):
-            print(f"chunk {chunk_index} / {tuple(grid_shape)})", end="\r")
+
+        for chunk_index in tqdm.tqdm(
+                itertools.product(*[range(x) for x in grid_shape])):
 
             # Read one chunk of data at the previous resolution
             slicer = [Ellipsis] + [
                 slice(i * max_load, min((i + 1) * max_load, n))
                 for i, n in zip(chunk_index, prev_shape)
             ]
-            fullshape = omz[str(level - 1)].shape
-            dat = omz[str(level - 1)][tuple(slicer)]
+            dat = omz[str(lvl - 1)][tuple(slicer)]
 
             # Discard the last voxel along odd dimensions
+            # if one dimension has length 1, it should not be cropped
             crop = [
-                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape)
+                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], prev_shape)
             ]
             # Don't crop the axis not down-sampling
-            # cannot do if not no_pyramid_axis since it could be 0
             if no_pyramid_axis is not None:
                 crop[no_pyramid_axis] = 0
             slcr = [slice(-1) if x else slice(None) for x in crop]
             dat = dat[tuple([Ellipsis, *slcr])]
 
-            if any(n == 0 for n in dat.shape):
-                # last strip had a single voxel, nothing to do
+            # last strip had a single voxel and become empty after cropping, nothing to do
+            if 0 in dat.shape:
                 continue
 
             patch_shape = dat.shape[-ndim:]
@@ -124,23 +113,23 @@ def generate_pyramid(
                 windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
                 windowed_shape[2 * no_pyramid_axis + 1] = 1
 
-            dat = dat.reshape(batch + windowed_shape)
+            dat = dat.reshape(tuple(batch_shape + windowed_shape))
             # -> last `ndim`` dimensions have shape 2x2x2
             dat = dat.transpose(
-                list(range(len(batch)))
-                + list(range(len(batch), len(batch) + 2 * ndim, 2))
-                + list(range(len(batch) + 1, len(batch) + 2 * ndim, 2))
+                list(range(len(batch_shape)))
+                + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
+                + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
             )
             # -> flatten patches
             smaller_shape = [max(n // 2, 1) for n in patch_shape]
             if no_pyramid_axis is not None:
                 smaller_shape[no_pyramid_axis] = patch_shape[no_pyramid_axis]
 
-            dat = dat.reshape(batch + smaller_shape + [-1])
+            dat = dat.reshape(tuple(batch_shape + smaller_shape + [-1]))
 
             # Compute the median/mean of each patch
             dtype = dat.dtype
-            dat = func(dat, axis=-1)
+            dat = window_func(dat, axis=-1)
             dat = dat.astype(dtype)
 
             # Write output
@@ -148,14 +137,36 @@ def generate_pyramid(
                 slice(i * max_load // 2, min((i + 1) * max_load // 2, n))
                 if axis_index != no_pyramid_axis
                 else slice(i * max_load, min((i + 1) * max_load, n))
-                for i, axis_index, n in zip(chunk_index, range(ndim), shape)
+                for i, axis_index, n in zip(chunk_index, range(ndim), spatial_shape)
             ]
 
-            omz[str(level)][tuple(slicer)] = dat
+            arr[tuple(slicer)] = dat
 
-    print("")
+    return all_shapes
 
-    return allshapes
+
+def default_levels(
+        spatial_shape: tuple,
+        spatial_chunk: tuple,
+        no_pyramid_axis: Optional[int]
+) -> int:
+    default_levels = max(
+        int(math.ceil(math.log2(s / spatial_chunk[i])))
+        for i, s in enumerate(spatial_shape)
+        if no_pyramid_axis is None or i != no_pyramid_axis
+    )
+    levels = max(default_levels, 0)
+    return levels
+
+
+def next_level_shape(prev_shape: tuple, no_pyramid_axis: Optional[int]) -> list:
+    new_shape = []
+    for i, length in enumerate(prev_shape):
+        if i == no_pyramid_axis:
+            new_shape.append(length)
+        else:
+            new_shape.append(max(1, length // 2))
+    return new_shape
 
 
 def get_zarray_options(base_level):
