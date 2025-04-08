@@ -77,6 +77,8 @@ def convert(
         collection of files named `*spool.dat`.
     out
         Path to the output Zarr directory [<INP>.{ome|nii}.zarr]
+    overlap
+        Number of pixels between slices that are overlapped
     orientation
         Orientation of the slice
     center

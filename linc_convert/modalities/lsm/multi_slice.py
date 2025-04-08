@@ -75,6 +75,8 @@ def convert(
         collection of files named `*_plane{:03d}_c{:d}.tiff`.
     out
         Path to the output Zarr directory [<INP>.ome.zarr]
+    overlap
+        Number of pixels between slices that are overlapped
     chunk
         Output chunk size
     compressor : {blosc, zlib, raw}
