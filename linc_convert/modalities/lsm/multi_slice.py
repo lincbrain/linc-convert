@@ -147,7 +147,7 @@ def convert(
             dtype = f.pages[0].dtype
             allshapes[zchunk][ychunk] = (len(f.pages), *f.pages[0].shape)
 
-    # check that all chink shapes are compatible
+    # check that all chunk shapes are compatible
     for zchunk in range(nchunkz):
         if len(set(shape[1] for shape in allshapes[zchunk])) != 1:
             raise ValueError("Incompatible Y shapes")
