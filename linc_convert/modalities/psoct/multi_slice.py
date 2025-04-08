@@ -9,16 +9,16 @@ import json
 import os
 from functools import wraps
 from itertools import product
-from typing import Callable, Mapping, Optional
-from warnings import warn
+from typing import Callable, Optional
 import logging
 
 import cyclopts
 import h5py
 import numpy as np
-from scipy.io import loadmat
 
 from linc_convert import utils
+from linc_convert.modalities.psoct._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
+    _MatArrayWrapper
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
@@ -44,98 +44,6 @@ def _automap(func: Callable) -> Callable:
     return wrapper
 
 
-class _ArrayWrapper:
-    def _get_key(self, f: Mapping) -> str:
-        key = self.key
-        if key is None:
-            if not len(f.keys()):
-                raise Exception(f"{self.file} is empty")
-            # Select the first non-hidden key
-            for key in f.keys():
-                if key[0] != "_":
-                    break
-            if len(f.keys()) > 1:
-                warn(
-                    f"More than one key in .mat file {self.file}, "
-                    f'arbitrarily loading "{key}"'
-                )
-
-        if key not in f.keys():
-            raise Exception(f"Key {key} not found in file {self.file}")
-        return key
-
-
-class _H5ArrayWrapper(_ArrayWrapper):
-    def __init__(self, file: h5py.File, key: Optional[str]) -> None:
-        self.file = file
-        self.key = key
-        self.array = file.get(self._get_key(self.file))
-
-    def __del__(self) -> None:
-        if hasattr(self.file, "close"):
-            self.file.close()
-
-    def load(self) -> np.ndarray:
-        self.array = self.array[...]
-        if hasattr(self.file, "close"):
-            self.file.close()
-        self.file = None
-        return self.array
-
-    @property
-    def shape(self) -> list[int]:
-        return self.array.shape
-
-    @property
-    def dtype(self) -> np.dtype:
-        return self.array.dtype
-
-    def __len__(self) -> int:
-        return len(self.array)
-
-    def __getitem__(self, index: object) -> np.ndarray:
-        return self.array[index]
-
-
-class _MatArrayWrapper(_ArrayWrapper):
-    def __init__(self, file: str, key: Optional[str]) -> None:
-        self.file = file
-        self.key = key
-        self.array = None
-
-    def __del__(self) -> None:
-        if hasattr(self.file, "close"):
-            self.file.close()
-
-    def load(self) -> np.ndarray:
-        data = loadmat(self.file)
-        self.array = data.get(self._get_key(data))
-        self.file = None
-        return self.array
-
-    @property
-    def shape(self) -> list[int]:
-        if self.array is None:
-            self.load()
-        return self.array.shape
-
-    @property
-    def dtype(self) -> np.dtype:
-        if self.array is None:
-            self.load()
-        return self.array.dtype
-
-    def __len__(self) -> int:
-        if self.array is None:
-            self.load()
-        return len(self.array)
-
-    def __getitem__(self, index: object) -> np.ndarray:
-        if self.array is None:
-            self.load()
-        return self.array[index]
-
-
 def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]:
     """Load or memory-map an array stored in a .mat file."""
     def make_wrapper(fname: str) -> _ArrayWrapper:
@@ -155,12 +63,12 @@ def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]
 def convert(
     inp: list[str],
     *,
-    zarr_config: ZarrConfig = None,
     key: Optional[str] = None,
     meta: str = None,
     orientation: str = "RAS",
     center: bool = True,
     dtype: Optional[str] = None,
+    zarr_config: ZarrConfig = None,
     **kwargs
 ) -> None:
     """
@@ -209,9 +117,9 @@ def convert(
     # Prepare Zarr group
     omz = open_zarr_group(zarr_config)
 
-    # if not hasattr(inp[0], "dtype"):
-    #     raise Exception("Input is not an array. This is likely unexpected")
-    if len(inp[0].shape) < 2:
+    if not hasattr(inp[0], "dtype"):
+        raise Exception("Input is not an array. This is likely unexpected")
+    if len(inp[0].shape) != 2:
         raise ValueError(f"Input array is not 2D: {inp[0].shape}")
 
     dtype = dtype or np.dtype(inp[0].dtype).str
