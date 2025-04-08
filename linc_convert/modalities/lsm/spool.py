@@ -128,7 +128,9 @@ def convert(
         # Check for duplicate tiles
         if (tile.y, tile.z) in tiles_info_by_index:
             raise ValueError(
-                f"Duplicate tile, file {tile.filename} conflicts with {tiles_info_by_index[(tile.y, tile.z)].filename}")
+                f"Duplicate tile, file {tile.filename} conflicts with "
+                f"{tiles_info_by_index[(tile.y, tile.z)].filename}"
+            )
         tiles_info_by_index[(tile.y, tile.z)] = tile
 
     # Set default output path if not provided
