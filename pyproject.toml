@@ -29,6 +29,7 @@ numpy = "*"
 nibabel = "*"
 zarr = "^3.0.0"
 nifti-zarr = "*"
+tqdm  = "*"
 
 [tool.poetry.group.df]
 optional = true
