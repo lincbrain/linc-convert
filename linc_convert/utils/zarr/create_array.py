@@ -16,6 +16,7 @@ SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
 
 
 def open_zarr_group(zarr_config:ZarrConfig):
+    # TODO: check out is not none or empty
     store = zarr.storage.LocalStore(zarr_config.out)
     return zarr.group(store=store, overwrite=True, zarr_format=zarr_config.zarr_version)
 
