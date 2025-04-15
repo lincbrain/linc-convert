@@ -40,6 +40,7 @@ df = ["glymur"]
 lsm = ["tifffile"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
+all = ["dandi", "fsspec", "glymur", "tifffile", "h5py", "scipy", "wkw"]
 
 [tool.poetry.group.dev]
 optional = true
