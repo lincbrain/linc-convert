@@ -28,6 +28,7 @@ cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
+nifti-zarr = "*"
 # optionals
 glymur = { version = "*", optional = true }
 tifffile = { version = "*", optional = true }
