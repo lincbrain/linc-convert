@@ -28,28 +28,22 @@ cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
+# optionals
+glymur = { version = "*", optional = true }
+tifffile = { version = "*", optional = true }
+h5py = { version = "*", optional = true }
+scipy = { version = "*", optional = true }
+wkw = { version = "*", optional = true }
+dandi = { version = "^0.44", optional = true }
+fsspec = { version = ">= 2021.0.0", extras = ["full"], optional = true }
 
-
-[tool.poetry.group.df]
-optional = true
-[tool.poetry.group.df.dependencies]
-glymur = "*"
-
-[tool.poetry.group.lsm]
-optional = true
-[tool.poetry.group.lsm.dependencies]
-tifffile = "*"
-
-[tool.poetry.group.psoct]
-optional = true
-[tool.poetry.group.psoct.dependencies]
-h5py = "*"
-scipy = "*"
-
-[tool.poetry.group.wk]
-optional = true
-[tool.poetry.group.wk.dependencies]
-wkw = "*" 
+[tool.poetry.extras]
+remote = ["dandi", "fsspec"]
+df = ["glymur"]
+lsm = ["tifffile"]
+psoct = ["h5py", "scipy"]
+wk = ["wkw"]
+all = ["dandi", "fsspec", "glymur", "tifffile", "h5py", "scipy", "wkw"]
 
 [tool.poetry.group.dev]
 optional = true
@@ -108,6 +102,8 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
 ignore = [
+  "ANN002",  # args should not be annotated
+  "ANN003",  # kwargs should not be annotated
   "ANN101",  # self should not be annotated.
   "ANN102"  # cls should not be annotated.
 ]
@@ -138,5 +134,5 @@ bump = true
 pattern = "default-unprefixed"
 
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+requires = ["poetry-core>=1.0.0,<2.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
 build-backend = "poetry_dynamic_versioning.backend"

@@ -1,0 +1,594 @@
+"""General-purpose byte stream opener.
+
+Classes
+-------
+open
+    General-purpose stream opener.
+async_open
+    Asymchronous version of `open`.
+
+Functions
+---------
+stringify_path
+    Ensure that the input is a str or a file-like object.
+fsopen
+    Open a file with fsspec (authentify if needed).
+filesystem
+    Return the fsspec filesystem corresponding to a protocol or URI.
+exists
+    Check that the file or directory pointed by a URI exists.
+async_exists
+    Asychronous version of `exists`.
+linc_auth_opt
+    Create fsspec authentication options to access lincbrain data.
+dandi_auth_opt
+    Create dandi authentication options to access dandi data.
+read_json
+    Read local or remote JSON file.
+write_json
+    Write local or remote JSON file.
+update_json
+    Update local or remote JSON file.
+"""
+# stdlib
+import json
+import logging
+import time
+from bz2 import BZ2File
+from inspect import isawaitable
+from io import BufferedReader
+from os import PathLike, environ
+from pathlib import Path
+from types import TracebackType
+from typing import IO
+
+# externals
+import fsspec
+import fsspec.asyn
+import requests
+from indexed_gzip import IndexedGzipFile
+
+LOG = logging.getLogger(__name__)
+
+DANDI_API = {
+    "linc": "https://api.lincbrain.org/api",
+    "dandi": "https://api.dandiarchive.org/api",
+}
+
+# Cache for LINC cookies
+_LINC_AUTH_CACHE = {}
+_DANDI_AUTH_CACHE = {}
+
+# Cache for fsspec filesystems
+_FILESYSTEMS_CACHE = {}
+
+# Hints
+URILike = PathLike | str
+FileLike = IO | URILike
+FileSystem = fsspec.AbstractFileSystem
+
+
+def stringify_path(filename: FileLike) -> IO | str:
+    """Ensure that the input is a str or a file-like object."""
+    if isinstance(filename, PathLike):
+        return filename.__fspath__()
+    if isinstance(filename, Path):
+        return str(filename)
+    return filename
+
+
+def linc_auth_opt(token: str | None = None) -> dict:
+    """
+    Create fsspec authentication options to access lincbrain data.
+
+    These options should only be used when accessing data behind
+    `neuroglancer.lincbrain.org`.
+
+    Parameters
+    ----------
+    token : str
+        Your LINCBRAIN_API_KEY
+
+    Returns
+    -------
+    opt : dict
+        options to pass to `fsspec`'s `HTTPFileSystem`.
+    """
+    API = DANDI_API['linc']
+    token = token or environ.get('LINCBRAIN_API_KEY', None)
+    if not token:
+        return {}
+    if token in _LINC_AUTH_CACHE:
+        return _LINC_AUTH_CACHE[token]
+    headers = {"Authorization": f"token {token}"}
+    # Check that credential is correct
+    session = requests.Session()
+    session.get(f"{API}/auth/token", headers=headers)
+    # Get cookies
+    response = session.get(f"{API}/permissions/s3/", headers=headers)
+    cookies = response.cookies.get_dict()
+    # Pass cookies to FileSystem
+    opt = {'cookies': cookies}
+    _LINC_AUTH_CACHE[token] = opt
+    return opt
+
+
+def dandi_auth_opt(token: str | None = None, instance: str = "dandi") -> dict:
+    """
+    Create fsspec authentication options to access the dandi api.
+
+    These options should only be used when accessing data behind
+    `dandi://`.
+
+    Parameters
+    ----------
+    token : str
+        Your DANDI_API_KEY or LINCBRAIN_API_KEY
+    instance : {"dandi", "linc"}
+
+    Returns
+    -------
+    opt : dict
+        options to pass to `fsspec`'s `HTTPFileSystem`.
+    """
+    prefix = {"dandi": "DANDI", "linc": "LINCBRAIN"}[instance]
+    token = (
+        token
+        or environ.get(f'{prefix}_API_KEY', None)
+        or environ.get('DANDI_API_KEY', None)
+    )
+    if not token:
+        return {}
+    if token in _DANDI_AUTH_CACHE:
+        return _DANDI_AUTH_CACHE[token]
+    headers = {"Authorization": f"token {token}"}
+    # Check that credential is correct
+    session = requests.Session()
+    session.get(f"{DANDI_API[instance]}/auth/token", headers=headers)
+    # Pass cookies to FileSystem
+    opt = {"headers": headers}
+    _DANDI_AUTH_CACHE[token] = opt
+    return opt
+
+
+def filesystem(protocol: URILike | FileSystem, **opt: dict) -> FileSystem:
+    """Return the filesystem corresponding to a protocol or URI."""
+    if isinstance(protocol, fsspec.AbstractFileSystem):
+        return protocol
+    protocol = url = stringify_path(protocol)
+    if "://" in protocol:
+        protocol = protocol.split("://")[0]
+
+    # --- LINC/DANDI authentification ---
+    linc_auth = opt.pop("linc_auth", None)
+    if linc_auth is None:
+        linc_auth = "neuroglancer.lincbrain.org" in url
+        linc_auth = linc_auth or "dandi://linc" in url
+    dandi_auth = opt.pop("dandi_auth", None)
+    if dandi_auth is None:
+        dandi_auth = "dandi://" in url
+    # -----------------------------------
+
+    if (protocol, linc_auth, dandi_auth) in _FILESYSTEMS_CACHE:
+        return _FILESYSTEMS_CACHE[(protocol, linc_auth, dandi_auth)]
+
+    # --- LINC/DANDI authentification ---
+    opt.setdefault("client_kwargs", {})
+    if linc_auth:
+        LOG.debug(f"linc_auth - {url}")
+        opt["client_kwargs"].update(linc_auth_opt())
+    if dandi_auth:
+        LOG.debug(f"dandi_auth - {url}")
+        instance = "linc" if linc_auth else "dandi"
+        opt["client_kwargs"].update(dandi_auth_opt(instance=instance))
+    # -----------------------------------
+
+    fs = fsspec.filesystem(protocol, **opt)
+    _FILESYSTEMS_CACHE[(protocol, linc_auth, dandi_auth)] = fs
+    return fs
+
+
+def exists(uri: URILike, **opt) -> bool:
+    """Check that the file or directory pointed by a URI exists."""
+    tic = time.time()
+    fs = filesystem(uri, **opt)
+    exists = fs.exists(uri)
+    toc = time.time()
+    LOG.debug(f"exists({uri}): {exists} | {toc-tic} s")
+    return exists
+
+
+async def async_exists(uri: URILike, **opt) -> bool:
+    """Check that the file or directory pointed by a URI exists."""
+    tic = time.time()
+    fs = filesystem(uri, **opt)
+    if isinstance(fs, fsspec.asyn.AsyncFileSystem):
+        exists = await fs._exists(uri)
+    else:
+        exists = fs.exists(uri)
+    toc = time.time()
+    LOG.debug(f"exists({uri}): {exists} | {toc-tic} s")
+    return exists
+
+
+def read_json(fileobj: FileLike, *args, **kwargs) -> dict:
+    """Read local or remote JSON file."""
+    tic = time.time()
+    with open(fileobj, "rb") as f:
+        data = json.load(f, *args, **kwargs)
+    toc = time.time()
+    LOG.debug(f"read_json({fileobj}): {toc-tic} s")
+    return data
+
+
+def write_json(obj: dict, fileobj: FileLike, *args, **kwargs) -> None:
+    """Write local or remote JSON file."""
+    tic = time.time()
+    with open(fileobj, "w") as f:
+        json.dump(obj, f, *args, **kwargs)
+    toc = time.time()
+    LOG.debug(f"write_json(..., {fileobj}): {toc-tic} s")
+    return
+
+
+def update_json(obj: dict, fileobj: FileLike, *args, **kwargs) -> dict:
+    """Read local or remote JSON file."""
+    write_json(read_json(fileobj).update(obj), fileobj, *args, **kwargs)
+
+
+def fsopen(
+    uri: URILike,
+    mode: str = "rb",
+    compression: str | None = None
+) -> fsspec.spec.AbstractBufferedFile:
+    """Open a file with fsspec (authentify if needed)."""
+    fs = filesystem(uri)
+    return fs.open(uri, mode, compression=compression)
+
+
+async def fsopen_async(
+    uri: URILike,
+    mode: str = "rb",
+    compression: str | None = None
+) -> fsspec.spec.AbstractBufferedFile:
+    """Open a file with fsspec (authentify if needed)."""
+    fs = filesystem(uri)
+    if hasattr(fs, "open_async"):
+        return await fs.open_async(uri, mode, compression=compression)
+    else:
+        return fs.open(uri, mode, compression=compression)
+
+
+class open:
+    """
+    General-purpose stream opener.
+
+    Handles:
+
+    * paths (local or url)
+    * opened file-objects
+    * anything that `fsspec` handles
+    * compressed streams
+    """
+
+    def __init__(
+        self,
+        fileobj: FileLike,
+        mode: str = 'rb',
+        compression: str | None = None,
+        open: bool = True,
+    ) -> None:
+        """
+        Open a file from a path or url or an opened file object.
+
+        Parameters
+        ----------
+        fileobj : path or url or file-object
+            Input file
+        mode : str
+            Opening mode
+        compression : {'zip', 'bz2', 'gzip', 'lzma', 'xz', 'infer'}
+            Compression mode.
+            If 'infer', guess from magic number (if mode 'r') or
+            filename (if mode 'w').
+        auth : dict
+            Authentification options to pass to `fsspec`.
+
+        Returns
+        -------
+        fileobj
+            Opened file
+        """
+        self.fileobj: str | IO = stringify_path(fileobj)
+        """The input path or file-like object"""
+        self.fileobjs: list[IO] = []
+        """Additional file-like objects that may be created upon opening."""
+        self.mode: str = mode
+        """Opening mode."""
+        self.compression: str = compression
+        """Compression mode."""
+
+        # open
+        self._is_open = False
+        if open:
+            self._open()
+
+    @property
+    def _effective_fileobj(self) -> IO:
+        # This is the most final file-like object
+        return self.fileobjs[-1] if self.fileobjs else self.fileobj
+
+    def _close(self) -> None:
+        # close all the file-like objects that we've created
+        for fileobj in reversed(self.fileobjs):
+            fileobj.close()
+        self.fileobjs = []
+        self._is_open = False
+
+    def _open(self) -> None:
+        if self._is_open:
+            return
+        if isinstance(self.fileobj, str):
+            self._fsspec_open()
+        if self.compression == 'infer' and 'r' in self.mode:
+            self._infer()
+        self._is_open = True
+
+    def _fsspec_open(self) -> None:
+        # Take the last file object (most likely the input fileobj), which
+        # must be a path, and open it with `fsspec.open()`.
+        uri = stringify_path(self._effective_fileobj)
+        # Ensure that input is a string
+        if not isinstance(uri, str):
+            raise TypeError("Expected a URI, but got:", uri)
+        # Set compression option
+        opt = dict()
+        if not (self.compression == 'infer' and 'r' in self.mode):
+            opt['compression'] = self.compression
+        # Open with fsspec
+        fileobj = fsopen(uri, mode=self.mode, **opt)
+        self.fileobjs.append(fileobj)
+        # -> returns a fsspec object that's not always fully opened
+        #    so open again to be sure.
+        if hasattr(fileobj, 'open'):
+            fileobj = fileobj.open()
+            self.fileobjs.append(fileobj)
+
+    def _infer(self) -> None:
+        # Take the last file object (which at this point must be a byte
+        # stream) and infer its compression from its magic bytes.
+        fileobj = self._effective_fileobj
+        if not hasattr(fileobj, "peek"):
+            fileobj = BufferedReader(fileobj)
+            self.fileobjs.append(fileobj)
+        try:
+            magic = fileobj.peek(2)
+        except Exception:
+            return
+        if magic == b'\x1f\x8b':
+            fileobj = IndexedGzipFile(fileobj)
+            self.fileobjs.append(fileobj)
+        if magic == b'BZh':
+            fileobj = BZ2File(fileobj)
+            self.fileobjs.append(fileobj)
+
+    # ------------------------------------------------------------------
+    # open() / IO API
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> IO:  # noqa: D105
+        self._open()
+        return self._effective_fileobj
+
+    def __exit__(  # noqa: D105
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._close()
+
+    def __del__(self) -> None:
+        """Close all owned streams on delete."""
+        self._close()
+
+    def open(self) -> IO:
+        """Open the file."""
+        if not self._is_open:
+            self._open()
+        return self
+
+    def close(self) -> None:
+        """Close the file object."""
+        self._close()
+
+    def read(self, *a, **k) -> bytes | str:
+        """Read characters ("t") or byes ("b")."""
+        return self._effective_fileobj.read(*a, **k)
+
+    def readline(self, *a, **k) -> bytes | str:
+        """Read lines ("t")."""
+        return self._effective_fileobj.readline(*a, **k)
+
+    def readinto(self, *a, **k) -> None:
+        """Read bytes into an existing buffer."""
+        return self._effective_fileobj.readinto(*a, **k)
+
+    def write(self, *a, **k) -> int:
+        """Write characters ("t") or bytes ("b")."""
+        return self._effective_fileobj.write(*a, **k)
+
+    def writeline(self, *a, **k) -> int:
+        """Write lines."""
+        return self._effective_fileobj.writeline(*a, **k)
+
+    def peek(self, *a, **k) -> bytes | str:
+        """Read the first bytes without moving the cursor."""
+        return self._effective_fileobj.peek(*a, **k)
+
+    def seek(self, *a, **k) -> int:
+        """Move the cursor."""
+        return self._effective_fileobj.seek(*a, **k)
+
+    def tell(self, *a, **k) -> int:
+        """Return the cursor position."""
+        return self._effective_fileobj.tell(*a, **k)
+
+    def readable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "readable", False) for x in self.fileobjs)
+
+    def writable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "writable", False) for x in self.fileobjs)
+
+    def seekable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "seekable", False) for x in self.fileobjs)
+
+
+async def _maybe_await(obj: object) -> object:
+    if isawaitable(obj):
+        return await obj
+    else:
+        return obj
+
+
+class async_open(open):
+    """Async version of open."""
+
+    async def _close_async(self) -> None:
+        # close all the file-like objects that we've created
+        for fileobj in reversed(self.fileobjs):
+            if isinstance(fileobj, fsspec.asyn.AbstractAsyncStreamedFile):
+                await fileobj.close()
+            else:
+                fileobj.close()
+        self.fileobjs = []
+        self._is_open = False
+
+    async def _open_async(self) -> None:
+        if self._is_open:
+            return
+        if isinstance(self.fileobj, str):
+            await self._fsspec_open_async()
+        if self.compression == 'infer' and 'r' in self.mode:
+            await self._infer_async()
+        self._is_open = True
+
+    async def _fsspec_open_async(self) -> None:
+        # Take the last file object (most likely the input fileobj), which
+        # must be a path, and open it with `fsspec.open()`.
+        uri = stringify_path(self._effective_fileobj)
+        # Ensure that input is a string
+        if not isinstance(uri, str):
+            raise TypeError("Expected a URI, but got:", uri)
+        # Set compression option
+        opt = dict()
+        if not (self.compression == 'infer' and 'r' in self.mode):
+            opt['compression'] = self.compression
+        # Open with fsspec
+        fileobj = await fsopen_async(uri, mode=self.mode, **opt)
+        self.fileobjs.append(fileobj)
+        # -> returns a fsspec object that's not always fully opened
+        #    so open again to be sure.
+        if hasattr(fileobj, 'open_async'):
+            fileobj = await fileobj.open_async()
+            self.fileobjs.append(fileobj)
+        elif hasattr(fileobj, 'open'):
+            fileobj = fileobj.open()
+            self.fileobjs.append(fileobj)
+
+    async def _infer_async(self) -> None:
+        # Take the last file object (which at this point must be a byte
+        # stream) and infer its compression from its magic bytes.
+        fileobj = self._effective_fileobj
+        if not hasattr(fileobj, "peek"):
+            fileobj = BufferedReader(fileobj)
+            self.fileobjs.append(fileobj)
+        try:
+            if hasattr(fileobj, "peek_async"):
+                magic = await fileobj.peek(2)
+            else:
+                magic = fileobj.peek(2)
+        except Exception:
+            return
+        if magic == b'\x1f\x8b':
+            fileobj = IndexedGzipFile(fileobj)
+            self.fileobjs.append(fileobj)
+        if magic == b'BZh':
+            fileobj = BZ2File(fileobj)
+            self.fileobjs.append(fileobj)
+
+    # ------------------------------------------------------------------
+    # open() / IO API
+    # ------------------------------------------------------------------
+
+    async def __aenter__(self) -> IO:  # noqa: D105
+        await self._open_async()
+        return self._effective_fileobj
+
+    async def __aexit__(  # noqa: D105
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self._close_async()
+
+    async def __del__(self) -> None:
+        """Close all owned streams on delete."""
+        await self._close_async()
+
+    async def open(self) -> IO:
+        """Open the file."""
+        await self._open_async()
+        return self
+
+    async def close(self) -> None:
+        """Close the file object."""
+        await self._close_async()
+
+    async def read(self, *a, **k) -> bytes | str:
+        """Read characters ("t") or byes ("b")."""
+        return await _maybe_await(self._effective_fileobj.read(*a, **k))
+
+    async def readline(self, *a, **k) -> bytes | str:
+        """Read lines ("t")."""
+        return await _maybe_await(self._effective_fileobj.readline(*a, **k))
+
+    async def readinto(self, *a, **k) -> None:
+        """Read bytes into an existing buffer."""
+        return await _maybe_await(self._effective_fileobj.readinto(*a, **k))
+
+    async def write(self, *a, **k) -> int:
+        """Write characters ("t") or bytes ("b")."""
+        return await _maybe_await(self._effective_fileobj.write(*a, **k))
+
+    async def writeline(self, *a, **k) -> int:
+        """Write lines."""
+        return await _maybe_await(self._effective_fileobj.writeline(*a, **k))
+
+    async def peek(self, *a, **k) -> bytes | str:
+        """Read the first bytes without moving the cursor."""
+        return await _maybe_await(self._effective_fileobj.peek(*a, **k))
+
+    async def seek(self, *a, **k) -> int:
+        """Move the cursor."""
+        return await _maybe_await(self._effective_fileobj.seek(*a, **k))
+
+    async def tell(self, *a, **k) -> int:
+        """Return the cursor position."""
+        return await _maybe_await(self._effective_fileobj.tell(*a, **k))
+
+    def readable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "readable", False) for x in self.fileobjs)
+
+    def writable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "writable", False) for x in self.fileobjs)
+
+    def seekable(self) -> bool:
+        """Is stream readable."""
+        return all(getattr(x, "seekable", False) for x in self.fileobjs)
