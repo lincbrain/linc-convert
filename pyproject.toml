@@ -28,7 +28,13 @@ cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
 zarr = "^2.0.0"
+indexed_gzip = "*"
 
+[tool.poetry.group.remote]
+optional = true
+[tool.poetry.group.df.dependencies]
+dandi = "^0.44"
+fsspec = ">= 2021.0.0"
 
 [tool.poetry.group.df]
 optional = true
@@ -49,7 +55,7 @@ scipy = "*"
 [tool.poetry.group.wk]
 optional = true
 [tool.poetry.group.wk.dependencies]
-wkw = "*" 
+wkw = "*"
 
 [tool.poetry.group.dev]
 optional = true
@@ -108,6 +114,8 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
 ignore = [
+  "ANN002",  # args should not be annotated
+  "ANN003",  # kwargs should not be annotated
   "ANN101",  # self should not be annotated.
   "ANN102"  # cls should not be annotated.
 ]
