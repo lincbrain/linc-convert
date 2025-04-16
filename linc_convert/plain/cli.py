@@ -2,10 +2,15 @@
 # stdlib
 import os.path as op
 import warnings
-from enum import Enum
+from enum import EnumType, StrEnum
+from enum import _EnumDict as EnumDict
+from typing import Annotated
+
+# externals
+from cyclopts import Parameter
 
 # internals
-from linc_convert.cli import main
+from linc_convert.cli import main, plain_group
 from linc_convert.plain.register import (
     format_to_extension,
     known_converters,
@@ -21,18 +26,23 @@ for src, dst in known_converters:
 known_inp_formats = list(set(known_inp_formats))
 known_out_formats = list(set(known_out_formats))
 
-inp_hints = type("inp_hints", (str, Enum), {x: x for x in known_inp_formats})
-out_hints = type("out_hints", (str, Enum), {x: x for x in known_out_formats})
+_inp_dict = EnumDict()
+_inp_dict.update({x for x in known_inp_formats})
+inp_hints = EnumType("inp_hints", (StrEnum,), _inp_dict)
+
+_out_dict = EnumDict()
+_out_dict.update({x for x in known_inp_formats})
+out_hints = EnumType("out_hints", (StrEnum,), _out_dict)
 
 
-@main.default
+@main.command(name="any", group=plain_group)
 def convert(
     inp: str,
     out: str | None = None,
     *,
     inp_hint: inp_hints | None = None,
     out_hint: out_hints | None = None,
-    **kwargs,
+    **kwargs: Annotated[dict, Parameter(show=False)],
 ) -> None:
     """
     Convert between formats while preserving (meta)data as much as possible.

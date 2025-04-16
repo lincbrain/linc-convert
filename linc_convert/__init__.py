@@ -1,4 +1,4 @@
 """Data conversion tools for the LINC project."""
 
-__all__ = ["modalities", "utils"]
-from . import modalities, utils
+__all__ = ["modalities", "plain", "utils"]
+from . import modalities, plain, utils

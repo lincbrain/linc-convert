@@ -3,14 +3,13 @@ import zarr.storage
 from cyclopts import App
 from niizarr import zarr2nii
 
-from linc_convert.cli import main
+from linc_convert.cli import main, plain_group
 from linc_convert.plain.cli import make_output_path
 from linc_convert.plain.register import register_converter
-from linc_convert.utils.dandifs import RemoteDandiFileSystem
 from linc_convert.utils.opener import filesystem
 
-app = App(name="zarr2nii", help_format="markdown")
-main.command(app, group="plain")
+app = App(name="zarr2nii", help_format="markdown", group=plain_group)
+main.command(app)
 
 
 if hasattr(zarr.storage, "FSStore"):
@@ -53,7 +52,8 @@ def convert(
         # Create an authentified fsspec store to pass to zarr2nii
         if not FSStore:
             raise ValueError("Cannot create a fsspec store.")
-        url = RemoteDandiFileSystem().s3_url(inp)
+        import linc_convert.utils.dandifs  # noqa: F401  (register filesystem)
+        url = filesystem(inp).s3_url(inp)
         fs = filesystem(url)
         inp = FSStore(url, fs=fs, mode="r")
 

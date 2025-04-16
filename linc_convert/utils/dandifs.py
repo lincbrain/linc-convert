@@ -148,10 +148,7 @@ class RemoteDandiFileSystem(AbstractFileSystem):
 
     @classmethod
     def for_url(cls, url: str) -> "RemoteDandiFileSystem":
-        """
-        Instantiate a FileSystem that interacts with the correct
-        DANDI instance for a given url.
-        """
+        """Instantiate a FileSystem for the correct instance."""
         instance, dandiset, version, *_ = split_dandi_url(url)
         return cls(dandiset, version, instance)
 
@@ -207,7 +204,8 @@ class RemoteDandiFileSystem(AbstractFileSystem):
         dandiset: RemoteDandiset | None = None,
     ) -> tuple[RemoteDandiset, str]:
         """
-        If path is a relative path, return (self.dandiset, path)
+        If path is a relative path, return (self.dandiset, path).
+
         Else, the path is an absolute URL and we instantiate the correct
         remote dandiset and spit out the relative path.
 
@@ -453,6 +451,7 @@ class RemoteDandiFileSystem(AbstractFileSystem):
 def split_dandi_url(url: str) -> tuple[str, str, str, str, str]:
     """
     Split a valid dandi url into its subparts.
+
     Returns: (instance, dandiset_id, version_id, path, asset_id)
     where instance can be an instance_id or an URL.
     """

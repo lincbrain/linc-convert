@@ -5,14 +5,13 @@ from typing import Annotated, Literal
 from cyclopts import App, Parameter
 from niizarr import nii2zarr
 
-from linc_convert.cli import main
+from linc_convert.cli import main, plain_group
 from linc_convert.plain.cli import make_output_path
 from linc_convert.plain.register import register_converter
-from linc_convert.utils.dandifs import RemoteDandiFileSystem
 from linc_convert.utils.opener import filesystem, open
 
-app = App(name="nii2zarr", help_format="markdown")
-main.command(app, group="plain")
+app = App(name="nii2zarr", help_format="markdown", group=plain_group)
+main.command(app)
 
 
 @dataclasses.dataclass
@@ -79,7 +78,7 @@ class _Nii2ZarrConfig:
     no_pyramid_axis: str | int = None
     fill_value: int | float | complex | None = None
     compressor: Literal['blosc', 'zlib'] = 'blosc'
-    compressor_options: dict = {}
+    compressor_options: dict = dataclasses.field(default_factory=(lambda: {}))
     zarr_version: Literal[2, 3] = 2
     ome_version: Literal["0.4", "0.5"] = "0.4"
 
@@ -96,7 +95,7 @@ def convert(
     out: str | None,
     *,
     config: Nii2ZarrConfig | None = None,
-    **kwargs,
+    **kwargs: Annotated[dict, Parameter(show=False)],
 ) -> None:
     """
     Convert from NIfTI to Zarr.
@@ -117,8 +116,9 @@ def convert(
         out = make_output_path(inp, "niftizarr")
 
     if inp.startswith("dandi://"):
-        # Create an authentified fsspec store to pass to zarr2nii
-        url = RemoteDandiFileSystem().s3_url(inp)
+        # Create an authentified fsspec store to pass to
+        import linc_convert.utils.dandifs  # noqa: F401  (register filesystem)
+        url = filesystem(inp).s3_url(inp)
         fs = filesystem(url)
         with open(fs.open(url)) as stream:
             return nii2zarr(stream, out, **dataclasses.asdict(config))
