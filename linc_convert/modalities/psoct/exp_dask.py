@@ -122,7 +122,15 @@ def convert(
     # generate_pyramid(omz, mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     # logger.info("Write OME-Zarr multiscale metadata")
     # write_ome_metadata(omz, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
+    def print_proc_io():
+        try:
+            with open("/proc/self/io", "r") as proc_io:
+                content = proc_io.read()
+                print(content)
+        except Exception as e:
+            print("Error reading /proc/self/io:", e)
 
+    print_proc_io()
     if not zarr_config.nii:
         logger.info("Conversion complete.")
         return
