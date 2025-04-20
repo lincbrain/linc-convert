@@ -108,8 +108,7 @@ def generate_pyramid(
             crop = [
                 0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape)
             ]
-            # Don't crop the axis not down-sampling
-            # cannot do if not no_pyramid_axis since it could be 0
+            # Only crop the axes that are downsampled
             if no_pyramid_axis is not None:
                 crop[no_pyramid_axis] = 0
             slcr = [slice(-1) if x else slice(None) for x in crop]
