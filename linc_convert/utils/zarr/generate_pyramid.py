@@ -106,7 +106,7 @@ def generate_pyramid(
 
             # Discard the last voxel along odd dimensions
             crop = [
-                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape)
+                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape[-ndim:])
             ]
             # Only crop the axes that are downsampled
             if no_pyramid_axis is not None:
