@@ -78,7 +78,7 @@ def generate_pyramid(
             else:
                 shape.append(max(1, length // 2))
 
-        # Stop if seen enough levels or level shape smaller than chunk size
+        # Stop if seen enough levels or if the level's shape is smaller than the chunk size
         if levels == -1:
             if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
                 break
