@@ -18,8 +18,8 @@ import numpy as np
 import zarr
 from tifffile import TiffFile
 
-from linc_convert import utils
 # internals
+from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
