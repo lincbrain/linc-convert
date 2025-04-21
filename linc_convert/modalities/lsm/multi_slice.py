@@ -86,7 +86,7 @@ def convert(
     max_load
         Maximum input chunk size when building pyramid
     nii
-        Convert to nifti-zarr. True if path ends in ".nii.zarr".
+        Convert to nifti-zarr. True if `out` path ends in ".nii.zarr".
     orientation
         Orientation of the slice
     center
