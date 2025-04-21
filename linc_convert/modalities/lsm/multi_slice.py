@@ -92,7 +92,7 @@ def convert(
     center
         Set RAS[0, 0, 0] at FOV center
     voxel_size
-        Voxel size along the X, Y and Z dimension, in micron.
+        Voxel size along the X, Y and Z dimensions, in microns.
     """
     zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
     chunk: int = zarr_config.chunk[0]
