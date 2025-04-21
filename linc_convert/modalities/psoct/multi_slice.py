@@ -17,9 +17,9 @@ import h5py
 import numpy as np
 
 from linc_convert import utils
-from linc_convert.modalities.psoct._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
+from linc_convert.modalities.psoct.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
     _MatArrayWrapper
-from linc_convert.modalities.psoct._utils import make_json
+from linc_convert.modalities.psoct.utils._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine

@@ -8,20 +8,17 @@ into a OME-ZARR pyramid.
 import json
 import logging
 import os
-from contextlib import contextmanager
 from functools import wraps
 from typing import Callable, Optional
-from warnings import warn
 
 import cyclopts
 import h5py
 import numpy as np
 from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
-from scipy.io import loadmat
 
 from linc_convert import utils
-from linc_convert.modalities.psoct._array_wrapper import _ArrayWrapper, _MatArrayWrapper
-from linc_convert.modalities.psoct._utils import make_json
+from linc_convert.modalities.psoct.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper
+from linc_convert.modalities.psoct.utils._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.ms_dask import _H5ArrayWrapper
 from linc_convert.utils.chunk_processing import chunk_slice_generator

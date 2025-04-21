@@ -1,10 +1,12 @@
 import itertools
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Generator
 
 import nibabel as nib
 import numpy as np
 import zarr
+from numpy._typing import ArrayLike
+from scipy import io as sio
 
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.unit import convert_unit
@@ -108,3 +110,88 @@ def make_json(oct_meta: str) -> dict:
 
     return meta
 
+
+def struct_arr_to_dict(arr: np.void) -> dict:
+    """
+    Convert a NumPy structured array (single record) to a dictionary.
+
+    Parameters:
+        arr (np.void): A structured array element.
+
+    Returns:
+        dict: Dictionary mapping field names to their values.
+    """
+    return {name: arr[name].item() for name in arr.dtype.names}
+
+
+def find_experiment_params(exp_file: str) -> tuple[dict, bool]:
+    """
+    Load experiment parameters from a .mat file, detecting if it's a Fiji experiment.
+
+    Parameters:
+        exp_file (str): Path to the .mat file.
+
+    Returns:
+        tuple:
+            - dict: Experiment parameters.
+            - bool: True if it's a Fiji experiment, False otherwise.
+
+    Raises:
+        ValueError: If no experiment key is found in the file.
+    """
+    is_fiji = False
+    exp_key = None
+
+    for key in mat_vars(exp_file):
+        if 'Experiment_Fiji' in key:
+            exp_key = key
+            is_fiji = True
+            break
+        if 'Experiment' in key:
+            exp_key = key
+
+    if not exp_key:
+        raise ValueError("No Experiment found in .mat file")
+
+    exp_data = sio.loadmat(exp_file, squeeze_me=True)[exp_key]
+    return struct_arr_to_dict(exp_data), is_fiji
+
+
+def mat_vars(mat_file: str) -> Generator[str, None, None]:
+    """
+    Yield variable names from a .mat file, excluding internal variables.
+
+    Parameters:
+        mat_file (str): Path to the .mat file.
+
+    Yields:
+        str: Variable names not starting with '__'.
+    """
+    yield from (name for name, *_ in sio.whosmat(mat_file) if not name.startswith('__'))
+
+
+def atleast_2d_trailing(arr: ArrayLike) -> np.ndarray:
+    """
+    Ensure the input is at least 2D by adding a new axis at the end if needed.
+
+    If the input is 1D, it becomes shape (N, 1).
+    If the input is 0D (scalar), it becomes shape (1, 1).
+    If it's already 2D or more, it's returned unchanged.
+
+    Parameters:
+        arr (ArrayLike): Input array-like object.
+
+    Returns:
+        np.ndarray: A 2D or higher NumPy array with at least two dimensions.
+    """
+    arr = np.asarray(arr)
+    if arr.ndim == 0:
+        return arr.reshape(1, 1)
+    elif arr.ndim == 1:
+        return arr[:, np.newaxis]
+    return arr
+
+
+def load_mat(mat_path, varname):
+    data = sio.loadmat(mat_path, squeeze_me=True)
+    return data[varname]

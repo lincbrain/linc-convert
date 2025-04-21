@@ -10,22 +10,19 @@ WARNING: THIS IS ONLY FOR TESTING IO. NEVER USE FOR PRODUCTION
 import json
 import os
 from functools import wraps
-from itertools import product
 from typing import Callable, Mapping, Optional
 from warnings import warn
 import logging
 
 import cyclopts
-import dask.array
 import h5py
 import numpy as np
 from dask import delayed
 from scipy.io import loadmat
 
 from linc_convert import utils
-from linc_convert.modalities.psoct._utils import make_json
+from linc_convert.modalities.psoct.utils._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr import open_zarr_group, create_array, generate_pyramid
