@@ -74,7 +74,7 @@ def convert(
         subfolders named `*_y{:02d}_z{:02d}*`, each containing a
         collection of files named `*_plane{:03d}_c{:d}.tiff`.
     out
-        Path to the output Zarr directory [<INP>.ome.zarr]
+        Path to the output Zarr directory [<INP>.{ome|nii}.zarr]
     overlap
         Number of pixels between slices that are overlapped
     chunk
