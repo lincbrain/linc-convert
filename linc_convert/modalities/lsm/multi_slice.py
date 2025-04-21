@@ -55,7 +55,7 @@ def convert(
     `{"L", "R", "A", "P", "I", "S"}`, where
 
     * the first letter corresponds to the horizontal dimension and
-        indicates the anatomical meaning of the _right_ of the jp2 image,
+        indicates the anatomical meaning of the _right_ of the image,
     * the second letter corresponds to the vertical dimension and
         indicates the anatomical meaning of the _bottom_ of the image.
 
