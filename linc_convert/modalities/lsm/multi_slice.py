@@ -71,7 +71,7 @@ def convert(
     ----------
     inp
         Path to the root directory, which contains a collection of
-        subfolders named `*_z{:02d}_y{:02d}*`, each containing a
+        subfolders named `*_y{:02d}_z{:02d}*`, each containing a
         collection of files named `*_plane{:03d}_c{:d}.tiff`.
     out
         Path to the output Zarr directory [<INP>.ome.zarr]
