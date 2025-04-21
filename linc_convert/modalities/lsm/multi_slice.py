@@ -71,8 +71,7 @@ def convert(
     ----------
     inp
         Path to the root directory, which contains a collection of
-        subfolders named `*_y{:02d}_z{:02d}*`, each containing a
-        collection of files named `*_plane{:03d}_c{:d}.tiff`.
+        files named `*_y{:02d}_z{:02d}*.tiff*`.
     out
         Path to the output Zarr directory [<INP>.{ome|nii}.zarr]
     overlap
@@ -110,7 +109,7 @@ def convert(
         r"^(?P<prefix>\w*)" r"_y(?P<y>[0-9]+)" r"_z(?P<z>[0-9]+)" r"(?P<suffix>\w*)$"
     )
 
-    all_chunks_filenames = list(sorted(glob(os.path.join(inp, "*_y*_z*"))))
+    all_chunks_filenames = list(sorted(glob(os.path.join(inp, "*_y*_z*.tiff"))))
     all_chunks_info = dict(filename=[], prefix=[], suffix=[], z=[], y=[])
 
     # parse all directory names
