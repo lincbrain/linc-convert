@@ -75,9 +75,9 @@ def mosaic3d_telesto(
     xv = np.linspace(0, 1, int(rx))
     yv = np.linspace(0, 1, int(ry))
     x = np.ones(size_row)
-    x[:rx], x[-rx:] = xv, xv
+    x[:rx], x[-rx:] = xv, xv[::-1]
     y = np.ones(size_column)
-    y[:ry], y[-ry:] = yv, yv
+    y[:ry], y[-ry:] = yv, yv[::-1]
     Ramp2D = da.from_array(np.outer(x, y)[:, :], chunks=(size_row, size_column))
     Ramp3D = Ramp2D[...,None]
 
@@ -116,8 +116,8 @@ def mosaic3d_telesto(
 
             else:
                 mat_path = op.join(base_dir, FileNameFormat[0,0]%tile_id)
-                arr = sio.loadmat(mat_path, squeeze_me=True)[next(mat_vars(mat_path))]
-                arr = da.from_array(arr, chunks='auto')
+                # arr = sio.loadmat(mat_path, squeeze_me=True)[next(mat_vars(mat_path))]
+                # arr = da.from_array(arr, chunks='auto')
                 name, shape, dtype = None, None, None
                 for name, shape, dtype in sio.whosmat(mat_path):
                     if not name.startswith("__"):
@@ -139,37 +139,30 @@ def mosaic3d_telesto(
 
             arr = arr[xp:, yp:, :]
 
-            if modality == "mus":
-                if ftype == 'mat':
-                    arr = arr[:, :, :MZL]
-                elif ftype == 'nifti':
-                    # shape (H, W, N)
-                    I = 10.0 ** (arr / 10.0)
+            if modality == "mus" and ftype == 'nifti':
+                # shape (H, W, N)
+                I = 10.0 ** (arr / 10.0)
 
-                    # compute, for each k=0..MZL-1, the sum I[:, :, k+1:]
-                    # via a reverse cumulative-sum trick:
-                    # reverse along the 3rd axis  → shape (H,W,N)
-                    I_rev = I[:, :, ::-1]
-                    # cumulative sum in reversed order → (H,W,N)
-                    cumsum_rev = np.cumsum(I_rev,
-                                           axis=2)
-                    # drop the very first (no “next” beyond the last) → (H,W,N-1)
-                    sum_excl_rev = cumsum_rev[:, :,:-1]
-                    # flip back to original order → (H,W,N-1)
-                    sum_excl = sum_excl_rev[:, :, ::-1]
+                # compute, for each k=0..MZL-1, the sum I[:, :, k+1:]
+                # via a reverse cumulative-sum trick:
+                # reverse along the 3rd axis  → shape (H,W,N)
+                I_rev = I[:, :, ::-1]
+                # cumulative sum in reversed order → (H,W,N)
+                cumsum_rev = np.cumsum(I_rev,
+                                       axis=2)
+                # drop the very first (no “next” beyond the last) → (H,W,N-1)
+                sum_excl_rev = cumsum_rev[:, :,:-1]
+                # flip back to original order → (H,W,N-1)
+                sum_excl = sum_excl_rev[:, :, ::-1]
 
-                    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
-                    sum_excl = sum_excl[:, :, :MZL]  # keep only the first MZL sums → (H,W,MZL)
+                # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
+                sum_excl = sum_excl[:, :, :MZL]  # keep only the first MZL sums → (H,W,MZL)
 
-                    # divide elementwise and apply the constant factors
-                    arr = I[:, :, :MZL] / sum_excl / (2.0 * 0.0025)
+                # divide elementwise and apply the constant factors
+                arr = I[:, :, :MZL] / sum_excl / (2.0 * 0.0025)
 
-                else:
-                    raise Exception("unknown file type")
-            elif modality == "dBI":
-                arr = arr[:,:,:MZL]
             else:
-                raise Exception("unknown modality")
+                arr = arr[:,:,:MZL]
             M_acc[row_range, column_range, :] += arr * Ramp3D
             W_acc[row_range, column_range] += Ramp2D
 
