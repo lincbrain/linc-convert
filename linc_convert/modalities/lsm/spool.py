@@ -234,8 +234,8 @@ def convert(
             if tile_info.y != min_y_tile:
                 dat = dat[:, overlap // 2:, :]
             # if not last y tile, crop half overlapped rows at the end
-            # if overlap is odd, we need to crop an extra row
-            if tile_info.z != max_z_tile:
+            # if overlap is odd, we need to crop an extra column
+            if tile_info.y != max_y_tile:
                 dat = dat[:, :-overlap // 2 - (overlap % 2), :]
         ystart = sum(expected_sy[min_y_tile + y_idx] - overlap for y_idx in
                      range(rel_y))
