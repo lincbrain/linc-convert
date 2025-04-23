@@ -210,7 +210,7 @@ def mosaic2d_telesto(
             if lower_mod == 'orientation':
                 rad = np.deg2rad(arr)
                 c, s = np.cos(rad), np.sin(rad)
-                SLO_OC = np.stack([c * c, c * s, c * s, c * c], axis=-1)
+                SLO_OC = np.stack([c * c, c * s, c * s, s*s], axis=-1)
                 # add weighted outer products
                 M[row_slice, col_slice] += SLO_OC * RampOrig[...,None]
                 Ma[row_slice, col_slice] += RampOrig
@@ -232,6 +232,11 @@ def mosaic2d_telesto(
         avg = M / Ma[:, :, None]
 
         if lower_mod == 'orientation':
+            avg = np.array(avg)
+            ref = loadmat(op.join(
+                "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
+                f"{modalstr}_slice{1:03d}.raw.mat"))['M']
+            np.testing.assert_array_almost_equal(ref, avg)
             print("Starting orientation angles eigen decomp...")
             h, w = M.shape[:2]
             a_x = avg.reshape((h * w, 2, 2))
@@ -254,12 +259,11 @@ def mosaic2d_telesto(
             O[O < -90] += 180
             O[O > 90] -= 180
             MosaicFinal = np.rot90(O, k=-1)
-            ref = loadmat(op.join(
-                "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
-                f"{modalstr}_slice{1:03d}.mat"))['MosaicFinal']
-            np.testing.assert_array_almost_equal(ref, MosaicFinal)
+            # ref = loadmat(op.join(
+            #     "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
+            #     f"{modalstr}_slice{1:03d}.mat"))['MosaicFinal']
+            # np.testing.assert_array_almost_equal(ref, MosaicFinal)
 
-            return MosaicFinal
             #
             # # save orientation mosaic
 
@@ -278,14 +282,15 @@ def mosaic2d_telesto(
             # I1 = exposure.rescale_intensity(data1.astype(np.float64),
             #                                 in_range='image') / (1 - 0.4)
             # I1 = np.clip(I1, 0, 1)
-            # I1[data4 <= 20] = 0
             # map3D = np.ones((*O_norm.shape, 3))
             # map3D[..., 0] = O_norm
             # map3D[..., 2] = I1
             # maprgb = hsv2rgb(map3D)
             # imageio.imwrite(
-            #     os.path.join(outdir, f"{modalstr}1_slice{sliceid_out:03d}.tiff"),
+            #     op.join("/local_mount/space/megaera/1/users/kchai/psoct", f"{modalstr}1_slice{1:03d}.tiff"),
             #     (maprgb * 255).astype(np.uint8))
+
+            return MosaicFinal
             #
             # # Orientation2
             # I2 = (-exposure.rescale_intensity(data2.astype(np.float64),
