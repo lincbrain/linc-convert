@@ -1,16 +1,16 @@
-import os.path as op
 import logging
+import os.path as op
 from colorsys import hsv_to_rgb
+from typing import Optional
 
 import cyclopts
-import imageio
-import numpy as np
-import scipy.io as sio
-import nibabel as nib
 import dask
 import dask.array as da
+import imageio
+import nibabel as nib
+import numpy as np
+import scipy.io as sio
 import tensorstore as ts
-from scipy.io import loadmat
 from skimage.exposure import exposure
 
 from linc_convert.modalities.psoct.cli import psoct
@@ -27,12 +27,11 @@ psoct.command(mosaic2d)
 
 @mosaic2d.default
 def mosaic2d_telesto(
-        # inp:str,
         parameter_file: str,
         *,
-
         modality: str,
         method: str = None,
+        tiff_output_dir: str = None,
         zarr_config: ZarrConfig = None,
 ) -> None:
     """
@@ -44,305 +43,54 @@ def mosaic2d_telesto(
         Paths
 
     """
-    # Load .mat containing Parameters, Scan, and Mosaic2D
-    params = sio.loadmat(parameter_file, squeeze_me=True)
-    Parameters = struct_arr_to_dict(params['Parameters'])
-    Scan = struct_arr_to_dict(params['Scan'])
-    Mosaic2D = struct_arr_to_dict(params['Mosaic2D'])
-
-    use_method = method is not None
     logger.info(f"--Modality is {modality}--")
 
-    sliceidx = atleast_2d_trailing(Mosaic2D['sliceidx'])
+    # Load .mat containing Parameters, Scan, and Mosaic2D
+    raw = sio.loadmat(parameter_file, squeeze_me=True)
+    params = struct_arr_to_dict(raw['Parameters'])
+    scan_params = struct_arr_to_dict(raw['Scan'])
+    mosaic_params = struct_arr_to_dict(raw['Mosaic2D'])
 
-    Exp, is_fiji = find_experiment_params(Mosaic2D['Exp'])
+    slice_indices = atleast_2d_trailing(mosaic_params['sliceidx'])
+    exp_params, is_fiji = find_experiment_params(mosaic_params['Exp'])
+    input_dirs = np.atleast_1d(mosaic_params['indir'])
+    file_format_template = mosaic_params['file_format']
+    filetype = mosaic_params['InFileType'].lower()
+    transpose_needed = bool(params['transpose'])
 
-    if use_method:
-        Exp['X_Mean'] = Exp[method]['X_Mean']
-        Exp['Y_Mean'] = Exp[method]['Y_Mean']
-
-    indir = np.atleast_1d(Mosaic2D['indir'])
-
-    file_format = Mosaic2D['file_format']
-    filetype = Mosaic2D['InFileType'].lower()
-    transpose_flag = bool(Parameters['transpose'])
-
-    if Scan['System'] == 'Octopus':
-        xp, yp = Parameters['YPixClip'], Parameters['XPixClip']
-    else:
-        xp, yp = Parameters['XPixClip'], Parameters['YPixClip']
-    xp, yp = int(xp), int(yp)
+    clip_x, clip_y = int(params['XPixClip']), int(params['YPixClip'])
+    if scan_params['System'].lower() == 'octopus':
+        clip_x, clip_y = clip_y, clip_x
 
     # Mosaic geometry
-    nb_pix = int(Exp['NbPix'])
-    size_row, size_column = nb_pix - xp, nb_pix - yp
-    # need to copy here
-    X, Y = Exp['X_Mean'], Exp['Y_Mean']
-    X -= np.nanmin(X)
-    Y -= np.nanmin(Y)
-    MXL = int(np.nanmax(X) + size_row)
-    MYL = int(np.nanmax(Y) + size_column)
-    MZL = 4 if modality =='Orientation' else 1
-
-    # Precompute blending ramps
-    dx = np.nanmedian(np.diff(X, axis=0))
-    dy = np.nanmedian(np.diff(Y, axis=1))
-    rx, ry = size_row - round(dx), size_column - round(dy)
-    xv = np.linspace(0, 1, int(rx))
-    yv = np.linspace(0, 1, int(ry))
-    x = np.ones(size_row)
-    x[:rx], x[-rx:] = xv, xv[::-1]
-    y = np.ones(size_column)
-    y[:ry], y[-ry:] = yv, yv[::-1]
-    RampOrig = da.from_array(np.outer(x, y)[:, :], chunks=(size_row, size_column))
-
-    GrayRange = None
-    savetiff = True
-    noscale = False
-    key_map = {
-        'aip': 'AipGrayRange',
-        'mip': 'MipGrayRange',
-        'retardance': 'RetGrayRange',
-        'mus': 'musGrayRange',
-        'surf': 'surfGrayRange'
-    }
-    lower_mod = modality.lower()
-    if lower_mod in key_map:
-        GrayRange = Parameters.get(key_map[lower_mod])
-        if GrayRange is None:
-            noscale = True
+    tile_size = int(exp_params['NbPix'])
+    tile_width, tile_height = tile_size - clip_x, tile_size - clip_y
+    if method:
+        x_coords, y_coords = get_tile_coordinates(exp_params[method]['X_Mean'],
+                                                  exp_params[method]['Y_Mean'])
     else:
-        dyn_key = f"{modality}GrayRange"
-        GrayRange = Parameters.get(dyn_key)
-        if GrayRange is None:
-            noscale = True
-    if noscale:
-        savetiff = False
-        logger.warning(
-            f"{modality} grayscale range not found. Only MAT file will be saved.")
+        x_coords, y_coords = get_tile_coordinates(exp_params['X_Mean'],
+                                                  exp_params['Y_Mean'])
+    total_width = int(np.nanmax(x_coords) + tile_width)
+    total_height = int(np.nanmax(y_coords) + tile_height)
+    total_depth = 4 if modality.lower() == 'orientation' else 1
+    ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
 
-    # ----- Modality string when inconsistency in file names -----
-    modality_base = params['Enface']['inputstr'].item()  # assumed list of strings
-    # find entry containing first 3 letters of modality
-    modality_str = next((s for s in modality_base if lower_mod[:3] in s.lower()),
-                        None)
-    if modality_str is None:
-        modality_str = modality[:3]
-        logger.warning(f"{modality} not in Enface.inputstr. Mosaic2D might fail.")
+    gray_range, save_tiff = _get_gray_range(params, modality)
+    if not save_tiff:
+        tiff_output_dir = None
 
-    # using float32 sample
-    sample_dtype = np.float32
+    modality_str = _select_modality_string(raw, modality)
 
-    MapIndex = Exp['MapIndex_Tot_offset'] + Exp['First_Tile'] - 1
-    num_slices = sliceidx.shape[1]
-    mosaics = {}
-
-    def build_slice(s: int) -> da.Array:
-        sl_in, sl_out, sl_run = sliceidx[:, s]
-        indir_curr = indir[int(sl_run) - 1]
-        base = op.join(indir_curr, file_format)
-
-        M = da.zeros((MXL, MYL, MZL), dtype=np.float32, chunks='auto')
-        Ma = da.zeros((MXL, MYL), dtype=np.float32, chunks='auto')
-
-
-        for (jj, ii), idx in np.ndenumerate(MapIndex):
-            if idx <= 0 or np.isnan(X[jj, ii]):
-                continue
-            r0 = int(X[jj, ii])
-            c0 = int(Y[jj, ii])
-            row_slice = slice(r0, r0 + size_row)
-            col_slice = slice(c0, c0 + size_column)
-            tile_id = (sl_in - 1) * int(Exp['TilesPerSlice']) + idx
-            if filetype == 'nifti':
-                if modality == "mus":
-                    path = get_volname(base, tile_id, "cropped")
-                else:
-                    path = get_volname(base, tile_id, modality_str)
-                header = nib.load(path)
-                shape = header.shape
-                dtype = header.get_data_dtype()
-                delayed_arr = dask.delayed(header.get_fdata)()
-
-            elif filetype == 'mat':
-                mat_path = get_volname(base, tile_id, modality_str)
-                name, shape, dtype = None, None, None
-                for name, shape, dtype in sio.whosmat(mat_path):
-                    if not name.startswith("__"):
-                        break
-                if not name:
-                    raise ValueError("Variable not found")
-                delayed_arr = dask.delayed(load_mat)(mat_path, name)
-            arr = da.from_delayed(delayed_arr,
-                                  shape=shape,
-                                  dtype=dtype)
-            if Scan['System'].lower() == 'octopus':
-                arr = np.swapaxes(arr, 0,1)
-            if transpose_flag:
-                arr = np.swapaxes(arr, 0,1)
-            arr = arr[xp:,yp:]
-            if modality == "mus" and filetype == 'nifti':
-                # shape (H, W, N)
-                I = 10.0 ** (arr / 10.0)
-
-                # compute, for each k=0..MZL-1, the sum I[:, :, k+1:]
-                # via a reverse cumulative-sum trick:
-                # reverse along the 3rd axis  → shape (H,W,N)
-                I_rev = I[:, :, ::-1]
-                # cumulative sum in reversed order → (H,W,N)
-                cumsum_rev = np.cumsum(I_rev,
-                                       axis=2)
-                # drop the very first (no “next” beyond the last) → (H,W,N-1)
-                sum_excl_rev = cumsum_rev[:, :, :-1]
-                # flip back to original order → (H,W,N-1)
-                sum_excl = sum_excl_rev[:, :, ::-1]
-
-                # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
-                sum_excl = sum_excl[:, :,
-                           :MZL]  # keep only the first MZL sums → (H,W,MZL)
-
-                # divide elementwise and apply the constant factors
-                I = I[:, :, :MZL] / sum_excl / (2.0 * 0.0025)
-                arr = np.squeeze(np.mean(I, axis=2))
-
-
-            # blend
-            if lower_mod == 'orientation':
-                rad = np.deg2rad(arr)
-                c, s = np.cos(rad), np.sin(rad)
-                SLO_OC = np.stack([c * c, c * s, c * s, s*s], axis=-1)
-                # add weighted outer products
-                M[row_slice, col_slice] += SLO_OC * RampOrig[...,None]
-                Ma[row_slice, col_slice] += RampOrig
-            else:
-                if arr.ndim ==2:
-                    M[row_slice, col_slice] += (arr* RampOrig)[..., None]
-                else:
-                    M[row_slice, col_slice] += arr * RampOrig
-                Ma[row_slice, col_slice] += RampOrig
-
-        modalstr_map = {
-            'mip': 'MIP',
-            'aip': 'AIP',
-            'retardance': 'Retardance',
-            'orientation': 'Orientation',
-            'mus': 'mus'
-        }
-        modalstr = modalstr_map.get(lower_mod, modality)
-        avg = M / Ma[:, :, None]
-
-        if lower_mod == 'orientation':
-            avg = np.array(avg)
-            ref = loadmat(op.join(
-                "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
-                f"{modalstr}_slice{1:03d}.raw.mat"))['M']
-            np.testing.assert_array_almost_equal(ref, avg)
-            print("Starting orientation angles eigen decomp...")
-            h, w = M.shape[:2]
-            a_x = avg.reshape((h * w, 2, 2))
-            eigvals, eigvecs  = np.linalg.eigh(a_x)
-            x = eigvecs[:, 0, 1]
-            y = eigvecs[:, 1, 1]
-            O = np.arctan2(y, x) / np.pi * 180
-            O = O.reshape((h, w))
-            # comp0, comp1, comp2, comp3 = avg[:, :, 0], avg[:, :, 1], avg[:, :, 2], avg[
-            #                                                                        :, :,
-            #                                                                        3]
-            # O = np.zeros((MXL, MYL))
-            # for i in range(MXL):
-            #     for j in range(MYL):
-            #         mat2 = np.array(
-            #             [[comp0[i, j], comp1[i, j]], [comp2[i, j], comp3[i, j]]])
-            #         w, v = np.linalg.eigh(mat2)
-            #         principal = v[:, np.argmax(w)]
-            #         O[i, j] = np.degrees(np.arctan2(principal[1], principal[0]))
-            O[O < -90] += 180
-            O[O > 90] -= 180
-            MosaicFinal = np.rot90(O, k=-1)
-            # ref = loadmat(op.join(
-            #     "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
-            #     f"{modalstr}_slice{1:03d}.mat"))['MosaicFinal']
-            # np.testing.assert_array_almost_equal(ref, MosaicFinal)
-
-            #
-            # # save orientation mosaic
-
-            #
-            # # masking orientation
-            # RetSliceTiff = os.path.join(outdir,
-            #                             f"Retardance_slice{sliceid_out:03d}.tiff")
-            # AipSliceTiff = os.path.join(outdir, f"AIP_slice{sliceid_out:03d}.tiff")
-            # data1 = imageio.imread(RetSliceTiff)
-            # data2 = imageio.imread(AipSliceTiff)
-            # data4 = wiener(data2, (5, 5))
-            #
-            # O_norm = (O + 90) / 180
-            #
-            # # Orientation1
-            # I1 = exposure.rescale_intensity(data1.astype(np.float64),
-            #                                 in_range='image') / (1 - 0.4)
-            # I1 = np.clip(I1, 0, 1)
-            # map3D = np.ones((*O_norm.shape, 3))
-            # map3D[..., 0] = O_norm
-            # map3D[..., 2] = I1
-            # maprgb = hsv2rgb(map3D)
-            # imageio.imwrite(
-            #     op.join("/local_mount/space/megaera/1/users/kchai/psoct", f"{modalstr}1_slice{1:03d}.tiff"),
-            #     (maprgb * 255).astype(np.uint8))
-
-            return MosaicFinal
-            #
-            # # Orientation2
-            # I2 = (-exposure.rescale_intensity(data2.astype(np.float64),
-            #                                   in_range='image') + 1 - 0.2) / (
-            #                  (1 - 0.2) * 0.5)
-            # I2 = np.clip(I2, 0, 1)
-            # I2[data4 <= 20] = 0
-            # map3D2 = np.ones((*O_norm.shape, 3))
-            # map3D2[..., 0] = O_norm
-            # map3D2[..., 2] = I2
-            # maprgb2 = hsv2rgb(map3D2)
-            # imageio.imwrite(
-            #     os.path.join(outdir, f"{modalstr}2_slice{sliceid_out:03d}.tiff"),
-            #     (maprgb2 * 255).astype(np.uint8))
-            #
-            # # Orientation3
-            # map3D3 = np.ones((*O_norm.shape, 3))
-            # map3D3[..., 0] = O_norm
-            # maprgb3 = hsv2rgb(map3D3)
-            # imageio.imwrite(
-            #     os.path.join(outdir, f"{modalstr}3_slice{sliceid_out:03d}.tiff"),
-            #     (maprgb3 * 255).astype(np.uint8))
-
-        else:
-            avg = np.squeeze(avg)
-            MosaicFinal = np.rot90(avg, k=-1)
-            MosaicFinal = np.nan_to_num(MosaicFinal)
-
-            # if savetiff:
-            #     print("Saving .tiff mosaic...")
-            nonlocal GrayRange
-            if isinstance(GrayRange,np.ndarray):
-                GrayRange =tuple(GrayRange[:])
-            normed = exposure.rescale_intensity(MosaicFinal,
-                                                in_range=GrayRange if GrayRange is not None else 'image')
-            imageio.imwrite(
-                op.join("/local_mount/space/megaera/1/users/kchai/psoct", f"{modalstr}_slice{1:03d}.tiff"),
-                (normed * 255).astype(np.uint8))
-            # print("Saving .mat mosaic...")
-            # savemat(os.path.join(outdir, f"{modalstr}_slice{sliceid_out:03d}.mat"),
-            #         {'MosaicFinal': MosaicFinal})
-            ref = loadmat(op.join(
-                "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
-                f"{modalstr}_slice{1:03d}.mat"))['MosaicFinal']
-            diff = np.abs(ref-MosaicFinal).compute()
-            i,j = np.where(diff==np.max(diff))
-            i,j = ref.shape[-1]-j-1, i
-            print(i,j)
-            np.testing.assert_array_almost_equal(ref, MosaicFinal,decimal=4)
-            return MosaicFinal
-
-    slices = [build_slice(s) for s in range(num_slices)]
+    map_indicies = exp_params['MapIndex_Tot_offset'] + exp_params['First_Tile'] - 1
+    num_slices = slice_indices.shape[1]
+    slices = [
+        build_slice(s, slice_indices, scan_params, exp_params, file_format_template,
+                    filetype, gray_range, input_dirs,
+                    map_indicies, modality, modality_str, ramp, tile_height,
+                    tile_width, total_width, total_height, total_depth,
+                    x_coords, y_coords, clip_x, clip_y, transpose_needed,
+                    tiff_output_dir) for s in range(num_slices)]
     arr = da.stack(slices,axis=-1)
     chunk, shard = compute_zarr_layout(arr.shape, arr.dtype, zarr_config)
     wconfig = default_write_config(zarr_config.out, arr.shape, dtype=np.float32,
@@ -354,6 +102,214 @@ def mosaic2d_telesto(
     arr.store(tswriter)
 
     return None
+
+
+def build_slice(slice_idx, slice_indices, scan_params, exp_params, file_format_template,
+                filetype, gray_range, input_dirs, map_indicies, modality, modality_str,
+                ramp, tile_height, tile_width, total_width, total_height, total_depth,
+                x_coords, y_coords, clip_x, clip_y, transpose_needed, tiff_output_dir):
+    lower_mod = modality.lower()
+    slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
+    input_dir = input_dirs[int(slice_idx_run) - 1]
+    file_path_template = op.join(input_dir, file_format_template)
+    canvas = da.zeros((total_width, total_height, total_depth), dtype=np.float32,
+                      chunks='auto')
+    weight = da.zeros((total_width, total_height), dtype=np.float32, chunks='auto')
+    for (index_row, index_column), tile_idx in np.ndenumerate(map_indicies):
+        if tile_idx <= 0 or np.isnan(x_coords[index_row, index_column]) or np.isnan(
+                y_coords[index_row, index_column]):
+            continue
+        r0 = int(x_coords[index_row, index_column])
+        c0 = int(y_coords[index_row, index_column])
+        row_slice = slice(r0, r0 + tile_width)
+        col_slice = slice(c0, c0 + tile_height)
+        tile_id = (slice_idx_in - 1) * int(exp_params['TilesPerSlice']) + tile_idx
+
+        if filetype == 'mat':
+            arr = load_tile_mat(get_volname(file_path_template, tile_id, modality_str))
+        elif filetype == 'nifti':
+            if modality == "mus":
+                arr = load_tile_nifti(
+                    get_volname(file_path_template, tile_id, "cropped"))
+            else:
+                arr = load_tile_nifti(
+                    get_volname(file_path_template, tile_id, modality_str))
+        else:
+            raise ValueError(f"Unsupported file type: {filetype}")
+
+        if scan_params['System'].lower() == 'octopus':
+            arr = np.swapaxes(arr, 0, 1)
+        if transpose_needed:
+            arr = np.swapaxes(arr, 0, 1)
+        arr = arr[clip_x:, clip_y:]
+
+        if modality == "mus" and filetype == 'nifti':
+            # TODO: is this necessary in Mosaic2D?
+            # as total_depth will be 1 and we will crop 1 depth
+            arr = process_mus_nifti(arr, total_depth)
+
+        if lower_mod == 'orientation':
+            rad = np.deg2rad(arr)
+            c, s = np.cos(rad), np.sin(rad)
+            arr = np.stack([c * c, c * s, c * s, s * s], axis=-1)
+
+        if arr.ndim == 2:
+            canvas[row_slice, col_slice] += (arr * ramp)[..., None]
+        else:
+            canvas[row_slice, col_slice] += arr * ramp[..., None]
+        weight[row_slice, col_slice] += ramp
+
+    canvas /= weight[:, :, None]
+
+    if lower_mod == 'orientation':
+        print("Starting orientation angles eigen decomp...")
+        h, w = canvas.shape[:2]
+        a_x = canvas.reshape((h * w, 2, 2))
+        eigvals, eigvecs = np.linalg.eigh(a_x)
+        x = eigvecs[:, 0, 1]
+        y = eigvecs[:, 1, 1]
+        canvas = np.arctan2(y, x) / np.pi * 180
+        canvas = canvas.reshape((h, w))
+        canvas[canvas < -90] += 180
+        canvas[canvas > 90] -= 180
+        canvas = np.rot90(canvas, k=-1)
+    else:
+        canvas = np.squeeze(canvas)
+        canvas = np.nan_to_num(canvas)
+        canvas = np.rot90(canvas, k=-1)
+        if tiff_output_dir:
+            logging.info("Save .tiff mosaic")
+            normed = exposure.rescale_intensity(
+                canvas,
+                in_range=gray_range if gray_range is not None else 'image')
+            imageio.imwrite(
+                op.join(tiff_output_dir, f"{modality}_slice{1:03d}.tiff"),
+                (normed * 255).astype(np.uint8))
+
+        # ref = loadmat(op.join(
+        #     "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
+        #     f"{modality}_slice{1:03d}.mat"))['MosaicFinal']
+        # diff = np.abs(ref-canvas).compute()
+        # i,j = np.where(diff==np.max(diff))
+        # i,j = ref.shape[-1]-j-1, i
+        # print(i,j)
+        # np.testing.assert_array_almost_equal(ref, canvas,decimal=6)
+
+    return canvas
+
+
+def process_mus_nifti(arr, total_depth):
+    I = 10.0 ** (arr / 10.0)
+    I_rev = I[:, :, ::-1]
+    # cumulative sum in reversed order → (H,W,N)
+    cumsum_rev = np.cumsum(I_rev, axis=2)
+    # drop the very first (no “next” beyond the last) → (H,W,N-1)
+    sum_excl_rev = cumsum_rev[:, :, :-1]
+    # flip back to original order → (H,W,N-1)
+    sum_excl = sum_excl_rev[:, :, ::-1]
+    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
+    sum_excl = sum_excl[:, :,
+               :total_depth]  # keep only the first MZL sums → (H,W,MZL)
+    # divide elementwise and apply the constant factors
+    I = I[:, :, :total_depth] / sum_excl / (2.0 * 0.0025)
+    arr = np.squeeze(np.mean(I, axis=2))
+    return arr
+
+
+def load_tile_nifti(path):
+    header = nib.load(path)
+    shape = header.shape
+    dtype = header.get_data_dtype()
+    delayed_arr = dask.delayed(header.get_fdata)()
+    arr = da.from_delayed(delayed_arr,
+                          shape=shape,
+                          dtype=dtype)
+    return arr
+
+
+def load_tile_mat(mat_path):
+    name, shape, dtype = None, None, None
+    for name, shape, dtype in sio.whosmat(mat_path):
+        if not name.startswith("__"):
+            break
+    if not name:
+        raise ValueError("Variable not found")
+    delayed_arr = dask.delayed(load_mat)(mat_path, name)
+    arr = da.from_delayed(delayed_arr,
+                          shape=shape,
+                          dtype=dtype)
+    return arr
+
+
+def _compute_blending_ramp(
+        tile_width: int,
+        tile_height: int,
+        x_coords: np.ndarray,
+        y_coords: np.ndarray,
+) -> da.Array:
+    """
+    Create a 2D blending weight map for overlapping tiles.
+    """
+    dx = np.nanmedian(np.diff(x_coords, axis=0))
+    dy = np.nanmedian(np.diff(y_coords, axis=1))
+    rx, ry = tile_width - round(dx), tile_height - round(dy)
+    xv = np.linspace(0, 1, int(rx))
+    yv = np.linspace(0, 1, int(ry))
+    x = np.ones(tile_width)
+    x[:rx], x[-rx:] = xv, xv[::-1]
+    y = np.ones(tile_height)
+    y[:ry], y[-ry:] = yv, yv[::-1]
+    ramp = da.from_array(np.outer(x, y)[:, :], chunks=(tile_width, tile_height))
+    return ramp
+
+
+def get_tile_coordinates(x_mean, y_mean):
+    x_mean -= np.nanmin(x_mean)
+    y_mean -= np.nanmin(y_mean)
+    return x_mean, y_mean
+
+
+def _get_gray_range(
+        params_dict: dict[str, any], modality: str
+) -> tuple[Optional[tuple | str], bool]:
+    """
+    Determine gray-level range for a modality; return (range, save_tiff_flag).
+    """
+    key_map = {
+        'aip': 'AipGrayRange',
+        'mip': 'MipGrayRange',
+        'retardance': 'RetGrayRange',
+        'mus': 'musGrayRange',
+        'surf': 'surfGrayRange',
+    }
+    low = modality.lower()
+    if low in key_map:
+        gray_range = params_dict.get(key_map[low])
+    else:
+        gray_range = params_dict.get(f"{modality}GrayRange")
+    if gray_range is None:
+        logger.warning(
+            f"{modality} grayscale range not found. TIFF output disabled."
+        )
+        return None, False
+    if isinstance(gray_range, np.ndarray):
+        gray_range = tuple(gray_range[:2])
+    return gray_range, True
+
+
+def _select_modality_string(raw_mat: dict[str, any], modality: str) -> str:
+    """
+    Choose the filename token matching the modality from Enface.inputstr.
+    """
+    candidates = list(raw_mat['Enface']['inputstr'].item())
+    low3 = modality[:3].lower()
+    for token in candidates:
+        if low3 in token.lower():
+            return token
+    logger.warning(
+        f"Modality '{modality}' not found in inputstr; using first 3 letters."
+    )
+    return modality[:3]
 
 
 def get_rgb_4d(ori, value_range):
