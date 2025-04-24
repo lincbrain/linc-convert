@@ -1,7 +1,7 @@
 import logging
 import os.path as op
 from colorsys import hsv_to_rgb
-from typing import Optional
+from typing import Optional, Tuple, Dict
 
 import cyclopts
 import dask
@@ -46,76 +46,80 @@ def mosaic2d_telesto(
     logger.info(f"--Modality is {modality}--")
 
     # Load .mat containing Parameters, Scan, and Mosaic2D
-    raw = sio.loadmat(parameter_file, squeeze_me=True)
-    params = struct_arr_to_dict(raw['Parameters'])
-    scan_params = struct_arr_to_dict(raw['Scan'])
-    mosaic_params = struct_arr_to_dict(raw['Mosaic2D'])
+    raw_mat = sio.loadmat(parameter_file, squeeze_me=True)
+    params = struct_arr_to_dict(raw_mat['Parameters'])
+    scan_info = struct_arr_to_dict(raw_mat['Scan'])
+    mosaic_info = struct_arr_to_dict(raw_mat['Mosaic2D'])
+    exp_params, is_fiji = find_experiment_params(mosaic_info['Exp'])
 
-    slice_indices = atleast_2d_trailing(mosaic_params['sliceidx'])
-    exp_params, is_fiji = find_experiment_params(mosaic_params['Exp'])
-    input_dirs = np.atleast_1d(mosaic_params['indir'])
-    file_format_template = mosaic_params['file_format']
-    filetype = mosaic_params['InFileType'].lower()
+    slice_indices = atleast_2d_trailing(mosaic_info['sliceidx'])
+    input_dirs = np.atleast_1d(mosaic_info['indir'])
+    file_format_template = mosaic_info['file_format']
+    file_type = mosaic_info['InFileType'].lower()
     transpose_needed = bool(params['transpose'])
 
     clip_x, clip_y = int(params['XPixClip']), int(params['YPixClip'])
-    if scan_params['System'].lower() == 'octopus':
+    if scan_info['System'].lower() == 'octopus':
         clip_x, clip_y = clip_y, clip_x
 
-    # Mosaic geometry
     tile_size = int(exp_params['NbPix'])
     tile_width, tile_height = tile_size - clip_x, tile_size - clip_y
-    if method:
-        x_coords, y_coords = get_tile_coordinates(exp_params[method]['X_Mean'],
-                                                  exp_params[method]['Y_Mean'])
-    else:
-        x_coords, y_coords = get_tile_coordinates(exp_params['X_Mean'],
-                                                  exp_params['Y_Mean'])
-    total_width = int(np.nanmax(x_coords) + tile_width)
-    total_height = int(np.nanmax(y_coords) + tile_height)
-    total_depth = 4 if modality.lower() == 'orientation' else 1
-    ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
+    x_coords, y_coords = _normalize_tile_coords(
+        exp_params[method]['X_Mean'] if method else exp_params['X_Mean'],
+        exp_params[method]['Y_Mean'] if method else exp_params['Y_Mean'],
+    )
+    full_width = int(np.nanmax(x_coords) + tile_width)
+    full_height = int(np.nanmax(y_coords) + tile_height)
+    depth = 4 if modality.lower() == 'orientation' else 1
+    blend_ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
 
     gray_range, save_tiff = _get_gray_range(params, modality)
     if not save_tiff:
         tiff_output_dir = None
 
-    modality_str = _select_modality_string(raw, modality)
+    modality_token = _select_modality_token(raw_mat, modality)
+    map_indices = exp_params['MapIndex_Tot_offset'] + exp_params['First_Tile'] - 1
 
-    map_indicies = exp_params['MapIndex_Tot_offset'] + exp_params['First_Tile'] - 1
     num_slices = slice_indices.shape[1]
     slices = [
-        build_slice(s, slice_indices, scan_params, exp_params, file_format_template,
-                    filetype, gray_range, input_dirs,
-                    map_indicies, modality, modality_str, ramp, tile_height,
-                    tile_width, total_width, total_height, total_depth,
-                    x_coords, y_coords, clip_x, clip_y, transpose_needed,
-                    tiff_output_dir) for s in range(num_slices)]
+        build_slice(s, slice_indices=slice_indices, scan_info=scan_info,
+                    exp_params=exp_params, input_dirs=input_dirs,
+                    file_format_template=file_format_template, file_type=file_type,
+                    modality=modality, modality_token=modality_token,
+                    blend_ramp=blend_ramp, map_indices=map_indices,
+                    tile_width=tile_width, tile_height=tile_height,
+                    full_width=full_width, full_height=full_height, depth=depth,
+                    x_coords=x_coords, y_coords=y_coords, clip_x=clip_x, clip_y=clip_y,
+                    transpose_needed=transpose_needed, tiff_output_dir=tiff_output_dir,
+                    gray_range=gray_range) for s in
+        range(num_slices)]
     arr = da.stack(slices,axis=-1)
-    chunk, shard = compute_zarr_layout(arr.shape, arr.dtype, zarr_config)
-    wconfig = default_write_config(zarr_config.out, arr.shape, dtype=np.float32,
-                                   chunk=chunk, shard=shard)
-    wconfig["create"] = True
-    wconfig["delete_existing"] = True
 
-    tswriter = ts.open(wconfig).result()
+    chunk, shard = compute_zarr_layout(arr.shape, arr.dtype, zarr_config)
+    write_cfg = default_write_config(zarr_config.out, arr.shape, dtype=np.float32,
+                                   chunk=chunk, shard=shard)
+    write_cfg["create"] = True
+    write_cfg["delete_existing"] = True
+
+    tswriter = ts.open(write_cfg).result()
     arr.store(tswriter)
 
     return None
 
 
-def build_slice(slice_idx, slice_indices, scan_params, exp_params, file_format_template,
-                filetype, gray_range, input_dirs, map_indicies, modality, modality_str,
-                ramp, tile_height, tile_width, total_width, total_height, total_depth,
-                x_coords, y_coords, clip_x, clip_y, transpose_needed, tiff_output_dir):
+def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
+                file_format_template, file_type, modality, modality_token, blend_ramp,
+                map_indices, tile_width, tile_height, full_width, full_height, depth,
+                x_coords, y_coords, clip_x, clip_y, transpose_needed, tiff_output_dir,
+                gray_range):
     lower_mod = modality.lower()
     slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
     input_dir = input_dirs[int(slice_idx_run) - 1]
     file_path_template = op.join(input_dir, file_format_template)
-    canvas = da.zeros((total_width, total_height, total_depth), dtype=np.float32,
+    canvas = da.zeros((full_width, full_height, depth), dtype=np.float32,
                       chunks='auto')
-    weight = da.zeros((total_width, total_height), dtype=np.float32, chunks='auto')
-    for (index_row, index_column), tile_idx in np.ndenumerate(map_indicies):
+    weight = da.zeros((full_width, full_height), dtype=np.float32, chunks='auto')
+    for (index_row, index_column), tile_idx in np.ndenumerate(map_indices):
         if tile_idx <= 0 or np.isnan(x_coords[index_row, index_column]) or np.isnan(
                 y_coords[index_row, index_column]):
             continue
@@ -125,28 +129,29 @@ def build_slice(slice_idx, slice_indices, scan_params, exp_params, file_format_t
         col_slice = slice(c0, c0 + tile_height)
         tile_id = (slice_idx_in - 1) * int(exp_params['TilesPerSlice']) + tile_idx
 
-        if filetype == 'mat':
-            arr = load_tile_mat(get_volname(file_path_template, tile_id, modality_str))
-        elif filetype == 'nifti':
+        if file_type == 'mat':
+            arr = _load_mat_tile(
+                get_volname(file_path_template, tile_id, modality_token))
+        elif file_type == 'nifti':
             if modality == "mus":
-                arr = load_tile_nifti(
+                arr = _load_nifti_tile(
                     get_volname(file_path_template, tile_id, "cropped"))
             else:
-                arr = load_tile_nifti(
-                    get_volname(file_path_template, tile_id, modality_str))
+                arr = _load_nifti_tile(
+                    get_volname(file_path_template, tile_id, modality_token))
         else:
-            raise ValueError(f"Unsupported file type: {filetype}")
+            raise ValueError(f"Unsupported file type: {file_type}")
 
-        if scan_params['System'].lower() == 'octopus':
+        if scan_info['System'].lower() == 'octopus':
             arr = np.swapaxes(arr, 0, 1)
         if transpose_needed:
             arr = np.swapaxes(arr, 0, 1)
         arr = arr[clip_x:, clip_y:]
 
-        if modality == "mus" and filetype == 'nifti':
+        if modality == "mus" and file_type == 'nifti':
             # TODO: is this necessary in Mosaic2D?
             # as total_depth will be 1 and we will crop 1 depth
-            arr = process_mus_nifti(arr, total_depth)
+            arr = process_mus_nifti(arr, depth)
 
         if lower_mod == 'orientation':
             rad = np.deg2rad(arr)
@@ -154,10 +159,10 @@ def build_slice(slice_idx, slice_indices, scan_params, exp_params, file_format_t
             arr = np.stack([c * c, c * s, c * s, s * s], axis=-1)
 
         if arr.ndim == 2:
-            canvas[row_slice, col_slice] += (arr * ramp)[..., None]
+            canvas[row_slice, col_slice] += (arr * blend_ramp)[..., None]
         else:
-            canvas[row_slice, col_slice] += arr * ramp[..., None]
-        weight[row_slice, col_slice] += ramp
+            canvas[row_slice, col_slice] += arr * blend_ramp[..., None]
+        weight[row_slice, col_slice] += blend_ramp
 
     canvas /= weight[:, :, None]
 
@@ -198,47 +203,18 @@ def build_slice(slice_idx, slice_indices, scan_params, exp_params, file_format_t
     return canvas
 
 
-def process_mus_nifti(arr, total_depth):
-    I = 10.0 ** (arr / 10.0)
-    I_rev = I[:, :, ::-1]
-    # cumulative sum in reversed order → (H,W,N)
-    cumsum_rev = np.cumsum(I_rev, axis=2)
-    # drop the very first (no “next” beyond the last) → (H,W,N-1)
-    sum_excl_rev = cumsum_rev[:, :, :-1]
-    # flip back to original order → (H,W,N-1)
-    sum_excl = sum_excl_rev[:, :, ::-1]
-    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
-    sum_excl = sum_excl[:, :,
-               :total_depth]  # keep only the first MZL sums → (H,W,MZL)
-    # divide elementwise and apply the constant factors
-    I = I[:, :, :total_depth] / sum_excl / (2.0 * 0.0025)
-    arr = np.squeeze(np.mean(I, axis=2))
-    return arr
+def _load_nifti_tile(path: str) -> da.Array:
+    img = nib.load(path)
+    delayed = dask.delayed(img.get_fdata)()
+    return da.from_delayed(delayed, shape=img.shape, dtype=img.get_data_dtype())
 
 
-def load_tile_nifti(path):
-    header = nib.load(path)
-    shape = header.shape
-    dtype = header.get_data_dtype()
-    delayed_arr = dask.delayed(header.get_fdata)()
-    arr = da.from_delayed(delayed_arr,
-                          shape=shape,
-                          dtype=dtype)
-    return arr
-
-
-def load_tile_mat(mat_path):
-    name, shape, dtype = None, None, None
-    for name, shape, dtype in sio.whosmat(mat_path):
-        if not name.startswith("__"):
-            break
-    if not name:
-        raise ValueError("Variable not found")
-    delayed_arr = dask.delayed(load_mat)(mat_path, name)
-    arr = da.from_delayed(delayed_arr,
-                          shape=shape,
-                          dtype=dtype)
-    return arr
+def _load_mat_tile(path: str) -> da.Array:
+    var_name, shape, dtype = next(
+        (n, s, dt) for n, s, dt in sio.whosmat(path) if not n.startswith("__")
+    )
+    delayed = dask.delayed(load_mat)(path, var_name)
+    return da.from_delayed(delayed, shape=shape, dtype=dtype)
 
 
 def _compute_blending_ramp(
@@ -253,25 +229,25 @@ def _compute_blending_ramp(
     dx = np.nanmedian(np.diff(x_coords, axis=0))
     dy = np.nanmedian(np.diff(y_coords, axis=1))
     rx, ry = tile_width - round(dx), tile_height - round(dy)
-    xv = np.linspace(0, 1, int(rx))
-    yv = np.linspace(0, 1, int(ry))
-    x = np.ones(tile_width)
-    x[:rx], x[-rx:] = xv, xv[::-1]
-    y = np.ones(tile_height)
-    y[:ry], y[-ry:] = yv, yv[::-1]
-    ramp = da.from_array(np.outer(x, y)[:, :], chunks=(tile_width, tile_height))
+    xv = np.linspace(0, 1, rx)
+    yv = np.linspace(0, 1, ry)
+    wx = np.ones(tile_width)
+    wy = np.ones(tile_height)
+    wx[:rx], wx[-rx:] = xv, xv[::-1]
+    wy[:ry], wy[-ry:] = yv, yv[::-1]
+    ramp = da.from_array(np.outer(wx, wy)[:, :], chunks=(tile_width, tile_height))
     return ramp
 
 
-def get_tile_coordinates(x_mean, y_mean):
-    x_mean -= np.nanmin(x_mean)
-    y_mean -= np.nanmin(y_mean)
-    return x_mean, y_mean
+def _normalize_tile_coords(x_arr: np.ndarray, y_arr: np.ndarray) -> Tuple[
+    np.ndarray, np.ndarray]:
+    x0, y0 = np.nanmin(x_arr), np.nanmin(y_arr)
+    return x_arr - x0, y_arr - y0
 
 
 def _get_gray_range(
-        params_dict: dict[str, any], modality: str
-) -> tuple[Optional[tuple | str], bool]:
+        params_dict: Dict[str, any], modality: str
+) -> Tuple[Optional[tuple | str], bool]:
     """
     Determine gray-level range for a modality; return (range, save_tiff_flag).
     """
@@ -297,14 +273,14 @@ def _get_gray_range(
     return gray_range, True
 
 
-def _select_modality_string(raw_mat: dict[str, any], modality: str) -> str:
+def _select_modality_token(raw_mat: dict[str, any], modality: str) -> str:
     """
     Choose the filename token matching the modality from Enface.inputstr.
     """
     candidates = list(raw_mat['Enface']['inputstr'].item())
-    low3 = modality[:3].lower()
+    prefix = modality[:3].lower()
     for token in candidates:
-        if low3 in token.lower():
+        if prefix in token.lower():
             return token
     logger.warning(
         f"Modality '{modality}' not found in inputstr; using first 3 letters."
@@ -357,3 +333,21 @@ def get_volname(base_file_name: str, num: int, modality: str) -> str:
     vol_name = vol_name.replace("%tileID", f"{num:03d}")
     vol_name = vol_name.replace("%modality", modality)
     return vol_name
+
+
+def process_mus_nifti(arr, total_depth):
+    I = 10.0 ** (arr / 10.0)
+    I_rev = I[:, :, ::-1]
+    # cumulative sum in reversed order → (H,W,N)
+    cumsum_rev = np.cumsum(I_rev, axis=2)
+    # drop the very first (no “next” beyond the last) → (H,W,N-1)
+    sum_excl_rev = cumsum_rev[:, :, :-1]
+    # flip back to original order → (H,W,N-1)
+    sum_excl = sum_excl_rev[:, :, ::-1]
+    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
+    sum_excl = sum_excl[:, :,
+               :total_depth]  # keep only the first MZL sums → (H,W,MZL)
+    # divide elementwise and apply the constant factors
+    I = I[:, :, :total_depth] / sum_excl / (2.0 * 0.0025)
+    arr = np.squeeze(np.mean(I, axis=2))
+    return arr
