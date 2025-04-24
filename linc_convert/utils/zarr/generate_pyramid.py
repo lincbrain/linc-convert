@@ -114,7 +114,7 @@ def generate_pyramid(
                 windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
                 windowed_shape[2 * no_pyramid_axis + 1] = 1
 
-            dat = dat.reshape(tuple(batch + windowed_shape))
+            dat = dat.reshape(tuple(batch_shape + windowed_shape))
             # -> last `ndim` dimensions have shape 2x2x2
             dat = dat.transpose(
                 list(range(len(batch_shape)))
