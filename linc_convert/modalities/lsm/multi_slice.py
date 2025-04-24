@@ -197,7 +197,7 @@ def convert(
             if chunky != 0:
                 dat = dat[:, overlap // 2 :, :]
             if chunky != max(all_chunks_info["y"])-1:
-                dat = dat[:, :-overlap // 2 - (overlap - 2 * (overlap // 2)), :]
+                dat = dat[:, :-overlap // 2 - (overlap % 2), :]
 
         zstart = sum(shape[chunky][0] for shape in allshapes[:chunkz])
         ystart = sum(shape[1] - overlap for shape in allshapes[chunkz][:chunky])
