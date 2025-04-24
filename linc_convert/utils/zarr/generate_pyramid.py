@@ -38,8 +38,9 @@ def generate_pyramid(
         Maximum number of voxels to load along each dimension.
     mode : {"mean", "median"}
         Whether to use a mean or median moving window.
-    no_pyramid_axis: int | None
-        # TODO:
+    no_pyramid_axis : int | None
+        Axis that should not be downsampled. If None, downsample
+        across all three dimensions.
     Returns
     -------
     shapes : list[list[int]]
@@ -93,7 +94,7 @@ def generate_pyramid(
             crop = [
                 0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], prev_shape)
             ]
-            # Don't crop the axis not down-sampling
+            # Only crop the axes that are downsampled
             if no_pyramid_axis is not None:
                 crop[no_pyramid_axis] = 0
             slcr = [slice(-1) if x else slice(None) for x in crop]
@@ -113,8 +114,8 @@ def generate_pyramid(
                 windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
                 windowed_shape[2 * no_pyramid_axis + 1] = 1
 
-            dat = dat.reshape(tuple(batch_shape + windowed_shape))
-            # -> last `ndim`` dimensions have shape 2x2x2
+            dat = dat.reshape(tuple(batch + windowed_shape))
+            # -> last `ndim` dimensions have shape 2x2x2
             dat = dat.transpose(
                 list(range(len(batch_shape)))
                 + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))

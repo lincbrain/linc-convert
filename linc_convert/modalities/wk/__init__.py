@@ -1,5 +1,6 @@
 """Webknossos annotation converters."""
 
+
 try:
     import wkw as _  # noqa: F401
 

@@ -11,7 +11,7 @@ jobs:
         # glymur needs dynamic library on macos and windows, and causing error
         # os: [ubuntu-22.04, macos-latest, windows-latest]
         os: [ubuntu-22.04]
-        
+
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
           path: ./.venv
           key: venv-${{ hashFiles('poetry.lock') }}
       - name: Install the project dependencies
-        run: poetry install --with dev,lsm,df,wk
+        run: poetry install --with dev --extras all
       - name: Run the automated tests
         run: poetry run pytest -v
         working-directory: ./tests
