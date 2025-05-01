@@ -3,6 +3,7 @@ import logging
 import math
 from typing import Literal, Optional
 
+import dask.array as da
 import numpy as np
 import tqdm
 import zarr
@@ -195,3 +196,108 @@ def get_zarray_options(base_level):
         opts_extra = {}
     opts.update(**opts_extra)
     return opts
+
+
+def generate_pyramid_new(
+    omz: zarr.Group,
+    levels: int = -1,
+    ndim: int = 3,
+    mode: Literal["mean", "median"] = "median",
+    no_pyramid_axis: Optional[int] = None,
+) -> list[list[int]]:
+    """
+    Generate the levels of a pyramid in an existing Zarr.
+
+    Parameters
+    ----------
+    omz : zarr.Group
+        Zarr group object
+    levels : int
+        Number of additional levels to generate.
+        By default, stop when all dimensions are smaller than their
+        corresponding chunk size.
+    ndim : int
+        Number of spatial dimensions.
+    mode : {"mean", "median"}
+        Whether to use a mean or median moving window.
+    no_pyramid_axis : int | None
+        Axis that should not be downsampled. If None, downsample
+        across all three dimensions.
+    Returns
+    -------
+    shapes : list[list[int]]
+        Shapes of all levels, from finest to coarsest, including the
+        existing top level.
+    """
+    # Read properties from base level
+    base_level = omz["0"]
+    base_shape = list(base_level.shape)
+    chunk_size = base_level.chunks
+    opts = get_zarray_options(base_level)
+
+    # Select windowing function
+    window_func = {"median": np.median, "mean": np.mean}[mode]
+
+    batch_shape, spatial_shape = base_shape[:-ndim], base_shape[-ndim:]
+    all_shapes = [spatial_shape]
+
+    # Compute default number of levels based on chunk size
+    if levels == -1:
+        levels = default_levels(spatial_shape, chunk_size[-ndim:], no_pyramid_axis)
+
+    for lvl in tqdm.tqdm(range(1, levels + 1)):
+        # Compute downsampled shape
+        prev_shape = spatial_shape
+        spatial_shape = next_level_shape(prev_shape, no_pyramid_axis)
+        all_shapes.append(spatial_shape)
+        logger.info("Compute level", lvl, "with shape", spatial_shape)
+
+        arr = omz.create_array(str(lvl), shape=batch_shape + spatial_shape, **opts)
+
+        dat = da.from_zarr(omz[str(lvl - 1)])
+        dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)
+        dat = dat.rechunk(arr.chunks)
+        dat.store(arr)
+
+    return all_shapes
+
+
+def compute_next_level(arr, ndim, no_pyramid_axis, window_func):
+    batch_shape, prev_shape = arr.shape[:-ndim], arr.shape[-ndim:]
+    batch_shape = list(batch_shape)
+    crop = [
+        0 if i == 1 else i % 2 for i in prev_shape]
+    if no_pyramid_axis is not None:
+        crop[no_pyramid_axis] = 0
+    slcr = [slice(-1) if x else slice(None) for x in crop]
+    arr = arr[tuple([Ellipsis, *slcr])]
+    if 0 in arr.shape:
+        return
+    patch_shape = arr.shape[-ndim:]
+    # Reshape into patches of shape 2x2x2
+    windowed_shape = [
+        x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
+    ]
+    if no_pyramid_axis is not None:
+        windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
+        windowed_shape[2 * no_pyramid_axis + 1] = 1
+    arr = arr.reshape(tuple(batch_shape + windowed_shape))
+    # -> last `ndim` dimensions have shape 2x2x2
+    arr = arr.transpose(
+        list(range(len(batch_shape)))
+        + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
+        + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
+    )
+    # -> flatten patches
+    smaller_shape = [max(n // 2, 1) for n in patch_shape]
+    if no_pyramid_axis is not None:
+        smaller_shape[no_pyramid_axis] = patch_shape[no_pyramid_axis]
+    arr = arr.reshape(tuple(batch_shape + smaller_shape + [-1]))
+    # Compute the median/mean of each patch
+    dtype = arr.dtype
+    arr = window_func(arr, axis=-1)
+    arr = arr.astype(dtype)
+    return arr
+
+
+
