@@ -175,7 +175,7 @@ def convert(
             yx_shape = list(yx_shape)[0]
             allshapes[zchunk][ychunk] = (nplanes, *yx_shape)
 
-    # check that all chink shapes are compatible
+    # check that all chunk shapes are compatible
     for zchunk in range(nchunkz):
         if len(set(shape[1] for shape in allshapes[zchunk])) != 1:
             raise ValueError("Incompatible Y shapes")
