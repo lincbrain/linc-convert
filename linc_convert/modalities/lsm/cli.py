@@ -1,4 +1,4 @@
-"""Entry-points for Dark Field microscopy converter."""
+"""Entry-points for light sheet microscopy converter."""
 
 from cyclopts import App
 
