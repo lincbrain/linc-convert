@@ -52,7 +52,6 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     os.makedirs(archive_directory, exist_ok=True)
 
     dat_files = list(Path(input_dir).glob("*.dat"))
-    print(dat_files)
     dat_files_size = len(dat_files)
     if dat_files_size:
         print(f"Found {dat_files_size} .dat files in '{input_dir}'.")
