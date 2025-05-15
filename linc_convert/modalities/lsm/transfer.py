@@ -20,7 +20,7 @@ transfer = cyclopts.App(name="transfer", help_format="markdown")
 lsm.command(transfer)
 
 @transfer.default
-def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2):
+def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00):
     """
     Upload .dat files to DANDI in batched, compressed tar archives.
     
