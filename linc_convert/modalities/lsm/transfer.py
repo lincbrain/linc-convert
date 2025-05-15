@@ -66,8 +66,8 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
 
         print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Creating archive batch {batch}")
 
-        archive_path = os.path.join(archive_directory, f"sub-{subject}_desc-batch{batch}.tar.gz")
-        archive = tarfile.open(archive_path, "w:gz")
+        archive_path = os.path.join(archive_directory, f"sub-{subject}_desc-batch{batch}.tar")
+        archive = tarfile.open(archive_path, "w")
         
         batch_size = 0
         batch_files = 0
