@@ -31,6 +31,7 @@ def mosaic2d_telesto(
         *,
         modality: str,
         method: str = None,
+        tilted_illumination: bool = False,
         tiff_output_dir: str = None,
         zarr_config: ZarrConfig = None,
 ) -> None:
@@ -44,6 +45,7 @@ def mosaic2d_telesto(
 
     """
     logger.info(f"--Modality is {modality}--")
+    tilt_postfix = '_tilt' if tilted_illumination else ''
 
     # Load .mat containing Parameters, Scan, and Mosaic2D
     raw_mat = sio.loadmat(parameter_file, squeeze_me=True)
@@ -57,6 +59,7 @@ def mosaic2d_telesto(
     file_format_template = mosaic_info['file_format']
     file_type = mosaic_info['InFileType'].lower()
     transpose_needed = bool(params['transpose'])
+    no_tilted_illumination_scan = scan_info['TiltedIllumination'] != 'Yes'
 
     clip_x, clip_y = int(params['XPixClip']), int(params['YPixClip'])
     if scan_info['System'].lower() == 'octopus':
@@ -64,9 +67,11 @@ def mosaic2d_telesto(
 
     tile_size = int(exp_params['NbPix'])
     tile_width, tile_height = tile_size - clip_x, tile_size - clip_y
+    if tilted_illumination:
+        tile_width = int(exp_params['NbPix' + tilt_postfix]) - clip_x
     x_coords, y_coords = _normalize_tile_coords(
-        exp_params[method]['X_Mean'] if method else exp_params['X_Mean'],
-        exp_params[method]['Y_Mean'] if method else exp_params['Y_Mean'],
+        exp_params[method]['X_Mean'] if method else exp_params['X_Mean' + tilt_postfix],
+        exp_params[method]['Y_Mean'] if method else exp_params['Y_Mean' + tilt_postfix],
     )
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
@@ -78,7 +83,8 @@ def mosaic2d_telesto(
         tiff_output_dir = None
 
     modality_token = _select_modality_token(raw_mat, modality)
-    map_indices = exp_params['MapIndex_Tot_offset'] + exp_params['First_Tile'] - 1
+    map_indices = exp_params['MapIndex_Tot_offset' + tilt_postfix] + exp_params[
+        'First_Tile' + tilt_postfix] - 1
 
     num_slices = slice_indices.shape[1]
     slices = [
@@ -91,13 +97,18 @@ def mosaic2d_telesto(
                     full_width=full_width, full_height=full_height, depth=depth,
                     x_coords=x_coords, y_coords=y_coords, clip_x=clip_x, clip_y=clip_y,
                     transpose_needed=transpose_needed, tiff_output_dir=tiff_output_dir,
-                    gray_range=gray_range) for s in
+                    gray_range=gray_range, tilted_illumination=tilted_illumination,
+                    no_tilted_illumination_scan = no_tilted_illumination_scan) for s in
         range(num_slices)]
     arr = da.stack(slices,axis=-1)
-
+    #TODO: stack 2d -> nifti = arr.rot90.swapaxes(0,1)
     chunk, shard = compute_zarr_layout(arr.shape, arr.dtype, zarr_config)
-    write_cfg = default_write_config(zarr_config.out, arr.shape, dtype=np.float32,
+    write_cfg = default_write_config(op.join(zarr_config.out, '0'), arr.shape, dtype=np.float32,
                                    chunk=chunk, shard=shard)
+    if shard:
+        arr = da.rechunk(arr,chunks=shard)
+    else:
+        arr = da.rechunk(arr,chunks=chunk)
     write_cfg["create"] = True
     write_cfg["delete_existing"] = True
 
@@ -111,9 +122,15 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
                 file_format_template, file_type, modality, modality_token, blend_ramp,
                 map_indices, tile_width, tile_height, full_width, full_height, depth,
                 x_coords, y_coords, clip_x, clip_y, transpose_needed, tiff_output_dir,
-                gray_range):
+                gray_range, tilted_illumination, no_tilted_illumination_scan):
     lower_mod = modality.lower()
     slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
+    mosaic_idx = 2 * slice_idx + 1
+    if tilted_illumination:
+        mosaic_idx += 1
+    if no_tilted_illumination_scan:
+        mosaic_idx = slice_idx_in
+
     input_dir = input_dirs[int(slice_idx_run) - 1]
     file_path_template = op.join(input_dir, file_format_template)
     canvas = da.zeros((full_width, full_height, depth), dtype=np.float32,
@@ -127,18 +144,18 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
         c0 = int(y_coords[index_row, index_column])
         row_slice = slice(r0, r0 + tile_width)
         col_slice = slice(c0, c0 + tile_height)
-        tile_id = (slice_idx_in - 1) * int(exp_params['TilesPerSlice']) + tile_idx
+        tile_id = tile_idx
 
         if file_type == 'mat':
             arr = _load_mat_tile(
-                get_volname(file_path_template, tile_id, modality_token))
+                get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
         elif file_type == 'nifti':
             if modality == "mus":
                 arr = _load_nifti_tile(
-                    get_volname(file_path_template, tile_id, "cropped"))
+                    get_volname(file_path_template, mosaic_idx, tile_id, "cropped"))
             else:
                 arr = _load_nifti_tile(
-                    get_volname(file_path_template, tile_id, modality_token))
+                    get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -151,6 +168,8 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
         if modality == "mus" and file_type == 'nifti':
             # TODO: is this necessary in Mosaic2D?
             # as total_depth will be 1 and we will crop 1 depth
+            # TODO: in the updated version, it was said 2d mus is not updated yet so skip it
+            raise NotImplementedError
             arr = process_mus_nifti(arr, depth)
 
         if lower_mod == 'orientation':
@@ -166,6 +185,7 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
 
     canvas /= weight[:, :, None]
 
+    tilt_postfix = '_tilt' if tilted_illumination else ''
     if lower_mod == 'orientation':
         print("Starting orientation angles eigen decomp...")
         h, w = canvas.shape[:2]
@@ -188,7 +208,7 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
                 canvas,
                 in_range=gray_range if gray_range is not None else 'image')
             imageio.imwrite(
-                op.join(tiff_output_dir, f"{modality}_slice{1:03d}.tiff"),
+                op.join(tiff_output_dir, f"{modality}{tilt_postfix}_slice{slice_idx_out:03d}.tiff"),
                 (normed * 255).astype(np.uint8))
 
         # ref = loadmat(op.join(
@@ -204,7 +224,9 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
 
 
 def _load_nifti_tile(path: str) -> da.Array:
-    img = nib.load(path)
+    img = nib.load(path,mmap=True)
+    # return da.from_delayed(dask.delayed(img.dataobj), shape=img.shape, dtype=img.get_data_dtype())
+    return da.from_array(img.dataobj)
     delayed = dask.delayed(img.get_fdata)()
     return da.from_delayed(delayed, shape=img.shape, dtype=img.get_data_dtype())
 
@@ -229,12 +251,15 @@ def _compute_blending_ramp(
     dx = np.nanmedian(np.diff(x_coords, axis=0))
     dy = np.nanmedian(np.diff(y_coords, axis=1))
     rx, ry = tile_width - round(dx), tile_height - round(dy)
+
     xv = np.linspace(0, 1, rx)
     yv = np.linspace(0, 1, ry)
     wx = np.ones(tile_width)
     wy = np.ones(tile_height)
-    wx[:rx], wx[-rx:] = xv, xv[::-1]
-    wy[:ry], wy[-ry:] = yv, yv[::-1]
+    if rx > 0:
+        wx[:rx], wx[-rx:] = xv, xv[::-1]
+    if ry > 0:
+        wy[:ry], wy[-ry:] = yv, yv[::-1]
     ramp = da.from_array(np.outer(wx, wy)[:, :], chunks=(tile_width, tile_height))
     return ramp
 
@@ -255,6 +280,7 @@ def _get_gray_range(
         'aip': 'AipGrayRange',
         'mip': 'MipGrayRange',
         'retardance': 'RetGrayRange',
+        'birefringence': 'BirefGrayRange',
         'mus': 'musGrayRange',
         'surf': 'surfGrayRange',
     }
@@ -277,13 +303,13 @@ def _select_modality_token(raw_mat: dict[str, any], modality: str) -> str:
     """
     Choose the filename token matching the modality from Enface.inputstr.
     """
-    candidates = list(raw_mat['Enface']['inputstr'].item())
+    candidates = list(raw_mat['Enface']['save'].item())
     prefix = modality[:3].lower()
     for token in candidates:
         if prefix in token.lower():
             return token
     logger.warning(
-        f"Modality '{modality}' not found in inputstr; using first 3 letters."
+        f"Modality '{modality}' not found in Enface.save; using first 3 letters."
     )
     return modality[:3]
 
@@ -313,7 +339,9 @@ def get_rgb_4d(ori, value_range):
     rgb = (rgb * 255).astype(np.uint8)
     return rgb
 
-def get_volname(base_file_name: str, num: int, modality: str) -> str:
+
+def get_volname(base_file_name: str, mosaic_num: int, tile_num: int,
+                modality: str) -> str:
     """
     Generate a volume name by replacing placeholders in the base file name.
 
@@ -329,9 +357,10 @@ def get_volname(base_file_name: str, num: int, modality: str) -> str:
     Returns:
         str: The formatted volume name with placeholders replaced.
     """
-    vol_name = base_file_name
-    vol_name = vol_name.replace("%tileID", f"{num:03d}")
-    vol_name = vol_name.replace("%modality", modality)
+    # vol_name = base_file_name
+    # vol_name = vol_name.replace("%tileID", f"{num:03d}")
+    vol_name = base_file_name % (mosaic_num, tile_num)
+    vol_name = vol_name.replace("[modality]", modality)
     return vol_name
 
 

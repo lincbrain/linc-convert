@@ -1,5 +1,6 @@
 import logging
 import os.path as op
+import warnings
 
 import cyclopts
 import dask.array as da
@@ -8,10 +9,12 @@ import nibabel as nib
 import numpy as np
 import scipy.io as sio
 import tensorstore as ts
+import tqdm
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.mosaic2d import _normalize_tile_coords, \
-    _compute_blending_ramp, process_mus_nifti, _load_mat_tile, _load_nifti_tile
+    _compute_blending_ramp, process_mus_nifti, _load_mat_tile, _load_nifti_tile, \
+    get_volname
 from linc_convert.modalities.psoct.utils._utils import struct_arr_to_dict, \
     find_experiment_params, atleast_2d_trailing, load_mat
 from linc_convert.modalities.psoct.utils._zarr import default_write_config
@@ -27,11 +30,14 @@ psoct.command(mosaic3d)
 def mosaic3d_telesto(
         parameter_file: str,
         *,
+        modality:str,
+        tilted_illumination: bool = False,
         downsample: bool = False,
         use_gpu: bool = False,
         zarr_config: ZarrConfig = None,
 ) -> None:
-
+    logger.info(f"modality is {modality}")
+    tilt_postfix = '_tilt' if tilted_illumination else ''
     # Load parameters
     raw_mat = sio.loadmat(parameter_file, squeeze_me=True)
     params = struct_arr_to_dict(raw_mat['Parameters'])
@@ -41,10 +47,10 @@ def mosaic3d_telesto(
     exp_params, is_fiji = find_experiment_params(mosaic_info['Exp'])
 
     # load variables from parameters
-    modality = mosaic_info['modality']
+    # modality = mosaic_info['modality']
     slice_indices = atleast_2d_trailing(mosaic_info['sliceidx'])
     input_dirs = np.atleast_1d(mosaic_info['indir'])
-    file_format_template = atleast_2d_trailing(scan_info['FileNameFormat'])
+    file_path_template = mosaic_info['file_format']
     file_type = mosaic_info['InFileType'].lower()
 
     clip_x, clip_y = int(params['XPixClip']), int(params['YPixClip'])
@@ -54,33 +60,55 @@ def mosaic3d_telesto(
 
     tile_size = int(exp_params['NbPix'])
     tile_width, tile_height = tile_size - clip_x, tile_size - clip_y
-    x_coords, y_coords = _normalize_tile_coords(exp_params['X_Mean'], exp_params['Y_Mean'],
+    if tilted_illumination:
+        tile_width = int(exp_params['NbPix' + tilt_postfix]) - clip_x
+    x_coords, y_coords = _normalize_tile_coords(exp_params['X_Mean' + tilt_postfix], exp_params['Y_Mean' + tilt_postfix],
     )
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
     depth = int(mosaic_info['MZL'])
 
     blend_ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
-    
+
+    modality_base = raw_mat['Processed3D']['save'].item().flatten()
+    substr = modality[:3]
+    matches = [s for s in modality_base if substr.lower() in str(s).lower()]
+    if matches:
+        modality_token = matches[0]
+    else:
+        modality_token = substr
+        warnings.warn(
+            f"{modality} (current) modality is not included in Enface struct. "
+            "Mosaic3D might fail."
+        )
+
+
     # Map indices
-    map_indices = exp_params['MapIndex_Tot_offset'] + exp_params['First_Tile'] - 1
+    map_indices = exp_params['MapIndex_Tot_offset' + tilt_postfix] + exp_params['First_Tile' + tilt_postfix] - 1
     num_slices = slice_indices.shape[1]
 
+    no_tilted_illumination_scan = scan_info['TiltedIllumination'] != 'Yes'
     # Build full volume graph
     slices = [build_slice(s,blend_ramp, clip_x, clip_y, full_width, full_height, depth,
-                         exp_params, file_format_template, file_type, flip_z,
-                         input_dirs, is_fiji, map_indices, modality,
+                         exp_params, file_path_template, file_type, flip_z,
+                         input_dirs, is_fiji, map_indices, modality, modality_token,
                          scan_info, slice_indices, tile_width, tile_height, x_coords,
-                         y_coords) for s in range(num_slices)]
+                         y_coords, tilted_illumination, no_tilted_illumination_scan) for s in range(num_slices)]
 
-    if len(slices) > 1:
-        volume = stack_slices(modality, mosaic_info, slice_indices, slices)
-    else:
-        volume = slices[0]
-
+    # if len(slices) > 1:
+    #     volume = stack_slices(modality, mosaic_info, slice_indices, slices)
+    # else:
+    #     volume = slices[0]
+    volume= slices[0]
 
     chunk, shard = compute_zarr_layout(volume.shape, volume.dtype, zarr_config)
-    wconfig = default_write_config(zarr_config.out,volume.shape,dtype = np.float32, chunk=chunk,shard=shard)
+
+    if shard:
+        volume = da.rechunk(volume,chunks=shard)
+    else:
+        volume = da.rechunk(volume,chunks=chunk)
+
+    wconfig = default_write_config(op.join(zarr_config.out, '0'),shape=volume.shape,dtype = np.float32, chunk=chunk,shard=shard)
     wconfig["create"] = True
     wconfig["delete_existing"] = True
 
@@ -89,6 +117,7 @@ def mosaic3d_telesto(
 
 
 def stack_slices(modality, mosaic_info, slice_indices, slices):
+    return da.concatenate(slices, axis=2)
     num_slices = len(slices)
     z_off, z_sm, z_s = mosaic_info["z_parameters"][:3]
     # z_off: every slice is going to remove this much from beginning
@@ -182,39 +211,47 @@ def stack_slices(modality, mosaic_info, slice_indices, slices):
 
 
 def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, depth, exp_params,
-                file_format_template, file_type, flip_z, input_dirs, is_fiji,
-                map_indices, modality, scan_info, slice_indices, tile_width,
-                tile_height, x_coords, y_coords):
+                file_path_template, file_type, flip_z, input_dirs, is_fiji,
+                map_indices, modality, modality_token, scan_info, slice_indices, tile_width,
+                tile_height, x_coords, y_coords, tilted_illumination, no_tilted_illumination_scan):
     
     slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
+
+    mosaic_idx = 2 * slice_idx + 1
+    if tilted_illumination:
+        mosaic_idx += 1
+    if no_tilted_illumination_scan:
+        mosaic_idx = slice_idx_in
+
     input_dir = input_dirs[slice_idx_run - 1]
+
     canvas = da.zeros((full_width, full_height, depth),
-                     chunks=(full_width, full_height, depth), dtype=np.float32)
-    weight = da.zeros((full_width, full_height), chunks=(full_width, full_height),
+                     chunks=(tile_width*2, tile_height*2, depth), dtype=np.float32)
+    weight = da.zeros((full_width, full_height), chunks=(tile_width*2, tile_height*2),
                      dtype=np.float32)
+    # canvas = da.zeros((full_width, full_height, depth),
+    #                  chunks=(full_width, full_height, depth), dtype=np.float32)
+    # weight = da.zeros((full_width, full_height), chunks=(full_width, full_height),
+    #                  dtype=np.float32)
     if is_fiji:
         pass
         # following line is commented out in original code
         # MapIndex = Exp['MapIndex_Tot'][:,:, sl_out]
-
-    for (index_row, index_column), tile_idx in np.ndenumerate(map_indices):
+    file_path_template = op.join(input_dir, file_path_template)
+    for (index_row, index_column), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
         if tile_idx <= 0 or np.isnan(x_coords[index_row, index_column]) or np.isnan(
                 y_coords[index_row, index_column]):
             continue
         r0, c0 = int(x_coords[index_row, index_column]), int(y_coords[index_row, index_column])
         row_slice = slice(r0, r0 + tile_width)
         col_slice = slice(c0, c0 + tile_height)
-        tile_id = (slice_idx_in - 1) * int(exp_params['TilesPerSlice']) + tile_idx
+        tile_id = tile_idx
 
         # Load data lazily
         if file_type == 'mat':
-            arr = _load_mat_tile(
-                op.join(input_dir, file_format_template[0, 0] % tile_id))
+            arr = _load_mat_tile(get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
         elif file_type == 'nifti':
-            if tile_id > 120:
-                # do not know why, from matlab code
-                tile_id -= 1
-            arr = _load_nifti_tile(op.join(input_dir, f"test_processed_{tile_id:03d}_cropped.nii"))
+            arr = _load_nifti_tile(get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -226,6 +263,7 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
         arr = arr[clip_x:, clip_y:, :]
 
         if modality == "mus" and file_type == 'nifti':
+            raise NotImplementedError("mus 3d stitching not updated")
             arr = process_mus_nifti(arr, depth)
         else:
             arr = arr[:, :, :depth]
