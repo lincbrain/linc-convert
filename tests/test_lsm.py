@@ -34,15 +34,10 @@ def test_lsm(tmp_path):
 
 def test_transfer():
 
-    if os.environ.get('DANDI_API_KEY', None) is not None:
-        print(f"API_KEY exists with value")
-    else:
-        print(f"API_KEY does not exist")
-
     input_dir = './000051/sourcedata/sub-test1'
+
     process = subprocess.Popen(["/bin/bash", f"linc-convert lsm transfer --input-dir '{input_dir}' --dandiset-url 'https://lincbrain.org/dandiset/000051' --dandi-instance 'linc' --subject 'test1' --output-dir '.' --max-size-gb 0.02 --no-upload"], env=os.environ, shell=True,  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    process.wait()
     stdout, stderr = process.communicate()
 
     if stderr:
