@@ -41,7 +41,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     """
 
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
-
+    os.environ["DANDI_API_KEY"] = os.environ.get("DANDI_API_KEY")
     dandi.download.download(dandiset_url, output_dir=output_dir)
 
     dandiset_id = dandiset_url.split('/')[-1]
