@@ -39,7 +39,8 @@ def test_transfer():
     result = subprocess.run(
         [f"linc-convert lsm transfer --input-dir '{input_dir}' --dandiset-url 'https://lincbrain.org/dandiset/000051' --dandi-instance 'linc' --subject 'test1' --output-dir '.' --max-size-gb 0.02 --no-upload"], 
         shell=True, 
-        capture_output=True)
+        capture_output=True,
+        env=os.environ)
 
     print(result.stdout)
 
