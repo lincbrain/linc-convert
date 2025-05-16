@@ -20,7 +20,7 @@ transfer = cyclopts.App(name="transfer", help_format="markdown")
 lsm.command(transfer)
 
 @transfer.default
-def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00):
+def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00, upload=True):
     """
     Upload .dat files to DANDI in batched, compressed tar archives.
     
@@ -36,7 +36,10 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
         Directory to save the Dandiset directory (default: '.')
     max_size_gb : float, optional
         Maximum size for each archive in GB (default: 2)
+    upload : bool, optional
+        Whether to upload the tar files to DANDI (default: True)
     """
+
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
 
     dandi.download.download(dandiset_url, output_dir=output_dir)
@@ -88,10 +91,11 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     
         print(f"Archive created with {batch_files} files and {batch_size / 1024**2:.2f}MB size.")
         
-        print(f"Uploading {archive_path}.")
-        dandi.upload.upload([dandiset_directory],
-                            dandi_instance=dandi_instance,
-                            )
+        if upload:
+            print(f"Uploading {archive_path}.")
+            dandi.upload.upload([dandiset_directory],
+                                dandi_instance=dandi_instance,
+                                )
 
         del archive
         os.remove(archive_path)
