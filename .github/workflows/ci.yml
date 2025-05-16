@@ -36,5 +36,7 @@ jobs:
       - name: Install the project dependencies
         run: poetry install --with dev --extras all
       - name: Run the automated tests
+        env:
+          DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
         run: poetry run pytest -v
         working-directory: ./tests
