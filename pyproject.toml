@@ -38,7 +38,7 @@ wkw = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile"]
+lsm = ["dandi", "tifffile"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 all = ["glymur", "tifffile", "h5py", "scipy", "wkw"]
