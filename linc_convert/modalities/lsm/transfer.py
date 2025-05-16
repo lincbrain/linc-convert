@@ -96,6 +96,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
             dandi.upload.upload([dandiset_directory],
                                 dandi_instance=dandi_instance,
                                 )
+            os.remove(archive_path)
 
         del archive
         os.remove(archive_path)
