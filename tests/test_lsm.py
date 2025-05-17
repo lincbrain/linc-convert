@@ -9,7 +9,7 @@ import tarfile
 import tifffile
 
 from helper import _cmp_zarr_archives
-from linc_convert.modalities.lsm import mosaic
+from linc_convert.modalities.lsm import mosaic, transfer
 
 
 def _write_test_data(directory: str) -> None:
@@ -36,13 +36,19 @@ def test_transfer():
 
     input_dir = './000051/sourcedata/sub-test1'
 
-    result = subprocess.run(
-        [f"linc-convert lsm transfer --input-dir '{input_dir}' --dandiset-url 'https://lincbrain.org/dandiset/000051' --dandi-instance 'linc' --subject 'test1' --output-dir '.' --max-size-gb 0.02 --no-upload"], 
-        shell=True, 
-        capture_output=True,
-        env=os.environ)
-
-    print(result.stdout)
+    # result = subprocess.run(
+    #     [f"linc-convert lsm transfer --input-dir '{input_dir}' --dandiset-url 'https://lincbrain.org/dandiset/000051' --dandi-instance 'linc' --subject 'test1' --output-dir '.' --max-size-gb 0.02 --no-upload"], 
+    #     shell=True, 
+    #     capture_output=True,
+    #     env=os.environ)
+    # print(result.stdout)
+    transfer.dandi_transfer(input_dir=input_dir, 
+                            dandiset_url='https://lincbrain.org/dandiset/000051', 
+                            dandi_instance='linc', 
+                            subject='test1', 
+                            output_dir='.',  
+                            max_size_gb=0.02, 
+                            upload=False)
 
     extract_dir = './sub-test1'
     os.mkdir(extract_dir)
