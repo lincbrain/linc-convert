@@ -1,10 +1,8 @@
 from pathlib import Path
 
-import dandi.download
 import filecmp
 import numpy as np
 import os
-import subprocess
 import tarfile
 import tifffile
 
@@ -36,22 +34,17 @@ def test_transfer():
 
     input_dir = './000051/sourcedata/sub-test1'
 
-    # result = subprocess.run(
-    #     [f"linc-convert lsm transfer --input-dir '{input_dir}' --dandiset-url 'https://lincbrain.org/dandiset/000051' --dandi-instance 'linc' --subject 'test1' --output-dir '.' --max-size-gb 0.02 --no-upload"], 
-    #     shell=True, 
-    #     capture_output=True,
-    #     env=os.environ)
-    # print(result.stdout)
     transfer.dandi_transfer(input_dir=input_dir, 
                             dandiset_url='https://lincbrain.org/dandiset/000051', 
                             dandi_instance='linc', 
                             subject='test1', 
                             output_dir='.',  
                             max_size_gb=0.02, 
-                            test=True)
+                            upload=False)
 
     extract_dir = './sub-test1'
     os.mkdir(extract_dir)
+
     tar_files = list(Path(input_dir).glob("*.tar"))
     for tar_file in tar_files:
         with tarfile.open(tar_file, "r") as tar:
