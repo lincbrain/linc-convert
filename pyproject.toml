@@ -67,7 +67,7 @@ testpaths = [
   "tests"
 ]
 env = [
-  "DANDI_API_KEY=${DANDI_API_KEY}"
+  "DANDI_API_KEY={DANDI_API_KEY}"
 ]
 
 [tool.mypy]
