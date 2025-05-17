@@ -12,7 +12,6 @@ import tarfile
 import cyclopts
 import dandi.download
 import dandi.upload
-from dandi.dandiapi import DandiAPIClient
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -21,7 +20,7 @@ transfer = cyclopts.App(name="transfer", help_format="markdown")
 lsm.command(transfer)
 
 @transfer.default
-def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00, upload=True):
+def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00, test=False):
     """
     Upload .dat files to DANDI in batched, compressed tar archives.
     
@@ -37,16 +36,15 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
         Directory to save the Dandiset directory (default: '.')
     max_size_gb : float, optional
         Maximum size for each archive in GB (default: 2)
-    upload : bool, optional
-        Whether to upload the tar files to DANDI (default: True)
+    test : bool, optional
+        Whether the call is for the pytest (default: False)
     """
 
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
 
 
-    client = DandiAPIClient("https://api.lincbrain.org/api")
-    client.dandi_authenticate()
-    dandi.download.download(dandiset_url, output_dir=output_dir)
+    if not test:
+        dandi.download.download(dandiset_url, output_dir=output_dir)
 
     dandiset_id = dandiset_url.split('/')[-1]
     dandiset_directory = f'{output_dir}/{dandiset_id}'
@@ -95,7 +93,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     
         print(f"Archive created with {batch_files} files and {batch_size / 1024**2:.2f}MB size.")
         
-        if upload:
+        if not test:
             print(f"Uploading {archive_path}.")
             dandi.upload.upload([dandiset_directory],
                                 dandi_instance=dandi_instance,

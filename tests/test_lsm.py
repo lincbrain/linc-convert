@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import dandi.download
-from dandi.dandiapi import DandiAPIClient
 import filecmp
 import numpy as np
 import os
@@ -43,16 +42,13 @@ def test_transfer():
     #     capture_output=True,
     #     env=os.environ)
     # print(result.stdout)
-    client = DandiAPIClient("https://api.lincbrain.org/api",
-                            token=os.environ.get("DANDI_API_KEY"))
-    client.dandi_authenticate()
     transfer.dandi_transfer(input_dir=input_dir, 
                             dandiset_url='https://lincbrain.org/dandiset/000051', 
                             dandi_instance='linc', 
                             subject='test1', 
                             output_dir='.',  
                             max_size_gb=0.02, 
-                            upload=False)
+                            test=True)
 
     extract_dir = './sub-test1'
     os.mkdir(extract_dir)

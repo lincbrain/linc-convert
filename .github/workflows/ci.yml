@@ -37,8 +37,10 @@ jobs:
           key: venv-${{ hashFiles('poetry.lock') }}
       - name: Install the project dependencies
         run: poetry install --with dev --extras all
-      - name: Run the automated tests
+      - name: Download example data
         env:
           DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
-        run: DANDI_API_KEY=${{ secrets.DANDI_API_KEY }} poetry run pytest -v
+        run: dandi download https://lincbrain.org/dandiset/000051
+      - name: Run the automated tests
+        run: poetry run pytest -v
         working-directory: ./tests
