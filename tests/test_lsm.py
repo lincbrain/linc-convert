@@ -1,10 +1,13 @@
 from pathlib import Path
 
+import filecmp
 import numpy as np
+import os
+import tarfile
 import tifffile
 
 from helper import _cmp_zarr_archives
-from linc_convert.modalities.lsm import mosaic
+from linc_convert.modalities.lsm import mosaic, transfer
 
 
 def _write_test_data(directory: str) -> None:
@@ -26,3 +29,33 @@ def test_lsm(tmp_path):
     output_zarr = tmp_path / "output.zarr"
     mosaic.convert(str(tmp_path), out=str(output_zarr))
     assert _cmp_zarr_archives(str(output_zarr), "data/lsm.zarr.zip")
+
+def test_transfer():
+
+    input_dir = './000051/sourcedata/sub-test1'
+
+    transfer.dandi_transfer(input_dir=input_dir, 
+                            dandiset_url='https://lincbrain.org/dandiset/000051', 
+                            dandi_instance='linc', 
+                            subject='test1', 
+                            output_dir='.',  
+                            max_size_gb=0.02, 
+                            upload=False)
+
+    extract_dir = './sub-test1'
+    os.mkdir(extract_dir)
+
+    tar_files = list(Path(input_dir).glob("*.tar"))
+    for tar_file in tar_files:
+        with tarfile.open(tar_file, "r") as tar:
+            tar.extractall(path=extract_dir)
+        os.remove(tar_file)
+
+    dirs_cmp = filecmp.dircmp(input_dir, extract_dir)
+    
+    assert len(dirs_cmp.left_only)==0 and len(dirs_cmp.right_only)==0, "Files do not match"
+
+    input_dir_size = sum(os.path.getsize(f) for f in os.listdir(input_dir) if os.path.isfile(f))
+    extract_dir_size = sum(os.path.getsize(f) for f in os.listdir(extract_dir) if os.path.isfile(f))
+
+    assert input_dir_size == extract_dir_size, "File sizes do not match"
