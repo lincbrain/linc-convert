@@ -41,9 +41,8 @@ jobs:
         env:
           DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
         run: |
-          eval $(poetry env activate)
-          export POETRY_DANDI_API_KEY=$DANDI_API_KEY
-          poetry run dandi download https://lincbrain.org/dandiset/000051
+          pip install dandi
+          dandi download https://lincbrain.org/dandiset/000051
       - name: Run the automated tests
         run: poetry run pytest -v
         working-directory: ./tests
