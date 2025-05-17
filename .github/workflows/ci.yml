@@ -42,7 +42,7 @@ jobs:
           DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
         run: |
           pip install dandi
-          echo "DANDI_API_KEY=$DANDI_API_KEY" >> $GITHUB_ENV
+          export DANDI_API_KEY=${{ secrets.DANDI_API_KEY }}
           dandi download https://lincbrain.org/dandiset/000051
       - name: Run the automated tests
         run: poetry run pytest -v
