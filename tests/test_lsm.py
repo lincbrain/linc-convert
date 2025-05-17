@@ -46,7 +46,9 @@ def test_transfer():
 
     extract_dir = './sub-test1'
     os.mkdir(extract_dir)
+    print(os.getcwd(), os.listdir(extract_dir))
     tar_files = list(Path(input_dir).glob("*.tar"))
+    print(tar_files)
     for tar_file in tar_files:
         with tarfile.open(tar_file, "r") as tar:
             tar.extractall(path=extract_dir)
