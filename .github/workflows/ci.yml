@@ -40,7 +40,7 @@ jobs:
       - name: Download example data
         env:
           DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
-        run: dandi download https://lincbrain.org/dandiset/000051
+        run: poetry run dandi download https://lincbrain.org/dandiset/000051
       - name: Run the automated tests
         run: poetry run pytest -v
         working-directory: ./tests
