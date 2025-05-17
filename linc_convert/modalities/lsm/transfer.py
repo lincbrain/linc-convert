@@ -12,6 +12,7 @@ import tarfile
 import cyclopts
 import dandi.download
 import dandi.upload
+from dandi.dandiapi import DandiAPIClient
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -41,7 +42,9 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     """
 
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
-    os.environ["DANDI_API_KEY"] = os.environ.get("DANDI_API_KEY")
+
+    client = DandiAPIClient("https://api.lincbrain.org/api")
+    client.dandi_authenticate()
     dandi.download.download(dandiset_url, output_dir=output_dir)
 
     dandiset_id = dandiset_url.split('/')[-1]
