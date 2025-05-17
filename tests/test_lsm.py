@@ -44,17 +44,18 @@ def test_transfer():
                             max_size_gb=0.02, 
                             upload=False)
 
-    extract_dir = './sub-test1'
-    os.mkdir(extract_dir)
+    extract_dir = 'sub-test1'
+    extract_dir_path=os.path.join(os.getcwd(), extract_dir)
+    os.mkdir(extract_dir_path)
     print(os.getcwd(), os.listdir(extract_dir))
     tar_files = list(Path(input_dir).glob("*.tar"))
     print(tar_files)
     for tar_file in tar_files:
         with tarfile.open(tar_file, "r") as tar:
-            tar.extractall(path=extract_dir)
+            tar.extractall(path=extract_dir_path)
         os.remove(tar_file)
 
-    dirs_cmp = filecmp.dircmp(input_dir, extract_dir)
+    dirs_cmp = filecmp.dircmp(input_dir, extract_dir_path)
     
     assert len(dirs_cmp.left_only)==0 and len(dirs_cmp.right_only)==0, "Files do not match"
 
