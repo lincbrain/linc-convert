@@ -43,7 +43,6 @@ def test_transfer():
     #     capture_output=True,
     #     env=os.environ)
     # print(result.stdout)
-    print(os.environ['DANDI_API_KEY'])
     client = DandiAPIClient("https://api.lincbrain.org/api", 
                             token=os.environ['DANDI_API_KEY'])
     client.dandi_authenticate()

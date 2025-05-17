@@ -42,7 +42,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     """
 
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
-    print(os.environ['DANDI_API_KEY'])
+
 
     client = DandiAPIClient("https://api.lincbrain.org/api", 
                             token=os.environ['DANDI_API_KEY'])
