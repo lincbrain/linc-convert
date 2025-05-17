@@ -1,10 +1,8 @@
 from pathlib import Path
 
-import dandi.download
 import filecmp
 import numpy as np
 import os
-import subprocess
 import tarfile
 import tifffile
 
