@@ -43,8 +43,6 @@ def test_transfer():
     #     capture_output=True,
     #     env=os.environ)
     # print(result.stdout)
-    client = DandiAPIClient("https://api.lincbrain.org/api")
-    client.dandi_authenticate()
     transfer.dandi_transfer(input_dir=input_dir, 
                             dandiset_url='https://lincbrain.org/dandiset/000051', 
                             dandi_instance='linc', 
