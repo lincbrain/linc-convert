@@ -61,6 +61,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
     else:
         print(f"No .dat files found in '{input_dir}'.")
         return
+    print(os.getcwd(), os.listdir(dandiset_directory), os.listdir(input_dir), os.listdir(archive_directory))
 
     batch = 0
     file_number = 0
