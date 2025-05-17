@@ -48,7 +48,7 @@ def test_transfer():
     extract_dir_path=os.path.join(os.getcwd(), extract_dir)
     os.mkdir(extract_dir_path)
     print(os.getcwd(), extract_dir_path, os.listdir(extract_dir))
-    tar_files = list(Path(input_dir).glob("*.tar"))
+    tar_files = list(Path(os.path.join(os.getcwd(), input_dir)).glob("*.tar"))
     print(tar_files)
     for tar_file in tar_files:
         with tarfile.open(tar_file, "r") as tar:
