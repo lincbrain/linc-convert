@@ -99,7 +99,6 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
             os.remove(archive_path)
 
         del archive
-        os.remove(archive_path)
         batch += 1
 
         print(f"Progress: {file_number}/{dat_files_size} files processed ({file_number/dat_files_size*100:.2f}%).")
