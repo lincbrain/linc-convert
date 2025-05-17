@@ -42,9 +42,7 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
 
     max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
 
-
-    if not test:
-        dandi.download.download(dandiset_url, output_dir=output_dir)
+    dandi.download.download(dandiset_url, output_dir=output_dir)
 
     dandiset_id = dandiset_url.split('/')[-1]
     dandiset_directory = f'{output_dir}/{dandiset_id}'
