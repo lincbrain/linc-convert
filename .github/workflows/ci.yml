@@ -41,8 +41,8 @@ jobs:
         env:
           DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
         run: |
-          source .venv/bin/activate
-          dandi download https://lincbrain.org/dandiset/000051
+          eval $(poetry env activate)
+          poetry run dandi download https://lincbrain.org/dandiset/000051
       - name: Run the automated tests
         run: poetry run pytest -v
         working-directory: ./tests
