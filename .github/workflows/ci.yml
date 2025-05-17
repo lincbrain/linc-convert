@@ -15,6 +15,9 @@ jobs:
         os: [ubuntu-22.04]
 
     runs-on: ${{ matrix.os }}
+    env:
+      AWS_REGION: us-east-2
+      S3_BUCKET: linc-convert
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,13 +40,15 @@ jobs:
           key: venv-${{ hashFiles('poetry.lock') }}
       - name: Install the project dependencies
         run: poetry install --with dev --extras all
-      - name: Download example data
-        env:
-          DANDI_API_KEY: ${{ secrets.DANDI_API_KEY }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Download example data from S3
         run: |
-          pip install dandi
-          export DANDI_API_KEY=${{ secrets.DANDI_API_KEY }}
-          dandi download https://lincbrain.org/dandiset/000051
+          aws s3 cp s3://${{ env.S3_BUCKET }}/ . --recursive
       - name: Run the automated tests
         run: poetry run pytest -v
         working-directory: ./tests
