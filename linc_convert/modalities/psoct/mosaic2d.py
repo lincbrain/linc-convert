@@ -125,7 +125,7 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
                 gray_range, tilted_illumination, no_tilted_illumination_scan):
     lower_mod = modality.lower()
     slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
-    mosaic_idx = 2 * slice_idx + 1
+    mosaic_idx = 2 * slice_idx_in - 1
     if tilted_illumination:
         mosaic_idx += 1
     if no_tilted_illumination_scan:
