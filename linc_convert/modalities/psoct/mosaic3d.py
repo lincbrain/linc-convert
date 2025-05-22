@@ -217,7 +217,7 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
     
     slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
 
-    mosaic_idx = 2 * slice_idx + 1
+    mosaic_idx = 2 * slice_idx_in - 1
     if tilted_illumination:
         mosaic_idx += 1
     if no_tilted_illumination_scan:
@@ -229,16 +229,13 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
                      chunks=(tile_width*2, tile_height*2, depth), dtype=np.float32)
     weight = da.zeros((full_width, full_height), chunks=(tile_width*2, tile_height*2),
                      dtype=np.float32)
-    # canvas = da.zeros((full_width, full_height, depth),
-    #                  chunks=(full_width, full_height, depth), dtype=np.float32)
-    # weight = da.zeros((full_width, full_height), chunks=(full_width, full_height),
-    #                  dtype=np.float32)
     if is_fiji:
         pass
         # following line is commented out in original code
         # MapIndex = Exp['MapIndex_Tot'][:,:, sl_out]
     file_path_template = op.join(input_dir, file_path_template)
     for (index_row, index_column), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        
         if tile_idx <= 0 or np.isnan(x_coords[index_row, index_column]) or np.isnan(
                 y_coords[index_row, index_column]):
             continue
