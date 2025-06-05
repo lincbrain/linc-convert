@@ -183,7 +183,6 @@ class SpoolSetInterpreter:
             start = idx * axis_0_shape
             stop = start + axis_0_shape
             canvas[start:stop] = spool_file
-        print(canvas.shape)
         return canvas
 
     # this is the modified version for lsm pipeline
