@@ -250,7 +250,7 @@ def generate_pyramid_new(
         prev_shape = spatial_shape
         spatial_shape = next_level_shape(prev_shape, no_pyramid_axis)
         all_shapes.append(spatial_shape)
-        logger.info("Compute level", lvl, "with shape", spatial_shape)
+        logger.info(f"Compute level {lvl} with shape {spatial_shape}")
 
         arr = omz.create_array(str(lvl), shape=batch_shape + spatial_shape, **opts)
 

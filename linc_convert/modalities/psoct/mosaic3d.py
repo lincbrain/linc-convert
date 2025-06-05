@@ -11,16 +11,19 @@ import numpy as np
 import scipy.io as sio
 import tensorstore as ts
 import tqdm
+import zarr
 from cyclopts import Parameter
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.mosaic2d import _normalize_tile_coords, \
-    _compute_blending_ramp, _load_mat_tile, _load_nifti_tile
+    _compute_blending_ramp, _load_mat_tile, _load_nifti_tile, _load_tile
 from linc_convert.modalities.psoct.utils._utils import struct_arr_to_dict, \
     find_experiment_params, atleast_2d_trailing
 from linc_convert.modalities.psoct.utils._zarr import default_write_config
 from linc_convert.utils.zarr.create_array import compute_zarr_layout
+from linc_convert.utils.zarr.generate_pyramid import generate_pyramid_new
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
 
 logger = logging.getLogger(__name__)
 mosaic3d = cyclopts.App(name="mosaic3d", help_format="markdown")
@@ -33,6 +36,7 @@ nib.imageglobals.logger.setLevel(40)
 def mosaic3d_telesto(
         parameter_file: str,
         *,
+        slice_index: int,
         dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
         o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
         r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
@@ -51,21 +55,15 @@ def mosaic3d_telesto(
     r3d_output : str
         Output path for R3D volume.
     """
+    logger.info("started")
     tilt_postfix = '_tilt' if tilted_illumination else ''
     # Load parameters
     raw_mat = sio.loadmat(parameter_file, squeeze_me=True)
     params = struct_arr_to_dict(raw_mat['Parameters'])
     scan_info = struct_arr_to_dict(raw_mat['Scan'])
     mosaic_info = struct_arr_to_dict(raw_mat['Mosaic3D'])
-    # Load Experiment parameters
     exp_params, is_fiji = find_experiment_params(mosaic_info['Exp'])
-
-    # load variables from parameters
-    # modality = mosaic_info['modality']
     slice_indices = atleast_2d_trailing(mosaic_info['sliceidx'])
-    input_dirs = np.atleast_1d(mosaic_info['indir'])
-    file_path_template = mosaic_info['file_format']
-    file_type = mosaic_info['InFileType'].lower()
 
     clip_x, clip_y = int(params['XPixClip']), int(params['YPixClip'])
     if scan_info['System'].lower() == 'octopus':
@@ -84,68 +82,20 @@ def mosaic3d_telesto(
 
     blend_ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
 
-    # Map indices
     map_indices = exp_params['MapIndex_Tot_offset' + tilt_postfix] + exp_params['First_Tile' + tilt_postfix] - 1
-    num_slices = slice_indices.shape[1]
 
     no_tilted_illumination_scan = scan_info['TiltedIllumination'] != 'Yes'
 
     focus = _load_nifti_tile(scan_info['FocusFile'] + tilt_postfix)
     raw_tile_width = int(scan_info['NbPixels' + tilt_postfix])
-    # Build full volume graph
-    slices = [build_slice(s, blend_ramp, clip_x, clip_y, full_width, full_height, depth,
-                          flip_z, is_fiji, map_indices, scan_info, slice_indices,
-                          tile_width, tile_height, x_coords, y_coords,
-                          tilted_illumination, no_tilted_illumination_scan, focus,
-                          raw_tile_width) for s in range(1)]  # num_slices)]
 
-    # if len(slices) > 1:
-    #     volume = stack_slices(mosaic_info, slice_indices, slices)
-    # else:
-    #     volume = slices[0]
-    volume= slices[0]
+    slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_index]
 
-    chunk, shard = compute_zarr_layout(volume[0].shape, volume[0].dtype, zarr_config)
-    writers = []
-    results = []
-    for out, res in zip([dbi_output, r3d_output, o3d_output], volume):
-
-        if shard:
-            res = da.rechunk(res, chunks=shard)
-        else:
-            res = da.rechunk(res, chunks=chunk)
-        wconfig = default_write_config(op.join(out, '0'), shape=res.shape,
-                                       dtype=np.float32, chunk=chunk, shard=shard)
-        wconfig["create"] = True
-        wconfig["delete_existing"] = True
-        tswriter = ts.open(wconfig).result()
-        # tswriter = da.from_array(tswriter, chunks=res.chunks)
-        writers.append(tswriter)
-        results.append(res)
-    task = da.store(results, writers, compute=False)
-    # task.visualize(filename="dag.svg", format="svg")
-    task.compute()
-    # Store the volumes
-    # writer = da.stack(writers, axis=0)
-    # result = da.stack(results, axis=0)
-    # result.store(writer, lock=False, compute=True)
-
-    #
-    # tswriter = ts.open(wconfig).result()
-    # volume.store(tswriter)
-
-def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, depth,
-                flip_z, is_fiji, map_indices, scan_info, slice_indices, tile_width,
-                tile_height, x_coords, y_coords, tilted_illumination,
-                no_tilted_illumination_scan, focus, raw_tile_width):
-    raw_data_dir = scan_info['RawDataDir']
-    input_file_format = scan_info['FileNameFormat']
-    if '.nii' in input_file_format:
-        file_type = 'nifti'
-    elif '.mat' in input_file_format:
-        file_type = 'mat'
-    else:
-        raise ValueError(f"Unsupported file type: {input_file_format}")
+    mosaic_idx = 2 * slice_idx_in - 1
+    if tilted_illumination:
+        mosaic_idx += 1
+    if no_tilted_illumination_scan:
+        mosaic_idx = slice_idx_in
 
     file_prefix = [s for s in np.atleast_1d(scan_info['FilePrefix']) if
                    'cropped' in str(s).lower()]
@@ -154,32 +104,94 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
     else:
         raise ValueError("No complex file prefix found in scan_info['FilePrefix']")
 
-    slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_idx]
+    raw_data_dir = scan_info['RawDataDir']
+    input_file_template = scan_info['FileNameFormat']
+    input_file_template = input_file_template.replace('[modality]', file_prefix)
+    input_file_template = op.join(raw_data_dir, input_file_template)
 
-    mosaic_idx = 2 * slice_idx_in - 1
-    if tilted_illumination:
-        mosaic_idx += 1
-    if no_tilted_illumination_scan:
-        mosaic_idx = slice_idx_in
+    dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx, input_file_template,
+                                                     blend_ramp, clip_x, clip_y,
+                                                     full_width, full_height, depth,
+                                                     flip_z, map_indices, scan_info,
+                                                     tile_width, tile_height, x_coords,
+                                                     y_coords, raw_tile_width)
 
-    dBI_canvas, R3D_canvas, O3D_canvas = [da.zeros((full_width, full_height, depth),
-                                                   chunks=(
-                                                   tile_width * 2, tile_height * 2,
-                                                   depth), dtype=np.float32) for _ in
-                                          range(3)]
-    canvas = da.zeros((full_width, full_height, depth,3), chunks=(
-                                                   tile_width, tile_height,
-                                                   depth, 3), dtype=np.float32)
-    weight = da.zeros((full_width, full_height), chunks=(tile_width, tile_height),
-                     dtype=np.float32)
-    if is_fiji:
-        pass
-        # following line is commented out in original code
-        # MapIndex = Exp['MapIndex_Tot'][:,:, sl_out]
+    if mosaic_idx > 8 and tilted_illumination:
+        O3D_result, R3D_result, dBI_result = temporary_compensation(O3D_result,
+                                                                    R3D_result,
+                                                                    dBI_result, depth,
+                                                                    focus, scan_info)
 
-    dBI_record, R3D_record, O3D_record, weight_record = [], [], [], []
+    chunk, shard = compute_zarr_layout(dBI_result.shape, dBI_result.dtype, zarr_config)
+    writers = []
+    results = []
+    zgroups = []
+    for out, res in zip([dbi_output, r3d_output, o3d_output],
+                        [dBI_result, R3D_result, O3D_result]):
+
+        if shard:
+            res = da.rechunk(res, chunks=shard)
+        else:
+            res = da.rechunk(res, chunks=chunk)
+        zgroup = zarr.create_group(out)
+        zgroups.append(zgroup)
+        wconfig = default_write_config(op.join(out, '0'), shape=res.shape,
+                                       dtype=np.float32, chunk=chunk, shard=shard)
+        wconfig["create"] = True
+        wconfig["delete_existing"] = True
+        tswriter = ts.open(wconfig).result()
+        writers.append(tswriter)
+        results.append(res)
+    task = da.store(results, writers, compute=False)
+    task.compute()
+
+    logger.info("finished")
+    for zgroup in zgroups:
+        generate_pyramid_new(zgroup)
+        write_ome_metadata(zgroup, ["x", "y", "z"])
+    logger.info("finished generating pyramid")
+
+
+# For I80 slab1 use only
+def temporary_compensation(O3D_result, R3D_result, dBI_result, depth, focus, scan_info):
+    Nz = depth
+    # 1) build a mask of pixels needing correction
+    mask_crop = focus <= scan_info['Focus_CropStart']  # (Ny, Nx)
+    # 2) find, for each (y,x), the last index along z where dBI3D == -inf
+    mask_inf = np.isneginf(dBI_result)  # (Ny, Nx, Nz)
+    depth_idx = np.arange(Nz)[None, None, :]  # (1, 1, Nz)
+    last_inf = np.max(np.where(mask_inf, depth_idx, -1), axis=2)
+    # last_inf[y,x] is -1 if there was no -inf, or the maximum index otherwise
+    # 3) decide which pixels actually get shifted
+    do_shift = (mask_crop & (last_inf >= 0))  # (Ny, Nx)
+    # 4) build the "shifted" index array for every (y,x,z)
+    #    new_idx[y,x,z] = last_inf[y,x] + z
+    new_idx = last_inf[..., None] + depth_idx  # (Ny, Nx, Nz)
+    # 5) clip to valid range so we can safely gather,
+    #    then gather each volume
+    clipped = np.clip(new_idx, 0, Nz - 1)
+    dBI3D_shift = np.take_along_axis(dBI_result, clipped, axis=2)
+    R3D_shift = np.take_along_axis(R3D_result, clipped, axis=2)
+    O3D_shift = np.take_along_axis(O3D_result, clipped, axis=2)
+    # 6) zero-out any positions that “fell off the end” (new_idx >= Nz)
+    overflow = new_idx >= Nz
+    dBI3D_shift[overflow] = 0
+    R3D_shift[overflow] = 0
+    O3D_shift[overflow] = 0
+    # 7) select per-pixel whether to keep the original or use the shifted version
+    dBI_result = np.where(do_shift[..., None], dBI3D_shift, dBI_result)
+    R3D_result = np.where(do_shift[..., None], R3D_shift, R3D_result)
+    O3D_result = np.where(do_shift[..., None], O3D_shift, O3D_result)
+    return O3D_result, R3D_result, dBI_result
+
+
+def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, full_width,
+                full_height, depth, flip_z, map_indices, scan_info, tile_width,
+                tile_height, x_coords, y_coords, raw_tile_width):
+    canvas = []
+    weight = []
+
     for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
-        
         if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
                 y_coords[i, j]):
             continue
@@ -187,16 +199,8 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
         row_slice = slice(x0, x0 + tile_width)
         col_slice = slice(y0, y0 + tile_height)
 
-        input_file_name = input_file_format % (mosaic_idx, tile_idx)
-        input_file_name = input_file_name.replace('[modality]', file_prefix)
-        input_file_path = op.join(raw_data_dir, input_file_name)
-
-        if file_type == 'mat':
-            complex3d = _load_mat_tile(input_file_path)
-        elif file_type == 'nifti':
-            complex3d = _load_nifti_tile(input_file_path)
-
-
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
         if complex3d.shape[0] > 4 * raw_tile_width:
             warnings.warn(
                 f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
@@ -212,82 +216,28 @@ def build_slice(slice_idx, blend_ramp, clip_x, clip_y, full_width, full_height, 
         dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
 
         results = da.stack([dBI3D, R3D, O3D], axis=3)
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results.rechunk({3: 3})
         results = results[clip_x:, clip_y:]*blend_ramp[:,:,None,None]
+        canvas_tile = da.zeros((full_width, full_height, depth, 3),
+                               chunks=(
+                                   tile_width, tile_height,
+                                   depth, 3), dtype=np.float32)
+        canvas_tile[row_slice, col_slice, ...] = results
+        weight_tile = da.zeros((full_width, full_height), chunks=(
+            tile_width, tile_height),
+                               dtype=np.float32)
+        weight_tile[row_slice, col_slice] = blend_ramp
+        canvas.append(canvas_tile)
+        weight.append(weight_tile)
 
-        canvas[row_slice, col_slice] += results
-        weight[row_slice, col_slice] += blend_ramp
+    canvas = da.sum(da.stack(canvas, axis=0), axis=0)
+    weight = da.sum(da.stack(weight, axis=0), axis=0)
 
-        #
-        # if mosaic_idx > 8 and tilted_illumination:
-        #     Nz = depth
-        #     # 1) build a mask of pixels needing correction
-        #     mask_crop = focus <= scan_info['Focus_CropStart']  # (Ny, Nx)
-        #
-        #     # 2) find, for each (y,x), the last index along z where dBI3D == -inf
-        #     mask_inf = np.isneginf(dBI3D)  # (Ny, Nx, Nz)
-        #     depth_idx = np.arange(Nz)[None, None, :]  # (1, 1, Nz)
-        #     last_inf = np.max(np.where(mask_inf, depth_idx, -1), axis=2)
-        #     # last_inf[y,x] is -1 if there was no -inf, or the maximum index otherwise
-        #
-        #     # 3) decide which pixels actually get shifted
-        #     do_shift = (mask_crop & (last_inf >= 0))  # (Ny, Nx)
-        #
-        #     # 4) build the "shifted" index array for every (y,x,z)
-        #     #    new_idx[y,x,z] = last_inf[y,x] + z
-        #     new_idx = last_inf[..., None] + depth_idx  # (Ny, Nx, Nz)
-        #
-        #     # 5) clip to valid range so we can safely gather,
-        #     #    then gather each volume
-        #     clipped = np.clip(new_idx, 0, Nz - 1)
-        #     dBI3D_shift = np.take_along_axis(dBI3D, clipped, axis=2)
-        #     R3D_shift = np.take_along_axis(R3D, clipped, axis=2)
-        #     O3D_shift = np.take_along_axis(O3D, clipped, axis=2)
-        #
-        #     # 6) zero-out any positions that “fell off the end” (new_idx >= Nz)
-        #     overflow = new_idx >= Nz
-        #     dBI3D_shift[overflow] = 0
-        #     R3D_shift[overflow] = 0
-        #     O3D_shift[overflow] = 0
-        #
-        #     # 7) select per-pixel whether to keep the original or use the shifted version
-        #     dBI3D = np.where(do_shift[..., None], dBI3D_shift, dBI3D)
-        #     R3D = np.where(do_shift[..., None], R3D_shift, R3D)
-        #     O3D = np.where(do_shift[..., None], O3D_shift, O3D)
-        #
-        # for arr, canvas in zip([dBI3D, R3D, O3D], [dBI_record, R3D_record, O3D_record]):
-        #     if scan_info['System'].lower() == 'octopus':
-        #         arr = np.swapaxes(arr, 0, 1)
-        #     if flip_z:
-        #         arr = arr[:, :, ::-1]
-        #     arr = arr[clip_x:, clip_y:]
-        #     if modality == "mus" and file_type == 'nifti':
-        #         raise NotImplementedError("mus 3d stitching not updated")
-        #         arr = process_mus_nifti(arr, depth)
-        #     else:
-        #         arr = arr[:, :, :depth]
-        #     arr *= blend_ramp[..., None]
-
-            #
-            # adding = da.zeros_like(dBI_canvas)
-            # adding[row_slice, col_slice, :] =
-            # canvas.append(adding)
-        #
-        # adding = da.zeros_like(weight)
-        # adding[row_slice, col_slice] = blend_ramp
-        # weight_record.append(adding)
-
-
-    # dBI_canvas = da.sum(da.stack(dBI_record, axis=0), axis=0)
-    # R3D_canvas = da.sum(da.stack(R3D_record, axis=0), axis=0)
-    # O3D_canvas = da.sum(da.stack(O3D_record, axis=0), axis=0)
-    # weight = da.sum(da.stack(weight_record, axis=0), axis=0)
-    # Normalize the canvases by the weight
-    # dBI_canvas /= weight[..., None]
-    # R3D_canvas /= weight[..., None]
-    # O3D_canvas /= weight[..., None]
-    # dBI_canvas = da.nan_to_num(dBI_canvas)
-    # R3D_canvas = da.nan_to_num(R3D_canvas)
-    # O3D_canvas = da.nan_to_num(O3D_canvas)
     canvas /= weight[..., None, None]
     canvas = canvas.rechunk({3:1})
     dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
@@ -323,9 +273,6 @@ def process_complex3d(complex3d, raw_tile_width):
 def do_downsample(volume: da.Array, factors: tuple) -> da.Array:
     fx, fy, fz = factors
     return da.coarsen(np.mean, volume, {0: fx, 1: fy, 2: fz}, trim_excess=True)
-
-
-
 
 def stack_slices(mosaic_info, slice_indices, slices):
     return da.concatenate(slices, axis=2)

@@ -224,9 +224,9 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
 
 
 def _load_nifti_tile(path: str) -> da.Array:
-    img = nib.load(path,mmap=True)
+    img = nib.load(path, mmap=True)
     # return da.from_delayed(dask.delayed(img.dataobj), shape=img.shape, dtype=img.get_data_dtype())
-    return da.from_array(img.dataobj)
+    return da.from_array(img.dataobj, chunks=img.shape)
     delayed = dask.delayed(img.get_fdata)()
     return da.from_delayed(delayed, shape=img.shape, dtype=img.get_data_dtype())
 
@@ -238,6 +238,12 @@ def _load_mat_tile(path: str) -> da.Array:
     delayed = dask.delayed(load_mat)(path, var_name)
     return da.from_delayed(delayed, shape=shape, dtype=dtype)
 
+def _load_tile(path:str):
+    if path.endswith('.mat'):
+        return _load_mat_tile(path)
+    if path.endswith('.nii' or '.nii.gz'):
+        return _load_nifti_tile(path)
+    raise ValueError(f"Unsupported file type: {path}")
 
 def _compute_blending_ramp(
         tile_width: int,
