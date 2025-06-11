@@ -162,9 +162,9 @@ def mosaic3d_telesto(
     logger.info("finished")
     for zgroup in zgroups:
         generate_pyramid_new(zgroup)
-        write_ome_metadata(zgroup, ["z", "y", "x"], scan_resolution, space_unit="micrometer")
+        write_ome_metadata(zgroup, ["z", "y", "x"], scan_resolution, space_unit="millimeter")
         nii_header = default_nifti_header(zgroup["0"], zgroup.attrs["multiscales"])
-        nii_header.set_xyzt_units("um")
+        nii_header.set_xyzt_units("mm")
         write_nifti_header(zgroup, nii_header)
     logger.info("finished generating pyramid")
 
@@ -262,7 +262,8 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
     weight = da.sum(da.stack(weight, axis=0), axis=0)
 
     canvas /= weight[..., None, None]
-    canvas = canvas.rechunk({3:1})
+    canvas = da.nan_to_num(canvas)
+    # canvas = canvas.rechunk({3:1})
     dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
     return [dBI_canvas, R3D_canvas, O3D_canvas]
 
