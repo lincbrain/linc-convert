@@ -20,7 +20,7 @@ transfer = cyclopts.App(name="transfer", help_format="markdown")
 lsm.command(transfer)
 
 @transfer.default
-def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir='.',  max_size_gb=2.00, upload=False):
+def dandi_transfer(input_dir, dandiset_url, subject, output_dir='.',  max_size_gb=2.00, upload=False):
     """
     Upload .dat files to DANDI in batched, compressed tar archives.
     
@@ -30,8 +30,6 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
         Directory containing .dat files to upload
     dandiset_url : str
         URL for the dandiset to upload (e.g., https://lincbrain.org/dandiset/000010)
-    dandi_instance : str
-        DANDI server (e.g. linc, dandi)
     output_dir : str, optional
         Directory to save the Dandiset directory (default: '.')
     max_size_gb : float, optional
@@ -93,6 +91,14 @@ def dandi_transfer(input_dir, dandiset_url, dandi_instance, subject, output_dir=
 
         if upload:
             print(f"Uploading {archive_path}.")
+
+            if 'lincbrain.org' in dandiset_url:
+                dandi_instance = 'linc'
+            elif 'dandiarchive.org' in dandiset_url:
+                dandi_instance = 'dandi'
+            else:
+                raise ValueError(f"Unknown DANDI instance: {dandiset_url}")
+            
             dandi.upload.upload([dandiset_directory],
                                 dandi_instance=dandi_instance,
                                 )
