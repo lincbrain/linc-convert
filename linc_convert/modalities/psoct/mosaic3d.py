@@ -19,6 +19,7 @@ import tqdm
 import zarr
 from cyclopts import Parameter
 from dask import delayed
+from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.mosaic2d import _normalize_tile_coords, \
@@ -26,6 +27,7 @@ from linc_convert.modalities.psoct.mosaic2d import _normalize_tile_coords, \
 from linc_convert.modalities.psoct.utils._utils import struct_arr_to_dict, \
     find_experiment_params, atleast_2d_trailing
 from linc_convert.modalities.psoct.utils._zarr import default_write_config
+from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr.create_array import compute_zarr_layout
 from linc_convert.utils.zarr.generate_pyramid import generate_pyramid_new
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
@@ -97,8 +99,8 @@ def mosaic3d_telesto(
     focus = _load_nifti_tile(scan_info['FocusFile'+ tilt_postfix] )
     raw_tile_width = int(scan_info['NbPixels' + tilt_postfix])
 
-    slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_index]
-
+    # slice_idx_in, slice_idx_out, slice_idx_run = slice_indices[:, slice_index]
+    slice_idx_in = slice_index
     mosaic_idx = 2 * slice_idx_in - 1
     if tilted_illumination:
         mosaic_idx += 1
@@ -121,21 +123,27 @@ def mosaic3d_telesto(
         temp_compensate = True
     else:
         temp_compensate = False
-    dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx, input_file_template,
+
+    chunk, shard = compute_zarr_layout((depth, full_height, full_width), np.float32,
+                                       zarr_config)
+
+    dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx,
+                                                                          input_file_template,
                                                      blend_ramp, clip_x, clip_y,
                                                      full_width, full_height, depth,
                                                      flip_z, map_indices, scan_info,
                                                      tile_width, tile_height, x_coords,
-                                                     y_coords, raw_tile_width, focus, temp_compensate)
-
-
+                                                                          y_coords,
+                                                                          raw_tile_width,
+                                                                          focus,
+                                                                          temp_compensate,
+                                                                          chunk=chunk if not shard else shard)
 
 
     dBI_result = dBI_result.transpose(2,1,0)
     R3D_result = R3D_result.transpose(2,1,0)
     O3D_result = O3D_result.transpose(2,1,0)
 
-    chunk, shard = compute_zarr_layout(dBI_result.shape, dBI_result.dtype, zarr_config)
     writers = []
     results = []
     zgroups = []
@@ -156,7 +164,9 @@ def mosaic3d_telesto(
         writers.append(tswriter)
         results.append(res)
     task = da.store(results, writers, compute=False)
-    task.compute()
+
+    with ProgressBar():
+        task.compute()
 
     scan_resolution = scan_resolution[:3][::-1]
     logger.info("finished")
@@ -165,7 +175,7 @@ def mosaic3d_telesto(
         write_ome_metadata(zgroup, ["z", "y", "x"], scan_resolution, space_unit="millimeter")
         nii_header = default_nifti_header(zgroup["0"], zgroup.attrs["multiscales"])
         nii_header.set_xyzt_units("mm")
-        write_nifti_header(zgroup, nii_header)
+        # write_nifti_header(zgroup, nii_header)
     logger.info("finished generating pyramid")
 
 
@@ -201,10 +211,600 @@ def temporary_compensation(dBI, R3D, O3D, depth, focus, scan_info):
     O3D = np.where(do_shift[..., None], O3D_shift, O3D)
     return da.stack([dBI,R3D,O3D], 3)
 
-
 def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, full_width,
                 full_height, depth, flip_z, map_indices, scan_info, tile_width,
-                tile_height, x_coords, y_coords, raw_tile_width, focus, temp_compensate):
+                tile_height, x_coords, y_coords, raw_tile_width, focus, temp_compensate,
+                chunk):
+    coords = []
+    tiles = []
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
+                y_coords[i, j]):
+            continue
+        x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
+        row_slice = slice(x0, x0 + tile_width)
+        col_slice = slice(y0, y0 + tile_height)
+
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
+        if complex3d.shape[0] > 4 * raw_tile_width:
+            warnings.warn(
+                f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
+            complex3d = complex3d[:4 * raw_tile_width, :, :]
+        elif complex3d.shape[0] < 4 * raw_tile_width:
+            raise ValueError(
+                f"Complex3D shape {complex3d.shape} is smaller than expected {4 * raw_tile_width}. "
+                "Check the input file."
+            )
+
+        dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
+
+        if temp_compensate:
+            results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
+                                                      scan_info)
+            results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
+                                      dtype=dBI3D.dtype)
+        else:
+            results = da.stack([dBI3D, R3D, O3D], axis=3)
+
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results[clip_x:, clip_y:] * blend_ramp[:, :, None, None]
+        tiles.append(results)
+        coords.append((x0, y0))
+        if tile_idx > 50:
+            break
+
+    return stitch_map_block(
+        coords, tiles,
+        full_width=full_width, full_height=full_height,
+        depth=depth, blend_ramp=blend_ramp,
+        tile_size=(tile_width, tile_height),
+        chunk=chunk
+    )
+
+
+from collections import defaultdict
+
+def stitch_baseline(coords, tiles, full_width, full_height, depth,
+                    blend_ramp, tile_size, chunk, **_):
+    canvas = da.zeros((full_width, full_height, depth, 3),
+                      chunks=(*chunk[::-1], 3), dtype=np.float32)
+    weight = da.zeros((full_width, full_height),
+                      chunks=(*chunk[::-1][:-1],), dtype=np.float32)
+
+    arr=da.sum(da.stack(tiles, axis=0), axis=0)
+    with ProgressBar():
+        arr.compute()
+    logger.info("finished")
+    return [canvas[..., i] for i in range(3)]
+
+
+
+def stitch_addition(coords, tiles, full_width, full_height, depth,
+                    blend_ramp, tile_size, chunk, **_):
+    canvas = da.zeros((full_width, full_height, depth, 3),
+                      chunks=(*chunk[::-1], 3), dtype=np.float32)
+    weight = da.zeros((full_width, full_height),
+                      chunks=(*chunk[::-1][:-1],), dtype=np.float32)
+
+    for (x0, y0), t in zip(coords, tiles):
+        rs = slice(x0, x0 + tile_size[0])
+        cs = slice(y0, y0 + tile_size[1])
+        canvas[rs, cs] += t
+        weight[rs, cs] += blend_ramp
+
+    canvas /= weight[..., None, None]
+    return [canvas[..., i] for i in range(3)]
+
+
+def stitch_sparse_padding(coords, tiles,
+                          full_width, full_height, depth,
+                          blend_ramp, tile_size, **_):
+    """
+    Same as native_padding but convert to sparse. COO per‐block before summing.
+    """
+    pw, ph = tile_size
+    paints = []
+    weights = []
+
+    for (x0, y0), t in zip(coords, tiles):
+        # build a full‐canvas tile with zeros
+        paint = da.zeros((full_width, full_height, depth, 3),
+                         chunks=(pw, ph, depth, 3),
+                         dtype=np.float32)
+        weight_paint = da.zeros((full_width, full_height),
+                                chunks=(pw, ph),
+                                dtype=np.float32)
+
+        rs = slice(x0, x0 + pw)
+        cs = slice(y0, y0 + ph)
+        paint[rs, cs, ...] = t
+        weight_paint[rs, cs] = blend_ramp
+
+        paints.append(da.map_blocks(sparse.COO, paint))
+        weights.append(da.map_blocks(sparse.COO, weight_paint))
+
+    canvas = da.sum(da.stack(paints, axis=0), axis=0)
+    weight = da.sum(da.stack(weights, axis=0), axis=0)
+
+    canvas /= weight[..., None, None]
+    return [canvas[..., i] for i in range(3)]
+
+
+def stitch_native_padding(coords, tiles,
+                          full_width, full_height, depth,
+                          blend_ramp, tile_size, **_):
+    """
+    Per‐tile da.pad to full‐canvas, then stack & sum (build_slice_native_padding).
+    """
+    pw, ph = tile_size
+    canvases = []
+    weights = []
+
+    for (x0, y0), t in zip(coords, tiles):
+        # pad amounts = ((before_x, after_x), (before_y, after_y), (0,0), (0,0))
+        pad_t = ((x0, full_width - x0 - pw),
+                 (y0, full_height - y0 - ph),
+                 (0, 0),
+                 (0, 0))
+        pad_w = ((x0, full_width - x0 - pw),
+                 (y0, full_height - y0 - ph))
+
+        canvases.append(da.pad(t, pad_t).astype(np.float32))
+        weights.append(da.pad(blend_ramp, pad_w).astype(np.float32))
+
+    canvas = da.sum(da.stack(canvases, axis=0), axis=0)
+    weight = da.sum(da.stack(weights, axis=0), axis=0)
+
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    return [canvas[..., i] for i in range(3)]
+
+
+def stitch_chunked_padding(coords, tiles,
+                           full_width, full_height, depth,
+                           blend_ramp, tile_size, **_):
+    """
+    Chunk‐aligned padding + per‐block summation (build_slice_chunked_padding).
+    """
+    pw, ph = tile_size
+    # final canvas & weight
+    canvas = da.zeros((full_width, full_height, depth, 3),
+                      chunks=(pw, ph, depth, 3),
+                      dtype=np.float32)
+    weight = da.zeros((full_width, full_height),
+                      chunks=(pw, ph),
+                      dtype=np.float32)
+
+    # collect per‐chunk pieces
+    block_tiles = defaultdict(list)
+    block_weights = defaultdict(list)
+
+    for (x0, y0), t in zip(coords, tiles):
+        # which tile‐chunks this falls into?
+        x0c = x0 // pw
+        y0c = y0 // ph
+        x1c = (x0 + pw - 1) // pw
+        y1c = (y0 + ph - 1) // ph
+
+        # pad region covering those chunks
+        x_start = x0c * pw
+        y_start = y0c * ph
+        x_end = (x1c + 1) * pw
+        y_end = (y1c + 1) * ph
+
+        block_canvas = da.zeros((x_end - x_start, y_end - y_start, depth, 3),
+                                chunks=(pw, ph, depth, 3),
+                                dtype=np.float32)
+        block_weight = da.zeros((x_end - x_start, y_end - y_start),
+                                chunks=(pw, ph),
+                                dtype=np.float32)
+
+        # place tile into that big block
+        xs = slice(x0 - x_start, x0 - x_start + pw)
+        ys = slice(y0 - y_start, y0 - y_start + ph)
+        block_canvas[xs, ys, ...] = t
+        block_weight[xs, ys] = blend_ramp
+
+        # chop into per‐chunk pieces
+        for cx in range(x0c, x1c + 1):
+            for cy in range(y0c, y1c + 1):
+                bid = (cx, cy)
+                sub_x = slice((cx - x0c) * pw, (cx - x0c + 1) * pw)
+                sub_y = slice((cy - y0c) * ph, (cy - y0c + 1) * ph)
+                block_tiles[bid].append(block_canvas[sub_x, sub_y, ...])
+                block_weights[bid].append(block_weight[sub_x, sub_y])
+
+    # assemble each chunk back into final canvas
+    for (cx, cy), pieces in block_tiles.items():
+        rs = slice(cx * pw, min((cx + 1) * pw, full_width))
+        cs = slice(cy * ph, min((cy + 1) * ph, full_height))
+
+        summed = da.sum(da.stack(pieces, axis=0), axis=0)
+        wsum = da.sum(da.stack(block_weights[(cx, cy)], axis=0), axis=0)
+
+        # trim edges if needed
+        summed = summed[: rs.stop - rs.start, : cs.stop - cs.start, ...]
+        wsum = wsum[: rs.stop - rs.start, : cs.stop - cs.start]
+
+        canvas[rs, cs, ...] = summed
+        weight[rs, cs] = wsum
+
+    # normalize & clean
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    return [canvas[..., i] for i in range(3)]
+
+
+def stitch_whole_canvas_padding(coords, tiles,
+                        full_width, full_height, depth,
+                        blend_ramp, tile_size, **_):
+    """
+    Build a full‐size zero‐canvas per tile and slice‐assign into it,
+    then stack & sum (build_slice_whole_canvas_padding).
+    """
+    pw, ph = tile_size
+    canvases = []
+    weights = []
+
+    for (x0, y0), t in zip(coords, tiles):
+        canvas_tile = da.zeros((full_width, full_height, depth, 3),
+                               chunks=(pw, ph, depth, 3),
+                               dtype=np.float32)
+        weight_tile = da.zeros((full_width, full_height),
+                               chunks=(pw, ph),
+                               dtype=np.float32)
+
+        rs = slice(x0, x0 + pw)
+        cs = slice(y0, y0 + ph)
+        canvas_tile[rs, cs, ...] = t
+        weight_tile[rs, cs] = blend_ramp
+
+        canvases.append(canvas_tile)
+        weights.append(weight_tile)
+
+    canvas = da.sum(da.stack(canvases, axis=0), axis=0)
+    weight = da.sum(da.stack(weights, axis=0), axis=0)
+
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    return [canvas[..., i] for i in range(3)]
+
+def _combine_block(_,block_tiles,block_weights,*args,block_info=None, **kwargs):
+    chunk_id = tuple(block_info[None]['chunk-location'][:2])
+
+    paints = block_tiles[chunk_id]
+    weights = block_weights[chunk_id]
+
+    # if no tiles hit this chunk → zero
+    shape = block_info[None]['chunk-shape']
+    if not paints:
+        return np.broadcast_to(np.zeros((), dtype=np.float32), shape)
+
+    # pure NumPy sums
+    total_paint  = np.sum(np.stack(paints,  axis=0), axis=0)
+    total_weight = np.sum(np.stack(weights, axis=0), axis=0)
+    return total_paint / total_weight[...,None,None]
+
+def stitch_map_block(coords, tiles,
+                           full_width, full_height, depth,
+                           blend_ramp, tile_size, **_):
+    """
+    Chunk‐aligned padding + per‐block summation (build_slice_chunked_padding).
+    """
+    pw, ph = tile_size
+    # final canvas & weight
+    canvas = da.zeros((full_width, full_height, depth, 3),
+                      chunks=(pw, ph, depth, 3),
+                      dtype=np.float32)
+    weight = da.zeros((full_width, full_height),
+                      chunks=(pw, ph),
+                      dtype=np.float32)
+
+    # collect per‐chunk pieces
+    block_tiles = defaultdict(list)
+    block_weights = defaultdict(list)
+
+    for (x0, y0), t in zip(coords, tiles):
+        # which tile‐chunks this falls into?
+        x0c = x0 // pw
+        y0c = y0 // ph
+        x1c = (x0 + pw - 1) // pw
+        y1c = (y0 + ph - 1) // ph
+
+        # pad region covering those chunks
+        x_start = x0c * pw
+        y_start = y0c * ph
+        x_end = (x1c + 1) * pw
+        y_end = (y1c + 1) * ph
+
+        block_canvas = da.zeros((x_end - x_start, y_end - y_start, depth, 3),
+                                chunks=(pw, ph, depth, 3),
+                                dtype=np.float32)
+        block_weight = da.zeros((x_end - x_start, y_end - y_start),
+                                chunks=(pw, ph),
+                                dtype=np.float32)
+
+        # place tile into that big block
+        xs = slice(x0 - x_start, x0 - x_start + pw)
+        ys = slice(y0 - y_start, y0 - y_start + ph)
+        block_canvas[xs, ys, ...] = t
+        block_weight[xs, ys] = blend_ramp
+
+        # chop into per‐chunk pieces
+        for cx in range(x0c, x1c + 1):
+            for cy in range(y0c, y1c + 1):
+                bid = (cx, cy)
+                sub_x = slice((cx - x0c) * pw, (cx - x0c + 1) * pw)
+                sub_y = slice((cy - y0c) * ph, (cy - y0c + 1) * ph)
+                block_tiles[bid].append(block_canvas[sub_x, sub_y, ...])
+                block_weights[bid].append(block_weight[sub_x, sub_y])
+
+
+    canvas = da.map_blocks(_combine_block,canvas, block_tiles, block_weights,
+        dtype=canvas.dtype,
+        chunks=(pw, ph, depth, 3))
+
+    return [canvas[..., i] for i in range(3)]
+
+import sparse
+def per_chunk(chunk,weight=None, axis=None, keepdims=None):
+    if weight and not weight[0,0]:
+        return np.broadcast_to(np.zeros((), dtype=np.float32),)
+    return chunk
+
+def stitch_custom_reduction(coords, tiles,
+                        full_width, full_height, depth,
+                        blend_ramp, tile_size, **_):
+    """
+    Build a full‐size zero‐canvas per tile and slice‐assign into it,
+    then stack & sum (build_slice_whole_canvas_padding).
+    """
+    pw, ph = tile_size
+    canvases = []
+    weights = []
+    num_chunkx  = ceildiv(full_width, pw)
+    num_chunky  = ceildiv(full_height, ph)
+    masks = []
+
+    for (x0, y0), t in zip(coords, tiles):
+        canvas_tile = da.zeros((full_width, full_height, depth, 3),
+                               chunks=(pw, ph, depth, 3),
+                               dtype=np.float32)
+        weight_tile = da.zeros((full_width, full_height),
+                               chunks=(pw, ph),
+                               dtype=np.float32)
+
+        rs = slice(x0, x0 + pw)
+        cs = slice(y0, y0 + ph)
+        canvas_tile[rs, cs, ...] = t
+        weight_tile[rs, cs] = blend_ramp
+        x0c = x0 // pw
+        y0c = y0 // ph
+        x1c = (x0 + pw - 1) // pw
+        y1c = (y0 + ph - 1) // ph
+        mask = np.zeros((num_chunkx, num_chunky), dtype=bool)
+        mask[x0c:x1c + 1, y0c:y1c + 1] = True
+        mask=np.broadcast_to(mask[:, :, None, None]  , (num_chunkx, num_chunky, pw, ph)).transpose(0, 2, 1, 3).reshape(num_chunkx*pw, num_chunky*ph)[:full_width, :full_height]
+
+        masks.append(mask)
+        canvases.append(canvas_tile)
+        weights.append(weight_tile)
+    canvas = da.stack(canvases, axis=0)
+    weight = da.stack(weights, axis=0)
+    canvas = da.reduction(canvas,chunk = per_chunk, aggregate=da.sum, axis=0,dtype=np.float32)
+    weight = da.reduction(weight,chunk = per_chunk, aggregate=da.sum, axis=0, dtype=np.float32)
+
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    return [canvas[..., i] for i in range(3)]
+
+
+def build_slice_chunked_padding(mosaic_idx, input_file_template, blend_ramp, clip_x,
+                                clip_y, full_width,
+                                full_height, depth, flip_z, map_indices, scan_info,
+                                tile_width,
+                                tile_height, x_coords, y_coords, raw_tile_width, focus,
+                                temp_compensate, chunk):
+    canvas = dask.array.zeros((full_width, full_height, depth, 3),
+                              chunks=(tile_width, tile_height, depth, 3),
+                              dtype=np.float32)
+
+    weight = dask.array.zeros((full_width, full_height),
+                              chunks=(tile_width, tile_height),
+                              dtype=np.float32)
+
+    all_blocks = defaultdict(list)
+    all_weights = defaultdict(list)
+
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
+                y_coords[i, j]):
+            continue
+        x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
+        row_slice = slice(x0, x0 + tile_width)
+        col_slice = slice(y0, y0 + tile_height)
+
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
+        if complex3d.shape[0] > 4 * raw_tile_width:
+            warnings.warn(
+                f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
+            complex3d = complex3d[:4 * raw_tile_width, :, :]
+        elif complex3d.shape[0] < 4 * raw_tile_width:
+            raise ValueError(
+                f"Complex3D shape {complex3d.shape} is smaller than expected {4 * raw_tile_width}. "
+                "Check the input file."
+            )
+
+        dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
+
+        if temp_compensate:
+            results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
+                                                      scan_info)
+            results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
+                                      dtype=dBI3D.dtype)
+        else:
+            results = da.stack([dBI3D, R3D, O3D], axis=3)
+
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results.rechunk({3: 3})
+        results = results[clip_x:, clip_y:] * blend_ramp[..., None, None]
+        x0_chunk = x0 // tile_width
+        y0_chunk = y0 // tile_height
+        x1_chunk = (x0 + tile_width - 1) // tile_width
+        y1_chunk = (y0 + tile_height - 1) // tile_height
+        # pad this tile to the chunk boundaries
+        x0_chunk_start = x0_chunk * tile_width
+        y0_chunk_start = y0_chunk * tile_height
+        x1_chunk_end = (x1_chunk + 1) * tile_width
+        y1_chunk_end = (y1_chunk + 1) * tile_height
+        canvas_tile = da.zeros(
+            (x1_chunk_end - x0_chunk_start, y1_chunk_end - y0_chunk_start, depth, 3),
+            dtype=np.float32, chunks=(tile_width, tile_height, depth, 3))
+        canvas_tile[x0 - x0_chunk_start:x0 + tile_width - x0_chunk_start,
+        y0 - y0_chunk_start:y0 + tile_height - y0_chunk_start] = results
+        weight_tile = da.zeros(
+            (x1_chunk_end - x0_chunk_start, y1_chunk_end - y0_chunk_start),
+            dtype=np.float32, chunks=(tile_width, tile_height))
+        weight_tile[x0 - x0_chunk_start:x0 + tile_width - x0_chunk_start,
+        y0 - y0_chunk_start:y0 + tile_height - y0_chunk_start] = blend_ramp
+
+        # add the tile to corresponding blocks  
+        for chunk_x_id in range(x0_chunk, x1_chunk + 1):
+            for chunk_y_id in range(y0_chunk, y1_chunk + 1):
+                block_id = (chunk_x_id, chunk_y_id)
+                all_blocks[block_id].append(canvas_tile[
+                                            (chunk_x_id - x0_chunk) * tile_width: (
+                                                                                              chunk_x_id - x0_chunk + 1) * tile_width,
+                                            (chunk_y_id - y0_chunk) * tile_height: (
+                                                                                               chunk_y_id - y0_chunk + 1) * tile_height,
+                                            ...])
+                all_weights[block_id].append(weight_tile[
+                                             (chunk_x_id - x0_chunk) * tile_width: (
+                                                                                               chunk_x_id - x0_chunk + 1) * tile_width,
+                                             (chunk_y_id - y0_chunk) * tile_height: (
+                                                                                                chunk_y_id - y0_chunk + 1) * tile_height,
+                                             ])
+
+        if tile_idx > 100:
+            break
+
+    for block_id, block_tiles in all_blocks.items():
+        x_slice = slice(block_id[0] * tile_width,
+                        min((block_id[0] + 1) * tile_width, full_width))
+        y_slice = slice(block_id[1] * tile_height,
+                        min((block_id[1] + 1) * tile_height, full_height))
+        block_data = da.sum(da.stack(block_tiles, axis=0), axis=0)
+        weight_data = da.sum(da.stack(all_weights[block_id], axis=0), axis=0)
+        if (block_id[0] + 1) * tile_width > full_width:
+            block_data = block_data[:x_slice.stop - x_slice.start, ...]
+            weight_data = weight_data[:x_slice.stop - x_slice.start, ...]
+        if (block_id[1] + 1) * tile_height > full_height:
+            block_data = block_data[:, :y_slice.stop - y_slice.start, ...]
+            weight_data = weight_data[:, :y_slice.stop - y_slice.start]
+
+        canvas[x_slice, y_slice] = block_data
+        weight[x_slice, y_slice] = weight_data
+
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    # canvas = canvas.rechunk({3:1})
+    dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+
+def build_slice_whole_canvas_padding(mosaic_idx, input_file_template, blend_ramp,
+                                     clip_x, clip_y, full_width,
+                                     full_height, depth, flip_z, map_indices, scan_info,
+                                     tile_width,
+                                     tile_height, x_coords, y_coords, raw_tile_width,
+                                     focus, temp_compensate, chunk):
+    canvas = []
+    weight = []
+
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
+                y_coords[i, j]):
+            continue
+        x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
+        row_slice = slice(x0, x0 + tile_width)
+        col_slice = slice(y0, y0 + tile_height)
+
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
+        if complex3d.shape[0] > 4 * raw_tile_width:
+            warnings.warn(
+                f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
+            complex3d = complex3d[:4 * raw_tile_width, :, :]
+        elif complex3d.shape[0] < 4 * raw_tile_width:
+            raise ValueError(
+                f"Complex3D shape {complex3d.shape} is smaller than expected {4 * raw_tile_width}. "
+                "Check the input file."
+            )
+
+        dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
+
+        if temp_compensate:
+            results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
+                                                      scan_info)
+            results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
+                                      dtype=dBI3D.dtype)
+        else:
+            results = da.stack([dBI3D, R3D, O3D], axis=3)
+
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results.rechunk({3: 3})
+        results = results[clip_x:, clip_y:] * blend_ramp[:, :, None, None]
+        canvas_tile = da.zeros((full_width, full_height, depth, 3),
+                               chunks=(
+                                   tile_width, tile_height,
+                                   depth, 3), dtype=np.float32)
+        canvas_tile[row_slice, col_slice, ...] = results
+        weight_tile = da.zeros((full_width, full_height), chunks=(
+            tile_width, tile_height),
+                               dtype=np.float32)
+        weight_tile[row_slice, col_slice] = blend_ramp
+        canvas.append(canvas_tile)
+        weight.append(weight_tile)
+        if tile_idx > 100:
+            break
+
+    canvas = da.sum(da.stack(canvas, axis=0), axis=0)
+    weight = da.sum(da.stack(weight, axis=0), axis=0)
+
+    canvas /= weight[..., None, None]
+    canvas = da.nan_to_num(canvas)
+    # canvas = canvas.rechunk({3:1})
+    dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+
+def build_slice_whole_canvas_custom_reduction(mosaic_idx, input_file_template,
+                                              blend_ramp, clip_x, clip_y, full_width,
+                                              full_height, depth, flip_z, map_indices,
+                                              scan_info, tile_width,
+                                              tile_height, x_coords, y_coords,
+                                              raw_tile_width, focus, temp_compensate,
+                                              chunk):
     canvas = []
     weight = []
 
@@ -254,9 +854,15 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
             tile_width, tile_height),
                                dtype=np.float32)
         weight_tile[row_slice, col_slice] = blend_ramp
+        x0_chunk = x0 // tile_width
+        y0_chunk = y0 // tile_height
+        x1_chunk = (x0 + tile_width - 1) // tile_width
+        y1_chunk = (y0 + tile_height - 1) // tile_height
+
         canvas.append(canvas_tile)
         weight.append(weight_tile)
-        break
+        if tile_idx > 100:
+            break
 
     canvas = da.sum(da.stack(canvas, axis=0), axis=0)
     weight = da.sum(da.stack(weight, axis=0), axis=0)
@@ -266,6 +872,306 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
     # canvas = canvas.rechunk({3:1})
     dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
     return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+
+def build_slice_baseline(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y,
+                         full_width,
+                         full_height, depth, flip_z, map_indices, scan_info, tile_width,
+                         tile_height, x_coords, y_coords, raw_tile_width, focus,
+                         temp_compensate, chunk):
+    all_results = []
+    all_weights = []
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
+                y_coords[i, j]):
+            continue
+        x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
+        row_slice = slice(x0, x0 + tile_width)
+        col_slice = slice(y0, y0 + tile_height)
+
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
+        if complex3d.shape[0] > 4 * raw_tile_width:
+            warnings.warn(
+                f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
+            complex3d = complex3d[:4 * raw_tile_width, :, :]
+        elif complex3d.shape[0] < 4 * raw_tile_width:
+            raise ValueError(
+                f"Complex3D shape {complex3d.shape} is smaller than expected {4 * raw_tile_width}. "
+                "Check the input file."
+            )
+
+        dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
+
+        if temp_compensate:
+            results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
+                                                      scan_info)
+            results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
+                                      dtype=dBI3D.dtype)
+        else:
+            results = da.stack([dBI3D, R3D, O3D], axis=3)
+
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results[clip_x:, clip_y:] * blend_ramp[:, :, None, None]
+        all_results.append(results)
+        all_weights.append(blend_ramp)
+
+    canvas = da.sum(da.stack(all_results, axis=0), axis=0)
+    weight = da.sum(da.stack(all_weights, axis=0), axis=0)
+    # for i in range(len(all_results)):
+    #     all_results[i] = da.stack(all_results[i], axis=1)
+    #     all_weights[i] = da.stack(all_weights[i], axis=1)
+    # canvas = da.stack(all_results, axis=0)
+    # weight = da.stack(all_weights, axis=0)
+
+    canvas /= weight[..., None, None]
+    canvas.compute()
+    logger.info("finished")
+    dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+
+def build_slice_old(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y,
+                    full_width,
+                    full_height, depth, flip_z, map_indices, scan_info, tile_width,
+                    tile_height, x_coords, y_coords, raw_tile_width, focus,
+                    temp_compensate, chunk):
+    chunk = chunk[::-1]
+    chunk_x, chunk_y = chunk[:2]
+    all_results = []
+    canvas = dask.array.zeros((full_width, full_height, depth, 3), chunks=(*chunk, 3),
+                              dtype=np.float32)
+    weight = dask.array.zeros((full_width, full_height), chunks=(*chunk[:-1],),
+                              dtype=np.float32)
+
+    block_map = defaultdict(list)
+    weight_map = defaultdict(list)
+    coords = []
+    tiles = []
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+        if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
+                y_coords[i, j]):
+            continue
+        x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
+        row_slice = slice(x0, x0 + tile_width)
+        col_slice = slice(y0, y0 + tile_height)
+
+        input_file_path = input_file_template % (mosaic_idx, tile_idx)
+        complex3d = _load_tile(input_file_path)
+        if complex3d.shape[0] > 4 * raw_tile_width:
+            warnings.warn(
+                f"Complex3D shape {complex3d.shape} is larger than expected {4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
+            complex3d = complex3d[:4 * raw_tile_width, :, :]
+        elif complex3d.shape[0] < 4 * raw_tile_width:
+            raise ValueError(
+                f"Complex3D shape {complex3d.shape} is smaller than expected {4 * raw_tile_width}. "
+                "Check the input file."
+            )
+
+        dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
+
+        if temp_compensate:
+            results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
+                                                      scan_info)
+            results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
+                                      dtype=dBI3D.dtype)
+        else:
+            results = da.stack([dBI3D, R3D, O3D], axis=3)
+
+        if flip_z:
+            results = da.flip(results, axis=2)
+        if scan_info['System'].lower() == 'octopus':
+            results = da.swapaxes(results, 0, 1)
+
+        results = results[clip_x:, clip_y:] * blend_ramp[:, :, None, None]
+
+        coords.append((x0, y0))
+        tiles.append(results)
+        # find the all chunks this tile overlaps with
+        x0_chunk = x0 // chunk_x
+        y0_chunk = y0 // chunk_y
+        x1_chunk = (x0 + tile_width) // chunk_x
+        y1_chunk = (y0 + tile_height) // chunk_y
+        # pad this tile to the chunk boundaries
+        x0_chunk_start = x0_chunk * chunk_x
+        y0_chunk_start = y0_chunk * chunk_y
+        x1_chunk_end = (x1_chunk + 1) * chunk_x
+        y1_chunk_end = (y1_chunk + 1) * chunk_y
+        # paint = da.zeros((x1_chunk_end - x0_chunk_start, y1_chunk_end - y0_chunk_start, depth, 3), dtype=np.float32, chunks=(tile_width,tile_height,depth,3))
+        # paint[x0 - x0_chunk_start:x0 + tile_width - x0_chunk_start,
+        #         y0 - y0_chunk_start:y0 + tile_height - y0_chunk_start, :] = results
+        # weight = da.zeros((x1_chunk_end - x0_chunk_start, y1_chunk_end - y0_chunk_start), dtype=np.float32, chunks=(tile_width, tile_height))
+        # weight[x0 - x0_chunk_start:x0 + tile_width - x0_chunk_start,
+        #            y0 - y0_chunk_start:y0 + tile_height - y0_chunk_start] = blend_ramp
+        paint = results
+        weight = blend_ramp
+        # add the result to corresponding blocks in the block_map
+        for chunk_x_id in range(x0_chunk, x1_chunk + 1):
+            for chunk_y_id in range(y0_chunk, y1_chunk + 1):
+                block_id = (chunk_x_id, chunk_y_id)
+                block_map[block_id].append(paint[
+                                           (chunk_x_id - x0_chunk) * chunk_x: (
+                                                                                          chunk_x_id - x0_chunk + 1) * chunk_x,
+                                           (chunk_y_id - y0_chunk) * chunk_y: (
+                                                                                          chunk_y_id - y0_chunk + 1) * chunk_y,
+                                           ...])
+                weight_map[block_id].append(weight[
+                                            (chunk_x_id - x0_chunk) * chunk_x: (
+                                                                                           chunk_x_id - x0_chunk + 1) * chunk_x,
+                                            (chunk_y_id - y0_chunk) * chunk_y: (
+                                                                                           chunk_y_id - y0_chunk + 1) * chunk_y,
+                                            ])
+
+        # all_results.append((x0,y0,results))
+        # for chunk_x_id in range(x0// chunk_x, (x0 + tile_width) // chunk_x + 1):
+        #     for chunk_y_id in range(y0 // chunk_y, (y0 + tile_height) // chunk_y + 1):
+        #         block_id = (chunk_x_id, chunk_y_id)
+        #         block_map[block_id].append((x0, y0, results))
+
+    ## by tile approch
+    # all_tiles = da.stack(tiles, axis=0)
+    # def _sum_by_tile(block, block_id=None):
+    #     x0 ,y0 = coords[block_id[0]]
+    #     row_slice = slice(x0, x0 + tile_width)
+    #     col_slice = slice(y0, y0 + tile_height)
+    #     canvas[row_slice, col_slice, :] += block
+    #     weight[row_slice, col_slice] += blend_ramp
+
+    #     return block
+    # all_tiles = da.map_blocks(
+    #     _sum_by_tile,
+    #     all_tiles,  # drives shape + chunks
+    #     dtype=all_tiles.dtype,
+    #     chunks=all_tiles.chunks  # keep exactly the same chunk‐structure
+    # )
+    # all_tiles.compute()
+    # canvas /= weight[..., None, None] + 1e-10  # avoid division by zero
+    # dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    # return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+    def _sum_overlapping(block, *args, block_id=None):
+        block_id = block_id[:2]
+        paints = block_map[block_id]
+        weights = weight_map[block_id]
+
+        return dask.sum(da.stack(paints, axis=0), axis=0) / dask.sum(
+            da.stack(weights, axis=0), axis=0)
+
+        # args = (tiles_list, coords_list, full_shape, chunk_shape)
+        tiles_list, coords_list = args
+
+        # block_info[0]['array-location'] is something like ((row_start, row_stop),
+        #                                                  (col_start, col_stop))
+        info = block_info[0]
+        (row_start, row_stop), (col_start, col_stop) = info['array-location'][:2]
+        block_h = row_stop - row_start
+        block_w = col_stop - col_start
+
+        out = da.zeros((block_h, block_w), dtype=block.dtype)
+        weight = da.zeros((block_h, block_w), dtype=np.float32)
+        for tile_arr, (x0, y0) in zip(tiles_list, coords_list):
+            x1 = x0 + tile_arr.shape[0]
+            y1 = y0 + tile_arr.shape[1]
+
+            # Overlap of [row_start:row_stop] with [x0:x1]:
+            rs = max(row_start, x0)
+            re = min(row_stop, x1)
+            cs = max(col_start, y0)
+            ce = min(col_stop, y1)
+
+            if (re > rs) and (ce > cs):
+                # compute the slices
+                tile_rs = rs - x0;
+                tile_re = re - x0
+                tile_cs = cs - y0;
+                tile_ce = ce - y0
+                out_rs = rs - row_start
+                out_re = re - row_start
+                out_cs = cs - col_start
+                out_ce = ce - col_start
+
+                out[out_rs:out_re, out_cs:out_ce] += tile_arr[tile_rs:tile_re,
+                                                     tile_cs:tile_ce]
+                weight[out_rs:out_re, out_cs:out_ce] += blend_ramp[tile_rs:tile_re,
+                                                        tile_cs:tile_ce]
+        out /= weight + 1e-10  # avoid division by zero
+
+        return out
+
+    canvas = da.map_blocks(
+        _sum_overlapping,
+        canvas,  # drives shape + chunks
+        tiles,  # will be “tiles_list” inside args
+        coords,  # “coords_list” inside args
+        dtype=canvas.dtype,
+        chunks=(tile_width, tile_height, depth, 3)
+        # keep exactly the same chunk‐structure
+    )
+    dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    return [dBI_canvas, R3D_canvas, O3D_canvas]
+
+    # def cal(_, block_info=None):
+    #     block_id = block_info[0]['chunk-location'][:2]
+    #     array_location = block_info[0]['array-location']
+    #     x_location, y_location = array_location[:2]
+    #     x_start, x_end = x_location
+    #     y_start, y_end = y_location
+    #
+    #     blocks = block_map[block_id]
+    #     canvas, weight = [], []
+    #     for x0,y0,block in blocks:
+    #         ramp = blend_ramp
+    #         if x0 < x_start:
+    #             ramp = ramp[x_start - x0:, :]
+    #             block = block[x_start - x0:, :, :]
+    #         elif x0 > x_start:
+    #             # pad the ramp and block to the left
+    #             ramp = da.pad(ramp, ((x0 - x_start, 0), (0, 0)), mode='constant')
+    #             block = da.pad(block, ((x0 - x_start, 0), (0, 0), (0, 0)), mode='constant')
+    #         if y0 < y_start:
+    #             ramp = ramp[:, y_start - y0:]
+    #             block = block[:, y_start - y0:, :]
+    #         elif y0 > y_start:
+    #             # pad the ramp and block to the top
+    #             ramp = da.pad(ramp, ((0, 0), (y0 - y_start, 0)), mode='constant')
+    #             block = da.pad(block, ((0, 0), (y0 - y_start, 0), (0, 0)), mode='constant')
+    #         if x_start + ramp.shape[0] > x_end:
+    #             ramp = ramp[:x_end - x_start, :]
+    #             block = block[:x_end - x_start, :, :]
+    #         elif x_start + ramp.shape[0] < x_end:
+    #             # pad the ramp and block to the right
+    #             ramp = da.pad(ramp, ((0, x_end - (x_start + ramp.shape[0])), (0, 0)), mode='constant')
+    #             block = da.pad(block, ((0, x_end - (x_start + block.shape[0])), (0, 0), (0, 0)), mode='constant')
+    #         if y_start + ramp.shape[1] > y_end:
+    #             ramp = ramp[:, :y_end - y_start]
+    #             block = block[:, :y_end - y_start, :]
+    #         elif y_start + ramp.shape[1] < y_end:
+    #             # pad the ramp and block to the bottom
+    #             ramp = da.pad(ramp, ((0, 0), (0, y_end - (y_start + ramp.shape[1]))), mode='constant')
+    #             block = da.pad(block, ((0, 0), (0, y_end - (y_start + block.shape[1])), (0, 0)), mode='constant')
+    #
+    #         canvas.append(block)
+    #         weight.append(ramp)
+    #         print(canvas)
+    #     if not canvas:
+    #         return _
+    #     canvas = da.sum(da.stack(canvas, axis=0), axis=0)
+    #     weight = da.sum(da.stack(weight, axis=0), axis=0)
+    #     return canvas/weight[:,:,None,None]
+    #
+    # canvas = da.map_blocks(cal,canvas,dtype=np.float32)
+    #
+    # # canvas /= weight[..., None, None]
+    # dBI_canvas, R3D_canvas, O3D_canvas = canvas[..., 0], canvas[..., 1], canvas[..., 2]
+    # return [dBI_canvas, R3D_canvas, O3D_canvas]
 
 
 def process_complex3d(complex3d, raw_tile_width):
