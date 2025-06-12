@@ -98,10 +98,18 @@ def dandi_transfer(input_dir, dandiset_url, subject, output_dir='.',  max_size_g
                 dandi_instance = 'dandi'
             else:
                 raise ValueError(f"Unknown DANDI instance: {dandiset_url}")
+
+            success = False
+            while not success:
+                try:
+                    dandi.upload.upload([dandiset_directory],
+                                        dandi_instance=dandi_instance,
+                                        )
+                    success = True
+                    print("Upload successful.")
+                except Exception as e:
+                    print(f"Upload failed with error: {str(e)}")
             
-            dandi.upload.upload([dandiset_directory],
-                                dandi_instance=dandi_instance,
-                                )
             os.remove(archive_path)
 
         del archive
