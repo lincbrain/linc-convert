@@ -31,7 +31,7 @@ zarr = "^2.0.0"
 nifti-zarr = "*"
 # optionals
 glymur = { version = "*", optional = true }
-dandi = { version = "*", optional = true }
+dandi = { version = ">=0.68.1", optional = true }
 tifffile = { version = "*", optional = true }
 h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
