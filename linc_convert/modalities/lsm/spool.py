@@ -1,5 +1,4 @@
 # stdlib
-import ast
 import os
 import re
 import warnings
@@ -10,7 +9,6 @@ from glob import glob
 import cyclopts
 import nibabel as nib
 import numpy as np
-import zarr
 from niizarr import default_nifti_header, write_nifti_header
 from niizarr._nii2zarr import write_ome_metadata
 
@@ -19,9 +17,8 @@ from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.spool import SpoolSetInterpreter
-from linc_convert.utils.zarr.compressor import make_compressor
-from linc_convert.utils.zarr.generate_pyramid import generate_pyramid
-from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.zarr import (create_array, generate_pyramid, open_zarr_group,
+                                     ZarrConfig)
 
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
@@ -39,11 +36,11 @@ def convert(
         inp: str,
         *,
         out: str,
-        zarr_config: ZarrConfig = None,
-        overlap: int = 30,
+        overlap: int = 192,
         orientation: str = "coronal",
         center: bool = True,
         voxel_size: list[float] = (1, 1, 1),
+        zarr_config: ZarrConfig | None = None,
         **kwargs
 ) -> None:
     """
@@ -75,6 +72,7 @@ def convert(
         Path to the root directory, which contains a collection of
         subfolders named `*_y{:02d}_z{:02d}*`, each containing a
         collection of files named `*spool.dat`.
+        TODO: add instrution for metadata file and info file
     out
         Path to the output Zarr directory [<INP>.{ome|nii}.zarr]
     overlap
@@ -85,15 +83,12 @@ def convert(
         Set RAS[0, 0, 0] at FOV center
     voxel_size
         Voxel size along the X, Y and Z dimensions, in microns.
+    zarr_config
+        config related to zarr
+    kwargs
+        used for internal api
     """
     zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
-    chunk: int = zarr_config.chunk[0]
-    compressor: str = zarr_config.compressor
-    compressor_opt: str = zarr_config.compressor_opt
-    nii: bool = zarr_config.nii
-
-    if isinstance(compressor_opt, str):
-        compressor_opt = ast.literal_eval(compressor_opt)
 
     CHUNK_PATTERN = re.compile(
         r"^(?P<prefix>\w*)"
@@ -136,10 +131,7 @@ def convert(
         tiles_info_by_index[(tile.y, tile.z)] = tile
 
     # Set default output path if not provided
-    if not out:
-        out = all_tiles_info[0].prefix + all_tiles_info[0].suffix
-        out += ".nii.zarr" if nii else ".ome.zarr"
-    nii = nii or out.endswith(".nii.zarr")
+    zarr_config.set_default_name(all_tiles_info[0].prefix + all_tiles_info[0].suffix)
 
     # Determine unique Y and Z tile indices
     z_tiles = set(tile.z for tile in all_tiles_info)
@@ -153,7 +145,8 @@ def convert(
     expected_sx = 0
     expected_sy = {}
     expected_sz = {}
-    all_shapes = np.empty((num_y_tiles, num_z_tiles, 3), dtype=int)
+    # TODO: as it is zero, if a tile is missing, it will make dimension mismatch
+    all_shapes = np.zeros((num_y_tiles, num_z_tiles, 3), dtype=int)
 
     # Collect shape and dtype info from all tiles
     for z_tile in range(min_z_tile, max_z_tile + 1):
@@ -205,24 +198,14 @@ def convert(
     full_shape_x = expected_sx
     full_shape_y = sum(expected_sy.values()) - (num_y_tiles - 1) * overlap
     full_shape_z = sum(expected_sz.values())
-    fullshape = [full_shape_z, full_shape_y, full_shape_x]
+    fullshape = (full_shape_z, full_shape_y, full_shape_x)
 
     # Initialize Zarr group and array
-    omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=True)
-    print(out)
-    # Prepare chunking options
-    opt = {
-        "chunks": [chunk] * 3,
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": np.dtype(dtype).str,
-        "fill_value": None,
-        "compressor": make_compressor(compressor, **compressor_opt),
-    }
-    # write first level
-    omz.create_dataset("0", shape=fullshape, **opt)
-    array = omz["0"]
+    omz = open_zarr_group(zarr_config)
+    array = create_array(omz, "0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
+    # TODO: logger
+    # print(out)
+
     print("Write level 0 with shape", fullshape)
 
     # Populate Zarr array from tiles
@@ -256,18 +239,15 @@ def convert(
     print("")
 
     # Generate Zarr pyramid and metadata
-    generate_pyramid(omz)
+    generate_pyramid(omz, levels=zarr_config.levels)
     write_ome_metadata(omz, axes = ["z","y","x"],space_scale=voxel_size)
 
     # Write NIfTI-Zarr header:
-    if not nii:
+    if not zarr_config.nii:
         return
 
-    header, _ = default_nifti_header(
-        omz["0"],
-        omz.attrs.get("ome", omz.attrs).get("multiscales", None)
-    )
-
+    # TODO: header has some problem with unit when deal with zarr 2, furthur debugging needed
+    header, _ = default_nifti_header(omz["0"], omz.attrs.get("ome", omz.attrs).get("multiscales", None))
     shape = list(reversed(omz["0"].shape))
     shape = shape[:3] + [1] + shape[3:]  # insert time dimension
     affine = orientation_to_affine(orientation, *voxel_size)
