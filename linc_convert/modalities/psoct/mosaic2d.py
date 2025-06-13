@@ -1,3 +1,7 @@
+"""
+This module includes components that are based on the https://github.com/CarolineMagnain/OCTAnalysis repository (currently private).  We have permission from the owner to include the code here.
+"""
+
 import logging
 import os.path as op
 from colorsys import hsv_to_rgb
