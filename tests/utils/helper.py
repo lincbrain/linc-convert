@@ -20,7 +20,7 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
     zarr2 = zarr.open(path2, mode="r")
 
     # Compare keys (dataset structure)
-    if zarr1.keys() != zarr2.keys():
+    if set(zarr1.keys()) != set(zarr2.keys()):
         print("keys mismatch")
         return False
     if zarr1.attrs != zarr2.attrs:

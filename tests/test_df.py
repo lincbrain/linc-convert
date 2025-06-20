@@ -5,7 +5,7 @@ import zipfile
 import glymur
 import numpy as np
 
-from helper import _cmp_zarr_archives
+from utils.helper import _cmp_zarr_archives
 from linc_convert.modalities.df import multi_slice
 
 
@@ -25,5 +25,5 @@ def test_df(tmp_path):
     output_zarr = tmp_path / "output.zarr"
     files = glob.glob(os.path.join(tmp_path, "*.jp2"))
     files.sort()
-    multi_slice.convert(files, out=str(output_zarr))
+    multi_slice.convert(files, out=str(output_zarr), zarr_version=2)
     assert _cmp_zarr_archives(str(output_zarr), "data/df.zarr.zip")

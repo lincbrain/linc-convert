@@ -3,7 +3,7 @@ import os
 import numpy as np
 import wkw
 import zarr
-from helper import _cmp_zarr_archives
+from utils.helper import _cmp_zarr_archives
 
 from linc_convert.modalities.wk import webknossos_annotation
 

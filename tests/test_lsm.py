@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import tifffile
 
-from helper import _cmp_zarr_archives
+from utils.helper import _cmp_zarr_archives
 from linc_convert.modalities.lsm import mosaic
 
 
