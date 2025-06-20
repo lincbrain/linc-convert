@@ -117,13 +117,12 @@ class ZarrConfig:
                     f"Output path '{self.out}' exists and overwrite was not confirmed.")
 
     def update(self, **kwargs):
-        replace(self, **kwargs)
-        return self
+        return replace(self, **kwargs)
 
 def update(zarr_config: ZarrConfig|None, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
     if zarr_config is None:
         zarr_config = ZarrConfig()
-    replace(zarr_config, **kwargs)
-    return zarr_config
+    return replace(zarr_config, **kwargs)
+
 
 
