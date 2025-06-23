@@ -95,7 +95,7 @@ class ZarrConfig:
     nii: bool = False
     max_load: int = 512
     overwrite: bool = False
-    # driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"
+    driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"
 
     def __post_init__(self) -> None:
         if self.out:

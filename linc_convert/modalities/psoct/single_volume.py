@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 import cyclopts
 import h5py
+from linc_convert.utils.zarr.zarr_io import ZarrPythonGroup, from_config
 import numpy as np
 from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
 
@@ -124,7 +125,7 @@ def convert(
         unit = "um"
 
     # Prepare Zarr group
-    omz = open_zarr_group(zarr_config)
+    zgroup = from_config(zarr_config, overwrite= ZarrConfig.overwrite)
 
     if not hasattr(inp, "dtype"):
         raise Exception("Input is not a numpy array. This is unexpected.")
@@ -136,7 +137,7 @@ def convert(
     nj = ceildiv(inp.shape[1], inp_chunk[1])
     ni = ceildiv(inp.shape[2], inp_chunk[2])
 
-    dataset = create_array(omz, "0", shape=inp.shape, zarr_config=zarr_config,
+    dataset = zgroup.create_array("0", shape=inp.shape, zarr_config=zarr_config,
                            dtype=np.dtype(inp.dtype))
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
@@ -146,18 +147,19 @@ def convert(
         loaded_chunk = inp[slc]
         dataset[slc] = loaded_chunk
 
-    generate_pyramid(omz, mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+    # generate_pyramid(zgroup, mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+    zgroup.generate_pyramid( mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
-    write_ome_metadata(omz, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
+    write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:
         logger.info("Conversion complete.")
         return
 
     # Write NIfTI-Zarr header
-    arr = omz["0"]
+    arr = zgroup["0"]
     header = default_nifti_header(arr,
-                                     omz.attrs.get("ome", omz.attrs).get("multiscales"))
+                                     zgroup.attrs.get("ome", zgroup.attrs).get("multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
@@ -168,4 +170,4 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(to_nifti_unit(unit))
 
-    write_nifti_header(omz, header)
+    write_nifti_header(zgroup, header)
