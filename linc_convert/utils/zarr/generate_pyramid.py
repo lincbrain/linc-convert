@@ -7,10 +7,16 @@ import dask.array as da
 import numpy as np
 import tqdm
 import zarr
+import dask
 from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
+import tensorstore as ts
+
 
 from linc_convert.utils.math import ceildiv
 from .create_array import dimension_separator_to_chunk_key_encoding
+
+
+from dask.diagnostics import ProgressBar
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +203,21 @@ def get_zarray_options(base_level):
     opts.update(**opts_extra)
     return opts
 
+class _TSAdapter:
+    def __init__(self, ts):
+        self._ts = ts
+    @property
+    def shape(self): return tuple(self._ts.shape)
+    @property
+    def ndim(self):  return self._ts.ndim
+    @property
+    def dtype(self):
+        # Expose the NumPy dtype here:
+        return self._ts.dtype.numpy_dtype
+    def __getitem__(self, idx):
+        return self._ts[idx].read().result()
+
+
 
 def generate_pyramid_new(
     omz: zarr.Group,
@@ -229,6 +250,9 @@ def generate_pyramid_new(
         Shapes of all levels, from finest to coarsest, including the
         existing top level.
     """
+    from linc_convert.utils.zarr._zarr import default_write_config, \
+        default_read_config
+
     # Read properties from base level
     base_level = omz["0"]
     base_shape = list(base_level.shape)
@@ -236,7 +260,7 @@ def generate_pyramid_new(
     opts = get_zarray_options(base_level)
 
     # Select windowing function
-    window_func = {"median": np.median, "mean": np.mean}[mode]
+    window_func = {"median": da.median, "mean": da.mean}[mode]
 
     batch_shape, spatial_shape = base_shape[:-ndim], base_shape[-ndim:]
     all_shapes = [spatial_shape]
@@ -245,21 +269,80 @@ def generate_pyramid_new(
     if levels == -1:
         levels = default_levels(spatial_shape, chunk_size[-ndim:], no_pyramid_axis)
 
+    rconfig = default_read_config(str(omz["0"].store_path))
+    reader = ts.open(rconfig).result()
+
+    reader = _TSAdapter(reader)
+    dat = da.from_array(reader, chunks=opts["chunks"])
+    tasks = []
     for lvl in tqdm.tqdm(range(1, levels + 1)):
-        # Compute downsampled shape
         prev_shape = spatial_shape
         spatial_shape = next_level_shape(prev_shape, no_pyramid_axis)
         all_shapes.append(spatial_shape)
         logger.info(f"Compute level {lvl} with shape {spatial_shape}")
-
         arr = omz.create_array(str(lvl), shape=batch_shape + spatial_shape, **opts)
 
-        dat = da.from_zarr(omz[str(lvl - 1)])
-        dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)
-        dat = dat.rechunk(arr.chunks)
-        dat.store(arr)
+        # dat = da.from_zarr(omz[str(lvl - 1)])
 
+        wconfig = default_write_config(str(arr.store_path),shape = batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"])
+        wconfig["delete_existing"] = True
+        wconfig["create"] = True
+        writer = ts.open(wconfig).result()
+        #
+        #
+        # dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)
+        dat = compute_next_level_dask(dat, ndim, no_pyramid_axis, window_func)
+        # with ProgressBar():/
+        #     dat.compute()
+        # TODO: this exists even without sharding
+        if arr.shards:
+            dat = dat.rechunk(arr.shards)
+        else:
+            dat = dat.rechunk(arr.chunks)
+        with ProgressBar():
+            tasks.append(dat.store(writer, compute=False))
+            # TODO: delay this task, write together
+    dask.compute(*tasks)
     return all_shapes
+
+
+def compute_next_level_dask(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
+    """
+    Compute the next (half-resolution) level of a dask array pyramid along the
+    last `ndim` dimensions, optionally skipping reduction along one axis.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Input array of shape (..., N1, N2, ..., Nndim).
+    ndim : int
+        Number of “pyramid” dimensions at the end of arr.ndim.
+    no_pyramid_axis : int or None
+        If not None, that axis (0 ≤ axis < ndim) will not be downsampled.
+    window_func : callable
+        A reduction function like da.mean or da.median.
+
+    Returns
+    -------
+    dask.array.Array
+        Array of shape (..., ceil(N1/2), ceil(N2/2), ...,ceil(Nndim/2))
+        except on `no_pyramid_axis` where the length is unchanged.
+    """
+
+    # figure out which global axes we’re coarsening
+    start = arr.ndim - ndim
+    pyramid_axes = list(range(start, arr.ndim))
+
+    # build the coarsening factors: 2 along each pyramid dim, except 1 if skip
+    factors = {
+        axis: (
+            1 if (no_pyramid_axis is not None and axis == pyramid_axes[no_pyramid_axis])
+            else 2)
+        for axis in pyramid_axes
+    }
+
+    # da.coarsen will drop any “extra” pixels at the end if trim_excess=True
+    return da.coarsen(window_func, arr, factors, trim_excess=True)
 
 
 def compute_next_level(arr, ndim, no_pyramid_axis, window_func):
