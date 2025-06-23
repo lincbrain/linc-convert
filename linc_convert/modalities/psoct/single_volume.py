@@ -17,8 +17,8 @@ import numpy as np
 from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
 
 from linc_convert import utils
-from linc_convert.modalities.psoct.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, _H5ArrayWrapper
-from linc_convert.modalities.psoct.utils._utils import make_json
+from linc_convert.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, _H5ArrayWrapper
+from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.chunk_processing import chunk_slice_generator
 from linc_convert.utils.math import ceildiv

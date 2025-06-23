@@ -17,9 +17,9 @@ import h5py
 import numpy as np
 
 from linc_convert import utils
-from linc_convert.modalities.psoct.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
+from linc_convert.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
     _MatArrayWrapper
-from linc_convert.modalities.psoct.utils._utils import make_json
+from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
@@ -167,7 +167,7 @@ def convert(
 
     # Write NIfTI-Zarr header
     arr = omz["0"]
-    header, _ = default_nifti_header(arr, omz.attrs.get("ome", omz.attrs).get("multiscales"))
+    header = default_nifti_header(arr, omz.attrs.get("ome", omz.attrs).get("multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
