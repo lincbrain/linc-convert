@@ -24,7 +24,7 @@ from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr import open_zarr_group, create_array, generate_pyramid
+from linc_convert.utils.zarr import open_zarr_group, create_array, generate_pyramid, generate_pyramid_old
 from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
 
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
