@@ -1,10 +1,8 @@
 """Functions for zarr compression."""
 from typing import Any, Literal
 
-import zarr.codecs
 
-
-def make_compressor(name: str | None, zarr_version: Literal[2, 3],**prm: dict) -> Any:
+def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
         return name
@@ -21,7 +19,8 @@ def make_compressor(name: str | None, zarr_version: Literal[2, 3],**prm: dict) -
             "blosc": zarr.codecs.BloscCodec,
             "zlib": zarr.codecs.ZstdCodec,
         }
-
+    else:
+        raise ValueError()
     name = name.lower()
 
     if name not in compressor_map:
