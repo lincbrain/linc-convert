@@ -20,7 +20,7 @@ from dask.diagnostics import ProgressBar
 
 logger = logging.getLogger(__name__)
 
-def generate_pyramid(
+def generate_pyramid_old(
     omz: zarr.Group,
     levels: int = -1,
     ndim: int = 3,
@@ -219,7 +219,7 @@ class _TSAdapter:
 
 
 
-def generate_pyramid_new(
+def generate_pyramid(
     omz: zarr.Group,
     levels: int = -1,
     ndim: int = 3,
@@ -284,29 +284,24 @@ def generate_pyramid_new(
 
         # dat = da.from_zarr(omz[str(lvl - 1)])
 
-        wconfig = default_write_config(str(arr.store_path),shape = batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"])
+        wconfig = default_write_config(str(arr.store_path),shape = batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"],
+                                       version = omz.info._zarr_format)
         wconfig["delete_existing"] = True
         wconfig["create"] = True
         writer = ts.open(wconfig).result()
-        #
-        #
-        # dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)
-        dat = compute_next_level_dask(dat, ndim, no_pyramid_axis, window_func)
-        # with ProgressBar():/
-        #     dat.compute()
+        dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)
         # TODO: this exists even without sharding
         if arr.shards:
             dat = dat.rechunk(arr.shards)
         else:
             dat = dat.rechunk(arr.chunks)
         with ProgressBar():
-            tasks.append(dat.store(writer, compute=False))
+            dat.store(writer)
             # TODO: delay this task, write together
-    dask.compute(*tasks)
     return all_shapes
 
 
-def compute_next_level_dask(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
+def compute_next_level(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
     """
     Compute the next (half-resolution) level of a dask array pyramid along the
     last `ndim` dimensions, optionally skipping reduction along one axis.
@@ -340,12 +335,12 @@ def compute_next_level_dask(arr, ndim, no_pyramid_axis=None, window_func=da.mean
             else 2)
         for axis in pyramid_axes
     }
-
+    dtype = arr.dtype
     # da.coarsen will drop any “extra” pixels at the end if trim_excess=True
-    return da.coarsen(window_func, arr, factors, trim_excess=True)
+    return da.coarsen(window_func, arr, factors, trim_excess=True).astype(dtype)
 
 
-def compute_next_level(arr, ndim, no_pyramid_axis, window_func):
+def compute_next_level_old(arr, ndim, no_pyramid_axis, window_func):
     batch_shape, prev_shape = arr.shape[:-ndim], arr.shape[-ndim:]
     batch_shape = list(batch_shape)
     crop = [
