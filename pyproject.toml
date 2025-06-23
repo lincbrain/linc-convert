@@ -30,6 +30,8 @@ nibabel = "*"
 zarr = "^3.0.0"
 nifti-zarr = "*"
 tqdm = "*"
+dask = "*"
+
 # optionals
 glymur = { version = "*", optional = true }
 tifffile = { version = "*", optional = true }
