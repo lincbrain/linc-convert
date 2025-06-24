@@ -16,6 +16,7 @@ import cyclopts
 import h5py
 import numpy as np
 
+from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
 from linc_convert import utils
 from linc_convert.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
     _MatArrayWrapper
@@ -25,9 +26,8 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr import open_zarr_group, create_array, generate_pyramid, generate_pyramid_old
-from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
-
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.zarr.zarr_io import from_config
 
 logger = logging.getLogger(__name__)
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
@@ -115,7 +115,7 @@ def convert(
         unit = "um"
 
     # Prepare Zarr group
-    omz = open_zarr_group(zarr_config)
+    zgroup = from_config(zarr_config)
 
     if not hasattr(inp[0], "dtype"):
         raise Exception("Input is not an array. This is likely unexpected")
@@ -131,7 +131,7 @@ def convert(
     ny = ceildiv(volume_shape[-2], chunk_size[1])
     nslices = len(inp)
 
-    dataset = create_array(omz, "0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype))
+    dataset = zgroup.create_array("0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype))
 
     # Process and store data in chunks
     for i in range(nslices):
@@ -157,17 +157,17 @@ def convert(
             ] = loaded_chunk
         inp[i] = None  # Remove reference to free memory
 
-    generate_pyramid(omz, mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+    zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
-    write_ome_metadata(omz, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
+    write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:
         logger.info("Conversion complete.")
         return
 
     # Write NIfTI-Zarr header
-    arr = omz["0"]
-    header = default_nifti_header(arr, omz.attrs.get("ome", omz.attrs).get("multiscales"))
+    arr = zgroup["0"]
+    header = default_nifti_header(arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
@@ -178,4 +178,4 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(to_nifti_unit(unit))
 
-    write_nifti_header(omz, header)
+    write_nifti_header(zgroup, header)
