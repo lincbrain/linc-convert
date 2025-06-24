@@ -44,7 +44,8 @@ df = ["glymur"]
 lsm = ["tifffile"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
-all = ["glymur", "tifffile", "h5py", "scipy", "wkw"]
+ts = ["tensorstore"]
+all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore"]
 
 [tool.poetry.group.dev]
 optional = true
