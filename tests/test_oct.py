@@ -10,7 +10,7 @@ import zarr.storage
 from scipy.io import savemat
 
 from linc_convert.modalities.psoct import single_volume, multi_slice
-from utils.helper import _cmp_zarr_archives
+from utils.compare_file import _cmp_zarr_archives
 
 
 # def test_oct(tmp_path):
