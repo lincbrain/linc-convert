@@ -49,7 +49,7 @@ def test_oct_single_volume(tmp_path):
     output_path = tmp_path / "single_volume.nii.zarr"
     generate_single_volume_data(input_path)
     single_volume.convert(input_path, out=str(output_path), key="volume",
-                          zarr_version=2, overwrite=True, chunk=(64,))
+                          zarr_version=2, overwrite=True, chunk=(64,), driver = "tensorstore")
 
     assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
         "data/oct_single_volume_zarr2.nii.zarr.zip", mode="r"))
@@ -60,7 +60,7 @@ def test_oct_single_volume_zarr3(tmp_path):
     output_path = tmp_path / "single_volume.nii.zarr"
     generate_single_volume_data(input_path)
     single_volume.convert(input_path, out=str(output_path), key="volume",
-                          zarr_version=3, overwrite=True, chunk=(64,))
+                          zarr_version=3, overwrite=True, chunk=(64,), driver = "tensorstore")
 
     assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
         "data/oct_single_volume_zarr3.nii.zarr.zip", mode="r"))
@@ -106,7 +106,7 @@ def test_oct_multi_slices(tmp_path):
     generate_multi_slice_data(input_path)
     input_path = glob.glob(str(input_path / "*.mat"))
     multi_slice.convert(input_path, out=str(output_path), zarr_version=2,
-                        overwrite=True, chunk=(64,))
+                        overwrite=True, chunk=(64,), driver = "tensorstore")
 
     assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
         "data/oct_multi_slice_zarr2.nii.zarr.zip", mode="r"))
@@ -118,7 +118,7 @@ def test_oct_multi_slices_zarr3(tmp_path):
     generate_multi_slice_data(input_path)
     input_path = glob.glob(str(input_path / "*.mat"))
     multi_slice.convert(input_path, out=str(output_path), zarr_version=3,
-                        overwrite=True, chunk=(64,))
+                        overwrite=True, chunk=(64,), driver = "tensorstore")
 
     assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
         "data/oct_multi_slice_zarr3.nii.zarr.zip", mode="r"))
