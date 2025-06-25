@@ -230,6 +230,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
                 dat = dat.rechunk(arr.shards)
             else:
                 dat = dat.rechunk(arr.chunks)
+            dat = dat.persist()
             with ProgressBar():
                 dat.store(arr)
         return all_shapes
