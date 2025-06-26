@@ -38,6 +38,7 @@ tifffile = { version = "*", optional = true }
 h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
+tensorstore = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
