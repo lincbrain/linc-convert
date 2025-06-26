@@ -12,8 +12,8 @@ import numpy as np
 import zarr
 from numpy._typing import DTypeLike
 from upath import UPath
-import tensorstore as ts
 
+import tensorstore as ts
 from linc_convert.utils.zarr import ZarrConfig
 from linc_convert.utils.zarr.zarr_io.abc import ZarrArray, ZarrGroup
 

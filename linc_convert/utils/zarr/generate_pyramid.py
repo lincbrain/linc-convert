@@ -3,27 +3,27 @@ import logging
 import math
 from typing import Literal, Optional
 
+import dask
 import dask.array as da
 import numpy as np
+import tensorstore as ts
 import tqdm
 import zarr
-import dask
+from dask.diagnostics import ProgressBar
 from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
-import tensorstore as ts
-
 
 from linc_convert.utils.math import ceildiv
-from dask.diagnostics import ProgressBar
 
 logger = logging.getLogger(__name__)
 
+
 def generate_pyramid_old(
-    omz: zarr.Group,
-    levels: int = -1,
-    ndim: int = 3,
-    max_load: int = 512,
-    mode: Literal["mean", "median"] = "median",
-    no_pyramid_axis: Optional[int] = None,
+        omz: zarr.Group,
+        levels: int = -1,
+        ndim: int = 3,
+        max_load: int = 512,
+        mode: Literal["mean", "median"] = "median",
+        no_pyramid_axis: Optional[int] = None,
 ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
@@ -190,7 +190,8 @@ def get_zarray_options(base_level):
     )
     if isinstance(base_level.metadata, ArrayV2Metadata):
         opts_extra = dict(
-        chunk_key_encoding = dimension_separator_to_chunk_key_encoding(base_level.metadata.dimension_separator, 2)
+            chunk_key_encoding=dimension_separator_to_chunk_key_encoding(
+                base_level.metadata.dimension_separator, 2)
         )
     elif isinstance(base_level.metadata, ArrayV3Metadata):
         opts_extra = dict(
@@ -202,28 +203,32 @@ def get_zarray_options(base_level):
     opts.update(**opts_extra)
     return opts
 
+
 class _TSAdapter:
     def __init__(self, ts):
         self._ts = ts
+
     @property
     def shape(self): return tuple(self._ts.shape)
+
     @property
     def ndim(self):  return self._ts.ndim
+
     @property
     def dtype(self):
         # Expose the NumPy dtype here:
         return self._ts.dtype.numpy_dtype
+
     def __getitem__(self, idx):
         return self._ts[idx].read().result()
 
 
-
 def generate_pyramid(
-    omz: zarr.Group,
-    levels: int = -1,
-    ndim: int = 3,
-    mode: Literal["mean", "median"] = "median",
-    no_pyramid_axis: Optional[int] = None,
+        omz: zarr.Group,
+        levels: int = -1,
+        ndim: int = 3,
+        mode: Literal["mean", "median"] = "median",
+        no_pyramid_axis: Optional[int] = None,
 ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
@@ -283,8 +288,11 @@ def generate_pyramid(
 
         # dat = da.from_zarr(omz[str(lvl - 1)])
 
-        wconfig = default_write_config(str(arr.store_path), shape =batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"],
-                                       version = omz.info._zarr_format)
+        wconfig = default_write_config(str(arr.store_path),
+                                       shape=batch_shape + spatial_shape,
+                                       dtype=dat.dtype, chunk=opts["chunks"],
+                                       shard=opts["shards"],
+                                       version=omz.info._zarr_format)
         wconfig["delete_existing"] = True
         wconfig["create"] = True
         writer = ts.open(wconfig).result()
@@ -331,7 +339,8 @@ def compute_next_level(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
     # build the coarsening factors: 2 along each pyramid dim, except 1 if skip
     factors = {
         axis: (
-            1 if (no_pyramid_axis is not None and axis == pyramid_axes[no_pyramid_axis]) or arr.shape[axis] == 1
+            1 if (no_pyramid_axis is not None and axis == pyramid_axes[
+                no_pyramid_axis]) or arr.shape[axis] == 1
             else 2)
         for axis in pyramid_axes
     }
@@ -376,6 +385,3 @@ def compute_next_level_old(arr, ndim, no_pyramid_axis, window_func):
     arr = window_func(arr, axis=-1)
     arr = arr.astype(dtype)
     return arr
-
-
-

@@ -227,7 +227,7 @@ SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
                          )
 
 
-def open_zarr_group(zarr_config:ZarrConfig):
+def open_zarr_group(zarr_config: ZarrConfig):
     # TODO: check out is not none or empty
     store = zarr.storage.LocalStore(zarr_config.out)
     return zarr.group(store=store, overwrite=True, zarr_format=zarr_config.zarr_version)
@@ -254,21 +254,23 @@ def create_array(
         "order": zarr_config.order,
         "dtype": np.dtype(dtype).str,
         "fill_value": None,
-        "compressors": make_compressor(compressor, zarr_config.zarr_version, **compressor_opt),
+        "compressors": make_compressor(compressor, zarr_config.zarr_version,
+                                       **compressor_opt),
     }
 
-    chunk_key_encoding = dimension_separator_to_chunk_key_encoding(zarr_config.dimension_separator, zarr_config.zarr_version)
+    chunk_key_encoding = dimension_separator_to_chunk_key_encoding(
+        zarr_config.dimension_separator, zarr_config.zarr_version)
     if chunk_key_encoding:
         opt["chunk_key_encoding"] = chunk_key_encoding
-    arr= omz.create_array(name=name,
-                          shape=shape,
-                          **opt)
+    arr = omz.create_array(name=name,
+                           shape=shape,
+                           **opt)
     if data:
         arr[:] = data
     return arr
 
 
-def dimension_separator_to_chunk_key_encoding(dimension_separator,zarr_version):
+def dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version):
     dimension_separator = dimension_separator
     if dimension_separator == '.' and zarr_version == 2:
         pass

@@ -17,15 +17,14 @@ import numpy as np
 import zarr
 from cyclopts import App
 
-
 # internals
 from linc_convert import utils
 from linc_convert.modalities.df.cli import df
 from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 
 HOME = "/space/aspasia/2/users/linc/000003"
 
@@ -33,21 +32,20 @@ HOME = "/space/aspasia/2/users/linc/000003"
 LINCSET = os.path.join(HOME, "sourcedata")
 LINCOUT = os.path.join(HOME, "rawdata")
 
-
 ms = App(name="multislice", help_format="markdown")
 df.command(ms)
 
 
 @ms.default
 def convert(
-    inp: list[str],
-    *,
-    out: str,
-    zarr_config: ZarrConfig = None,
-    max_load: int = 16384,
-    orientation: str = "coronal",
-    center: bool = True,
-    thickness: float | None = None,
+        inp: list[str],
+        *,
+        out: str,
+        zarr_config: ZarrConfig = None,
+        max_load: int = 16384,
+        orientation: str = "coronal",
+        center: bool = True,
+        thickness: float | None = None,
         **kwargs
 ) -> None:
     """
@@ -146,7 +144,7 @@ def convert(
     print(new_size)
     # Write each level
     for level in range(nblevel):
-        shape = [ceildiv(s, 2**level) for s in new_size[:2]]
+        shape = [ceildiv(s, 2 ** level) for s in new_size[:2]]
         shape = [new_size[2]] + [len(inp)] + shape
 
         omz.create_dataset(f"{level}", shape=shape, **opt)
@@ -175,18 +173,18 @@ def convert(
 
             for channel in range(3):
                 if max_load is None or (
-                    subdat_size[-2] < max_load and subdat_size[-1] < max_load
+                        subdat_size[-2] < max_load and subdat_size[-1] < max_load
                 ):
                     array[
-                        channel, idx, x : x + subdat_size[-2], y : y + subdat_size[-1]
-                    ] = subdat[channel : channel + 1, ...][0]
+                    channel, idx, x: x + subdat_size[-2], y: y + subdat_size[-1]
+                    ] = subdat[channel: channel + 1, ...][0]
                 else:
                     ni = ceildiv(subdat_size[-2], max_load)
                     nj = ceildiv(subdat_size[-1], max_load)
 
                     for i in range(ni):
                         for j in range(nj):
-                            print(f"\r{i+1}/{ni}, {j+1}/{nj}", end=" ")
+                            print(f"\r{i + 1}/{ni}, {j + 1}/{nj}", end=" ")
                             start_x, end_x = (
                                 i * max_load,
                                 min((i + 1) * max_load, subdat_size[-2]),
@@ -197,15 +195,15 @@ def convert(
                             )
 
                             array[
-                                channel,
-                                idx,
-                                x + start_x : x + end_x,
-                                y + start_y : y + end_y,
+                            channel,
+                            idx,
+                            x + start_x: x + end_x,
+                            y + start_y: y + end_y,
                             ] = subdat[
-                                channel : channel + 1,
+                                channel: channel + 1,
                                 start_x:end_x,
                                 start_y:end_y,
-                            ][0]
+                                ][0]
 
                     print("")
 
@@ -242,20 +240,20 @@ def convert(
             {
                 "type": "scale",
                 "scale": [1.0] * has_channel
-                + [
-                    1.0,
-                    (shape0[0] / shape[0]) * vxh,
-                    (shape0[1] / shape[1]) * vxw,
-                ],
+                         + [
+                             1.0,
+                             (shape0[0] / shape[0]) * vxh,
+                             (shape0[1] / shape[1]) * vxw,
+                         ],
             },
             {
                 "type": "translation",
                 "translation": [0.0] * has_channel
-                + [
-                    0.0,
-                    (shape0[0] / shape[0] - 1) * vxh * 0.5,
-                    (shape0[1] / shape[1] - 1) * vxw * 0.5,
-                ],
+                               + [
+                                   0.0,
+                                   (shape0[0] / shape[0] - 1) * vxh * 0.5,
+                                   (shape0[1] / shape[1] - 1) * vxw * 0.5,
+                               ],
             },
         ]
     multiscales[0]["coordinateTransformations"] = [

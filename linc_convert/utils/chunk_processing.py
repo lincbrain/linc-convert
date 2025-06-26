@@ -35,4 +35,3 @@ def chunk_slice_generator(arr_shape, chunk_shape):
         # Prepend an Ellipsis to preserve any preceding (non-chunked) dimensions
         full_slice = (...,) + slices
         yield index, full_slice
-

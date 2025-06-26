@@ -68,7 +68,7 @@ class WrappedJ2K:
     def shape(self) -> tuple[int]:
         """Shape of the current level."""
         channel = list(self.j2k.shape[2:])
-        shape = [ceildiv(s, 2**self.level) for s in self.j2k.shape[:2]]
+        shape = [ceildiv(s, 2 ** self.level) for s in self.j2k.shape[:2]]
         if self.channel_first:
             shape = channel + shape
         else:
@@ -119,10 +119,10 @@ class WrappedJ2K:
         wstart, wstop = widx.start or 0, widx.stop or 0
 
         # convert to level 0 indices
-        hstart *= 2**self.level
-        hstop *= 2**self.level
-        wstart *= 2**self.level
-        wstop *= 2**self.level
+        hstart *= 2 ** self.level
+        hstop *= 2 ** self.level
+        wstart *= 2 ** self.level
+        wstop *= 2 ** self.level
         hstop = min(hstop or self.j2k.shape[0], self.j2k.shape[0])
         wstop = min(wstop or self.j2k.shape[1], self.j2k.shape[1])
         area = (hstart, wstart, hstop, wstop)

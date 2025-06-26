@@ -1,13 +1,14 @@
 """Configuration related to output Zarr Archive."""
+import logging
 import os
 from dataclasses import dataclass, replace
 from typing import Annotated, Literal
-from typing_extensions import Unpack
-import logging
 
 from cyclopts import Parameter
+from typing_extensions import Unpack
 
 logger = logging.getLogger(__name__)
+
 
 @Parameter(name="*")
 @dataclass
@@ -91,7 +92,7 @@ class ZarrConfig:
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z", None] = None
     levels: int = -1
-    ome_version: Literal["0.4","0.5"] = "0.4"
+    ome_version: Literal["0.4", "0.5"] = "0.4"
     nii: bool = False
     max_load: int = 512
     overwrite: bool = False
@@ -119,10 +120,8 @@ class ZarrConfig:
     def update(self, **kwargs):
         return replace(self, **kwargs)
 
-def update(zarr_config: ZarrConfig|None, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
+
+def update(zarr_config: ZarrConfig | None, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
     if zarr_config is None:
         zarr_config = ZarrConfig()
     return replace(zarr_config, **kwargs)
-
-
-
