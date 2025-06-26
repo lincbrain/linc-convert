@@ -250,8 +250,8 @@ def generate_pyramid(
         Shapes of all levels, from finest to coarsest, including the
         existing top level.
     """
-    from linc_convert.utils.zarr._zarr import default_write_config, \
-        default_read_config
+    from .zarr_io.drivers.tensorstore import default_read_config
+    from .zarr_io.drivers.tensorstore import default_write_config
 
     # Read properties from base level
     base_level = omz["0"]
@@ -284,7 +284,7 @@ def generate_pyramid(
 
         # dat = da.from_zarr(omz[str(lvl - 1)])
 
-        wconfig = default_write_config(str(arr.store_path),shape = batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"],
+        wconfig = default_write_config(str(arr.store_path), shape =batch_shape + spatial_shape, dtype = dat.dtype, chunk = opts["chunks"], shard=opts["shards"],
                                        version = omz.info._zarr_format)
         wconfig["delete_existing"] = True
         wconfig["create"] = True
@@ -295,6 +295,7 @@ def generate_pyramid(
             dat = dat.rechunk(arr.shards)
         else:
             dat = dat.rechunk(arr.chunks)
+        dat = dat.persist()
         with ProgressBar():
             dat.store(writer)
             # TODO: delay this task, write together
@@ -331,12 +332,12 @@ def compute_next_level(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
     # build the coarsening factors: 2 along each pyramid dim, except 1 if skip
     factors = {
         axis: (
-            1 if (no_pyramid_axis is not None and axis == pyramid_axes[no_pyramid_axis])
+            1 if (no_pyramid_axis is not None and axis == pyramid_axes[no_pyramid_axis]) or arr.shape[axis] == 1
             else 2)
         for axis in pyramid_axes
     }
     dtype = arr.dtype
-    # da.coarsen will drop any “extra” pixels at the end if trim_excess=True
+
     return da.coarsen(window_func, arr, factors, trim_excess=True).astype(dtype)
 
 
