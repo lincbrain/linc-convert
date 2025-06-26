@@ -10,7 +10,7 @@ import zarr.storage
 from scipy.io import savemat
 
 from linc_convert.modalities.psoct import single_volume, multi_slice
-from utils.compare_file import _cmp_zarr_archives
+from utils.compare_file import _cmp_zarr_archives, assert_zarr_equal
 
 
 # def test_oct(tmp_path):
@@ -51,7 +51,7 @@ def test_oct_single_volume(tmp_path):
     single_volume.convert(input_path, out=str(output_path), key="volume",
                           zarr_version=2, overwrite=True, chunk=(64,), driver = "tensorstore")
 
-    assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
+    assert_zarr_equal(str(output_path), zarr.storage.ZipStore(
         "data/oct_single_volume_zarr2.nii.zarr.zip", mode="r"))
 
 
@@ -62,7 +62,7 @@ def test_oct_single_volume_zarr3(tmp_path):
     single_volume.convert(input_path, out=str(output_path), key="volume",
                           zarr_version=3, overwrite=True, chunk=(64,), driver = "tensorstore")
 
-    assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
+    assert_zarr_equal(str(output_path), zarr.storage.ZipStore(
         "data/oct_single_volume_zarr3.nii.zarr.zip", mode="r"))
 
 
@@ -108,7 +108,7 @@ def test_oct_multi_slices(tmp_path):
     multi_slice.convert(input_path, out=str(output_path), zarr_version=2,
                         overwrite=True, chunk=(64,), driver = "tensorstore")
 
-    assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
+    assert_zarr_equal(str(output_path), zarr.storage.ZipStore(
         "data/oct_multi_slice_zarr2.nii.zarr.zip", mode="r"))
 
 
@@ -120,7 +120,7 @@ def test_oct_multi_slices_zarr3(tmp_path):
     multi_slice.convert(input_path, out=str(output_path), zarr_version=3,
                         overwrite=True, chunk=(64,), driver = "tensorstore")
 
-    assert _cmp_zarr_archives(str(output_path), zarr.storage.ZipStore(
+    assert_zarr_equal(str(output_path), zarr.storage.ZipStore(
         "data/oct_multi_slice_zarr3.nii.zarr.zip", mode="r"))
 
 

@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from typing import Union
 
 import numpy as np
 import zarr
@@ -34,7 +35,8 @@ def load_file(path):
         # Extract variable array from mat dict (ignoring metadata keys)
         keys = [k for k in mat.keys() if not k.startswith('__')]
         if len(keys) != 1:
-            print(f"Error: Expected one variable in the MAT file, found {len(keys)}: {keys}")
+            print(
+                f"Error: Expected one variable in the MAT file, found {len(keys)}: {keys}")
             sys.exit(1)
         return mat[keys[0]]
 
@@ -52,26 +54,6 @@ def load_file(path):
     sys.exit(1)
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Compare arrays in two files.')
-    parser.add_argument('file1', help='First file (.nii, .nii.gz, .mat, .zarr)')
-    parser.add_argument('file2', help='Second file (.nii, .nii.gz, .mat, .zarr)')
-    args = parser.parse_args()
-
-    a = load_file(args.file1)
-    b = load_file(args.file2)
-    try:
-        np.testing.assert_array_almost_equal(a, b, decimal=4)
-        print("Arrays are almost equal up to 6 decimal places.")
-    except AssertionError as e:
-        print("Arrays differ:")
-        print(e)
-
-
-if __name__ == '__main__':
-    main()
-
-
 def _cmp_zarr_archives(path1: str, path2: str) -> bool:
     """
     Compare two Zarr archives to check if they contain the same data.
@@ -85,7 +67,6 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
     -------
     - bool: True if both archives contain the same data, False otherwise.
     """
-    # Open both Zarr groups
     zarr1 = zarr.open(path1, mode="r")
     zarr2 = zarr.open(path2, mode="r")
 
@@ -110,3 +91,78 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
     # If all checks pass
     print("The Zarr archives are identical.")
     return True
+
+
+def assert_zarr_equal(
+        store1: Union[str, zarr.storage.StoreLike],
+        store2: Union[str, zarr.storage.StoreLike]) -> None:
+    """
+    Assert that two Zarr groups—opened from either a path or a store—have identical contents.
+
+    Parameters
+    ----------
+    store1 : StoreLike
+        A filesystem path (str) or a Zarr store/mapping pointing to the first group.
+    store2 : StoreLike
+        A filesystem path (str) or a Zarr store/mapping pointing to the second group.
+
+    Returns
+    -------
+    None
+    """
+    zarr1 = zarr.open(store1, mode="r")
+    zarr2 = zarr.open(store2, mode="r")
+    diffs = []
+
+    if dict(zarr1.attrs) != dict(zarr2.attrs):
+        diffs.append(
+            f"Group attrs differ:\n ‣ {dict(zarr1.attrs)}\n ‣ {dict(zarr2.attrs)}")
+    if set(zarr1.keys()) != set(zarr2.keys()):
+        diffs.append(
+            f"Group keys differ:\n ‣ {set(zarr1.keys())}\n ‣ {set(zarr2.keys())}")
+
+    keys = set(zarr1.keys()).intersection(set(zarr2.keys()))
+    for key in keys:
+        obj1 = zarr1[key]
+        obj2 = zarr2[key]
+        if dict(obj1.attrs) != dict(obj2.attrs):
+            diffs.append(
+                f"Attributes for key '{key}' differ:\n ‣ {dict(obj1.attrs)}\n ‣ {dict(obj2.attrs)}")
+        if isinstance(obj1, zarr.Array) ^ isinstance(obj2, zarr.Array):
+            diffs.append(f"Key '{key}' is an array in one group but not the other.")
+            continue
+        elif isinstance(obj1, zarr.Array):
+            try:
+                np.testing.assert_array_equal(obj1[:], obj2[:])
+            except AssertionError as e:
+                diffs.append(f"Array '{key}' differs:\n ‣ {e}")
+        elif isinstance(obj1, zarr.Group):
+            try:
+                np.testing.assert_allclose(obj1, obj2)
+            except AssertionError as e:
+                diffs.append(f"Group '{key}' differs:\n ‣ {e}")
+        else:
+            diffs.append(f"Key '{key}' is neither an array nor a group in both stores.")
+
+    if diffs:
+        raise AssertionError("\n".join(diffs))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Compare arrays in two files.')
+    parser.add_argument('file1', help='First file (.nii, .nii.gz, .mat, .zarr)')
+    parser.add_argument('file2', help='Second file (.nii, .nii.gz, .mat, .zarr)')
+    args = parser.parse_args()
+
+    a = load_file(args.file1)
+    b = load_file(args.file2)
+    try:
+        np.testing.assert_array_almost_equal(a, b, decimal=4)
+        print("Arrays are almost equal up to 6 decimal places.")
+    except AssertionError as e:
+        print("Arrays differ:")
+        print(e)
+
+
+if __name__ == '__main__':
+    main()
