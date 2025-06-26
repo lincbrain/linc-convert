@@ -586,7 +586,7 @@ def default_write_config(
         else:
             compressor = None
         for i in range(len(shape)):
-            if shape[i] > chunk[i]:
+            if shape[i] < chunk[i]:
                 chunk[i] = shape[i]
         metadata = {
             "chunks": chunk,
