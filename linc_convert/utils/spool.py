@@ -47,8 +47,9 @@ class SpoolSetInterpreter:
                 warnings.warn('ERROR: Info file not found.')
         self.assembled_spool_shape = (self.numDepths,
                                       self.spool_shape[2],
-                                      self.spool_shape[0]*len(self.spool_files),
+                                      self.spool_shape[0] * len(self.spool_files),
                                       )
+
     def _load_info_file(self, info_file):
         loaded_info = loadmat(info_file)
         info = loaded_info.get("info", None)
@@ -183,9 +184,8 @@ class SpoolSetInterpreter:
             start = idx * axis_0_shape
             stop = start + axis_0_shape
             canvas[start:stop] = spool_file
-        print(canvas.shape)
         return canvas
 
     # this is the modified version for lsm pipeline
     def assemble_cropped(self):
-        return self.assemble().transpose(1, 2, 0)[:self.numDepths,:,:]
+        return self.assemble().transpose(1, 2, 0)[:self.numDepths, :, :]
