@@ -1,3 +1,4 @@
+import warnings
 from typing import Literal
 
 from linc_convert.utils.zarr import ZarrConfig
@@ -18,8 +19,8 @@ try:
 
     _DRIVER_ARRAY["tensorstore"] = ZarrTSArray
     _DRIVER_GROUP["tensorstore"] = ZarrTSGroup
-except ImportError:
-    pass
+except ImportError as e:
+    warnings.warn(f"Tensorstore driver not available: {e}.")
 
 
 def open(
@@ -29,7 +30,7 @@ def open(
 
 
 def open_group(
-        driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"):
+        driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python") -> ZarrGroup:
     raise NotImplementedError
     pass
 
