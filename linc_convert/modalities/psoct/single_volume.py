@@ -16,6 +16,7 @@ import h5py
 from linc_convert.utils.zarr.zarr_io import ZarrPythonGroup, from_config
 import numpy as np
 from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
+import zarr
 
 from linc_convert import utils
 from linc_convert.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, _H5ArrayWrapper
@@ -127,7 +128,7 @@ def convert(
         unit = "um"
 
     # Prepare Zarr group
-    zgroup = from_config(zarr_config, overwrite= ZarrConfig.overwrite)
+    zgroup = from_config(zarr_config)
 
     if not hasattr(inp, "dtype"):
         raise Exception("Input is not a numpy array. This is unexpected.")
@@ -149,9 +150,9 @@ def convert(
         loaded_chunk = inp[slc]
         dataset[slc] = loaded_chunk
 
-    # generate_pyramid(zgroup, mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     zgroup.generate_pyramid( mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
+    zgroup = zarr.open(zarr_config.out, mode="a")
     write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:

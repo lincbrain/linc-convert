@@ -15,6 +15,7 @@ import logging
 import cyclopts
 import h5py
 import numpy as np
+import zarr
 
 from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
 from linc_convert import utils
@@ -161,6 +162,7 @@ def convert(
 
     zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
+    zgroup = zarr.open(zarr_config.out, mode="a")
     write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:
