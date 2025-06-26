@@ -13,9 +13,6 @@ import tensorstore as ts
 
 
 from linc_convert.utils.math import ceildiv
-from .create_array import dimension_separator_to_chunk_key_encoding
-
-
 from dask.diagnostics import ProgressBar
 
 logger = logging.getLogger(__name__)
@@ -178,6 +175,8 @@ def next_level_shape(prev_shape: tuple, no_pyramid_axis: Optional[int]) -> list:
 
 
 def get_zarray_options(base_level):
+    from .zarr_io.drivers.zarr_python import dimension_separator_to_chunk_key_encoding
+
     opts = dict(
         dtype=base_level.dtype,
         chunks=base_level.chunks,

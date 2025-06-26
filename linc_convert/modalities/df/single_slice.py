@@ -23,7 +23,7 @@ from linc_convert.modalities.df.cli import df
 from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr.compressor import make_compressor
+from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
 
 ss = App(name="singleslice", help_format="markdown")

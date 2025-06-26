@@ -17,8 +17,9 @@ from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.spool import SpoolSetInterpreter
-from linc_convert.utils.zarr import (create_array, generate_pyramid, open_zarr_group,
-                                     ZarrConfig)
+from linc_convert.utils.zarr import (generate_pyramid, ZarrConfig)
+from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import open_zarr_group, \
+    create_array
 
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
