@@ -192,7 +192,7 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
         else:
             canvas[row_slice, col_slice] += arr * blend_ramp[..., None]
         weight[row_slice, col_slice] += blend_ramp
-        break
+
     canvas /= weight[:, :, None]
 
     tilt_postfix = '_tilt' if tilted_illumination else ''
