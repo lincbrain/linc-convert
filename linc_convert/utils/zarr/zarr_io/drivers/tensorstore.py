@@ -10,7 +10,7 @@ import numcodecs
 import numcodecs.abc
 import numpy as np
 import zarr
-from numpy._typing import DTypeLike
+from numpy.typing import DTypeLike
 from upath import UPath
 
 import tensorstore as ts

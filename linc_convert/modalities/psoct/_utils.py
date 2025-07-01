@@ -5,7 +5,7 @@ from typing import Any, Literal, Generator
 import nibabel as nib
 import numpy as np
 import zarr
-from numpy._typing import ArrayLike
+from numpy.typing import ArrayLike
 from scipy import io as sio
 
 from linc_convert.utils.math import ceildiv

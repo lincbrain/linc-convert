@@ -4,7 +4,7 @@ from typing import Iterator, Union, Literal, Any
 import numpy as np
 import zarr
 import zarr.codecs
-from numpy._typing import DTypeLike
+from numpy.typing import DTypeLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingParams
 
 from linc_convert.utils.zarr import ZarrConfig
