@@ -3,6 +3,7 @@ from os import PathLike
 from typing import Union, Tuple, Optional, Any, Literal
 
 import numpy as np
+from numpy.typing import DTypeLike
 import tqdm
 from dask import array as da
 from dask.diagnostics import ProgressBar
@@ -131,8 +132,11 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             self,
             name: str,
             shape: Tuple[int, ...],
+            dtype: DTypeLike,
+            *,
+            zarr_config: ZarrConfig = None,
             **kwargs
-    ) -> 'ZarrArray':
+    ) -> ZarrArray:
         """
         Create a new array within this group.
         """
@@ -145,7 +149,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             shape: Tuple[int, ...],
             data: Optional[Any] = None,
             **kwargs
-    ) -> 'ZarrArray':
+    ) -> ZarrArray:
         """
         Create a new array using metadata of an existing base-level array.
         """

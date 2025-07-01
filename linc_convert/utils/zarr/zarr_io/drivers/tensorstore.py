@@ -142,7 +142,7 @@ class ZarrTSGroup(ZarrGroup):
                      dtype: DTypeLike = np.int32,
                      data=None,
                      **kwargs
-                     ) -> zarr.Array:
+                     ) -> ZarrArray:
         if zarr_config is None:
             conf = default_write_config(
                 self._path / name,
@@ -159,6 +159,7 @@ class ZarrTSGroup(ZarrGroup):
                 chunk=zarr_config.chunk,
                 shard=zarr_config.shard,
                 compressor=zarr_config.compressor,
+                #TODO: implement this
                 # compressor_opt=,
                 version=zarr_config.zarr_version,
             )
