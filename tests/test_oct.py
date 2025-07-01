@@ -43,14 +43,14 @@ def multi_slice_mats(tmp_path):
 
 @ pytest.mark.oct
 @ pytest.mark.parametrize(
-    "zarr_version, expected_zip",
+    "zarr_version, expected_zarr",
     [
         (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
         (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
     ],
 )
 
-def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zip):
+def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr):
     output = tmp_path / "single_volume.nii.zarr"
 
     single_volume.convert(
@@ -65,20 +65,20 @@ def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zip):
 
     assert_zarr_equal(
         str(output),
-        zarr.storage.ZipStore(expected_zip, mode="r"),
+        zarr.storage.ZipStore(expected_zarr, mode="r"),
     )
 
 
 @ pytest.mark.oct
 @ pytest.mark.parametrize(
-    "zarr_version, expected_zip",
+    "zarr_version, expected_zarr",
     [
         (2, "data/oct_multi_slice_zarr2.nii.zarr.zip"),
         (3, "data/oct_multi_slice_zarr3.nii.zarr.zip"),
     ],
 )
 
-def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zip):
+def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zarr):
     output = tmp_path / "multi_slice.nii.zarr"
 
     multi_slice.convert(
@@ -93,18 +93,18 @@ def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zip):
 
     assert_zarr_equal(
         str(output),
-        zarr.storage.ZipStore(expected_zip, mode="r"),
+        zarr.storage.ZipStore(expected_zarr, mode="r"),
     )
 
 @pytest.mark.golden
 @pytest.mark.parametrize(
-    "zarr_version, expected_zip",
+    "zarr_version, expected_zarr",
     [
         (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
         (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
     ],
 )
-def test_single_volume_regen_golden(tmp_path, single_volume_mat, zarr_version, expected_zip):
+def test_single_volume_regen_golden(tmp_path, single_volume_mat, zarr_version, expected_zarr):
     """
     Rebuild single-volume golden archives. Only run with --regenerate-golden.
     """
@@ -118,19 +118,19 @@ def test_single_volume_regen_golden(tmp_path, single_volume_mat, zarr_version, e
         chunk=(64,),
         driver="zarr-python",
     )
-    base = Path(expected_zip).with_suffix("")
+    base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
 
 
 @pytest.mark.golden
 @pytest.mark.parametrize(
-    "zarr_version, expected_zip",
+    "zarr_version, expected_zarr",
     [
         (2, "data/oct_multi_slice_zarr2.nii.zarr.zip"),
         (3, "data/oct_multi_slice_zarr3.nii.zarr.zip"),
     ],
 )
-def test_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version, expected_zip):
+def test_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version, expected_zarr):
     """
     Rebuild multi-slice golden archives. Only run with --regenerate-golden.
     """
@@ -144,7 +144,7 @@ def test_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version, expe
         chunk=(64,),
         driver="zarr-python",
     )
-    base = Path(expected_zip).with_suffix("")
+    base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
 
 
