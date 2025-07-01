@@ -6,29 +6,27 @@ into a OME-ZARR pyramid.
 """
 
 import json
+import logging
 import os
 from functools import wraps
 from itertools import product
 from typing import Callable, Optional
-import logging
 
 import cyclopts
 import h5py
 import numpy as np
 import zarr
-
 from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
+
 from linc_convert import utils
-from linc_convert.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
-    _MatArrayWrapper
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
+from linc_convert.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
+    _MatArrayWrapper
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr import generate_pyramid, generate_pyramid_old
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import open_zarr_group, \
-    create_array
+from linc_convert.utils.zarr import generate_pyramid
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
 from linc_convert.utils.zarr.zarr_io import from_config
 
@@ -44,11 +42,13 @@ def _automap(func: Callable) -> Callable:
     def wrapper(inp: list[str], **kwargs: dict) -> callable:
         dat = _mapmat(inp, kwargs.get("key", None))
         return func(dat, **kwargs)
+
     return wrapper
 
 
 def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]:
     """Load or memory-map an array stored in a .mat file."""
+
     def make_wrapper(fname: str) -> _ArrayWrapper:
         try:
             # "New" .mat file
@@ -64,15 +64,15 @@ def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]
 @multi_slice.default
 @_automap
 def convert(
-    inp: list[str],
-    *,
-    key: Optional[str] = None,
-    meta: str = None,
-    orientation: str = "RAS",
-    center: bool = True,
-    dtype: Optional[str] = None,
-    zarr_config: ZarrConfig = None,
-    **kwargs
+        inp: list[str],
+        *,
+        key: Optional[str] = None,
+        meta: str = None,
+        orientation: str = "RAS",
+        center: bool = True,
+        dtype: Optional[str] = None,
+        zarr_config: ZarrConfig = None,
+        **kwargs
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -134,16 +134,17 @@ def convert(
     ny = ceildiv(volume_shape[-2], chunk_size[1])
     nslices = len(inp)
 
-    dataset = zgroup.create_array("0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype))
+    dataset = zgroup.create_array("0", shape=volume_shape, zarr_config=zarr_config,
+                                  dtype=np.dtype(dtype))
 
     # Process and store data in chunks
     for i in range(nslices):
         for j, k in product(range(ny), range(nz)):
             loaded_chunk = inp[i][
-                ...,
-                k * chunk_size[0] : (k + 1) * chunk_size[0],
-                j * chunk_size[1] : (j + 1) * chunk_size[1],
-            ]
+                           ...,
+                           k * chunk_size[0]: (k + 1) * chunk_size[0],
+                           j * chunk_size[1]: (j + 1) * chunk_size[1],
+                           ]
             logger.info(
                 f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: {k + 1:03d}] "
                 f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
@@ -153,10 +154,10 @@ def convert(
             y_start = j * chunk_size[1]
             y_end = y_start + loaded_chunk.shape[-1]
             dataset[
-                ...,
-                z_start:z_end,
-                y_start:y_end,
-                i,
+            ...,
+            z_start:z_end,
+            y_start:y_end,
+            i,
             ] = loaded_chunk
         inp[i] = None  # Remove reference to free memory
 
@@ -171,7 +172,8 @@ def convert(
 
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
-    header = default_nifti_header(arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales"))
+    header = default_nifti_header(arr, zgroup.attrs.get("ome", zgroup.attrs).get(
+        "multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:

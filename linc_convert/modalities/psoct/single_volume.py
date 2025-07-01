@@ -13,23 +13,21 @@ from typing import Callable, Optional
 
 import cyclopts
 import h5py
-from linc_convert.utils.zarr.zarr_io import ZarrPythonGroup, from_config
 import numpy as np
-from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
 import zarr
+from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
 
 from linc_convert import utils
-from linc_convert.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, _H5ArrayWrapper
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
+from linc_convert.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, \
+    _H5ArrayWrapper
 from linc_convert.utils.chunk_processing import chunk_slice_generator
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr import generate_pyramid, generate_pyramid_old
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import open_zarr_group, \
-    create_array
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.zarr.zarr_io import ZarrPythonGroup, from_config
 
 logger = logging.getLogger(__name__)
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
@@ -51,6 +49,7 @@ def _automap(func: Callable) -> Callable:
 
 def _mapmat(fname: str, key: Optional[str] = None) -> _ArrayWrapper:
     """Load or memory-map an array stored in a .mat file."""
+
     def make_wrapper(fname: str) -> _ArrayWrapper:
         try:
             # "New" .mat file
@@ -66,15 +65,15 @@ def _mapmat(fname: str, key: Optional[str] = None) -> _ArrayWrapper:
 @single_volume.default
 @_automap
 def convert(
-    inp: str,
-    *,
-    key: Optional[str] = None,
-    meta: str = None,
-    no_pool: Optional[int] = None,
-    orientation: str = "RAS",
-    center: bool = True,
-    zarr_config: ZarrConfig = None,
-    **kwargs
+        inp: str,
+        *,
+        key: Optional[str] = None,
+        meta: str = None,
+        no_pool: Optional[int] = None,
+        orientation: str = "RAS",
+        center: bool = True,
+        zarr_config: ZarrConfig = None,
+        **kwargs
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -141,7 +140,7 @@ def convert(
     ni = ceildiv(inp.shape[2], inp_chunk[2])
 
     dataset = zgroup.create_array("0", shape=inp.shape, zarr_config=zarr_config,
-                           dtype=np.dtype(inp.dtype))
+                                  dtype=np.dtype(inp.dtype))
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(
@@ -150,7 +149,7 @@ def convert(
         loaded_chunk = inp[slc]
         dataset[slc] = loaded_chunk
 
-    zgroup.generate_pyramid( mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+    zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
     zgroup = zarr.open(zarr_config.out, mode="a")
     write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
@@ -162,7 +161,8 @@ def convert(
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
     header = default_nifti_header(arr,
-                                     zgroup.attrs.get("ome", zgroup.attrs).get("multiscales"))
+                                  zgroup.attrs.get("ome", zgroup.attrs).get(
+                                      "multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:
