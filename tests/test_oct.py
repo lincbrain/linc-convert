@@ -49,7 +49,6 @@ def multi_slice_mats(tmp_path):
         (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
     ],
 )
-
 def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr):
     output = tmp_path / "single_volume.nii.zarr"
 
@@ -147,12 +146,45 @@ def test_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version, expe
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
 
+@ pytest.mark.heavy
+@ pytest.mark.parametrize(
+    "zarr_version, expected_zarr",
+    [
+        (2, "zarr2.nii.zarr.zip"),
+        (3, "zarr3.nii.zarr.zip"),
+    ],
+)
+def test_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, expected_zarr):
+    files = glob.glob(test_data_heavy_dir / "sub-test_oct_multi_slice" / "*.mat")
+    files.sort()
+    output_zarr = tmp_path / "output.zarr"
+    multi_slice.convert(
+        files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version = 2, overwrite=True
+    )
+    assert_zarr_equal(
+        str(output_zarr),
+        zarr.storage.ZipStore(expected_zarr, mode="r"),
+    )
+    base = Path(expected_zarr).with_suffix("")
+    shutil.make_archive(str(base), "zip", str(output_zarr))
 
-# def test_oct(tmp_path):
-#     files = glob.glob("data/test_oct/*")
-#     files.sort()
-#     output_zarr = tmp_path / "output.zarr"
-#     multi_slice.convert(
-#         files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version = 2, overwrite=True
-#     )
-#     assert _cmp_zarr_archives(str(output_zarr), "data/oct.zarr")
+@ pytest.mark.golden
+@ pytest.mark.heavy
+@ pytest.mark.parametrize(
+    "zarr_version, expected_zarr",
+    [
+        (2, "zarr2.nii.zarr.zip"),
+        (3, "zarr3.nii.zarr.zip"),
+    ],
+)
+def test_multi_slice_heavy_regen_golden(test_data_heavy_dir, tmp_path, zarr_version, expected_zarr):
+    multi_slice_heavy_data_dir = test_data_heavy_dir / "sub-test_oct_multi_slice"
+    files = glob.glob(str(multi_slice_heavy_data_dir / "*.mat"))
+    files.sort()
+    output_zarr = tmp_path / "output.zarr"
+    multi_slice.convert(
+        files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version = zarr_version, overwrite=True
+    )
+    base = Path(multi_slice_heavy_data_dir / expected_zarr).with_suffix("")
+    shutil.make_archive(str(base), "zip", str(output_zarr))
+
