@@ -31,6 +31,7 @@ zarr = "^3.0.0"
 nifti-zarr = "*"
 tqdm = "*"
 dask = "*"
+universal_pathlib = "*"
 
 # optionals
 glymur = { version = "*", optional = true }
