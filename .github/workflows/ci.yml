@@ -6,7 +6,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
         poetry-version: ["latest", "1.8.4"]
         # glymur needs dynamic library on macos and windows, and causing error
         # os: [ubuntu-22.04, macos-latest, windows-latest]
