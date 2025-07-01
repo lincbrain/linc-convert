@@ -2,6 +2,7 @@ import warnings
 from typing import Literal
 
 from linc_convert.utils.zarr import ZarrConfig
+from linc_convert.utils.zarr.zarr_config import DriverLike
 from linc_convert.utils.zarr.zarr_io.abc import ZarrGroup
 from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import ZarrPythonArray, \
     ZarrPythonGroup
@@ -23,16 +24,12 @@ except ImportError as e:
     warnings.warn(f"Tensorstore driver not available: {e}.")
 
 
-def open(
-        driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"):
+def open(driver: DriverLike):
     raise NotImplementedError
-    pass
 
 
-def open_group(
-        driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python") -> ZarrGroup:
+def open_group(driver: DriverLike) -> ZarrGroup:
     raise NotImplementedError
-    pass
 
 
 def from_config(zarr_config: ZarrConfig) -> ZarrGroup:

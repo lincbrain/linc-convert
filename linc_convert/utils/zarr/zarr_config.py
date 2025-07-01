@@ -9,6 +9,7 @@ from typing_extensions import Unpack
 
 logger = logging.getLogger(__name__)
 
+DriverLike = Literal["zarr-python", "tensorstore", "zarrita"]
 
 @Parameter(name="*")
 @dataclass
@@ -96,7 +97,7 @@ class ZarrConfig:
     nii: bool = False
     max_load: int = 512
     overwrite: bool = False
-    driver: Literal["zarr-python", "tensorstore", "zarrita"] = "zarr-python"
+    driver: DriverLike = "zarr-python"
 
     def __post_init__(self) -> None:
         if self.out:
