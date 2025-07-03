@@ -18,7 +18,7 @@ def _write_test_data(directory: str) -> None:
             data=image,
         )
 
-@pytest.mark.skip(reason="🚧 refactor in progress")
+
 def test_df(tmp_path):
     # _write_test_data(tmp_path)
     with zipfile.ZipFile("data/df_input.zip", "r") as z:

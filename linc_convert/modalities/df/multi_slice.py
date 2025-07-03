@@ -23,6 +23,7 @@ from linc_convert.modalities.df.cli import df
 from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
+from linc_convert.utils.zarr import from_config
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
 from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 
@@ -40,7 +41,6 @@ df.command(ms)
 def convert(
         inp: list[str],
         *,
-        out: str,
         zarr_config: ZarrConfig = None,
         max_load: int = 16384,
         orientation: str = "coronal",
@@ -83,8 +83,6 @@ def convert(
     ----------
     inp
         Path to the input slices
-    out
-        Path to the output Zarr directory [<INP>.ome.zarr]
     max_load
         Maximum input chunk size
     orientation
@@ -95,23 +93,9 @@ def convert(
         Slice thickness
     """
     zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
-    chunk: int = zarr_config.chunk[0]
-    compressor: str = zarr_config.compressor
-    compressor_opt: str = zarr_config.compressor_opt
-    nii: bool = zarr_config.nii
+    zarr_config.set_default_name(os.path.splitext(inp[0])[0])
 
-    # Default output path
-    if not out:
-        out = os.path.splitext(inp[0])[0]
-        out += ".nii.zarr" if nii else ".ome.zarr"
-    nii = nii or out.endswith(".nii.zarr")
-
-    if isinstance(compressor_opt, str):
-        compressor_opt = ast.literal_eval(compressor_opt)
-
-    # Prepare Zarr group
-    omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=True)
+    omz = from_config(zarr_config)
 
     nblevel, has_channel, dtype_jp2 = float("inf"), float("inf"), ""
 
@@ -130,24 +114,16 @@ def convert(
     if has_channel:
         new_size += (3,)
     print(len(inp), new_size, nblevel, has_channel)
-
-    # Prepare chunking options
-    opt = {
-        "chunks": list(new_size[2:]) + [1] + [chunk, chunk],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": dtype_jp2,
-        "fill_value": 0,
-        "compressor": make_compressor(compressor, **compressor_opt),
-    }
-    print(opt)
+    chunks = list(new_size[2:]) + [1] + list(zarr_config.chunk[-2:])
+    zarr_config.update(chunk = tuple(chunks))
     print(new_size)
     # Write each level
     for level in range(nblevel):
         shape = [ceildiv(s, 2 ** level) for s in new_size[:2]]
         shape = [new_size[2]] + [len(inp)] + shape
 
-        omz.create_dataset(f"{level}", shape=shape, **opt)
+        # omz.create_dataset(f"{level}", shape=shape, **opt)
+        omz.create_array(str(level), shape, dtype=dtype_jp2, zarr_config=zarr_config)
         array = omz[f"{level}"]
 
         # Write each slice
@@ -289,6 +265,7 @@ def convert(
     }
     omz.create_dataset("nifti", data=header, shape=shape, **opt)
 
+    out = zarr_config.out
     # Write sidecar .json file
     json_name = os.path.splitext(out)[0]
     json_name += ".json"
