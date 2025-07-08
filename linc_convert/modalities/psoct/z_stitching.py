@@ -11,6 +11,8 @@ import numpy as np
 import scipy.io as sio
 import tensorstore as ts
 import zarr
+from niizarr import write_ome_metadata
+
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct._utils import struct_arr_to_dict, \
     atleast_2d_trailing, find_experiment_params, load_mat
@@ -26,17 +28,16 @@ psoct.command(z_stitching)
 def stitch(
         inp: List[str],
         *,
-        offset:int,
-        overlap:int,
+        overlap:int = 0,
+        offset:int = 0,
         zarr_config: ZarrConfig = None,
         **kwargs
 )-> None:
     # load slices to dask
-    dask_slices = [da.from_zarr(inp[i],) for i in range(len(inp))]
+    dask_slices = [da.from_zarr(op.join(inp[i],"0"),) for i in range(len(inp))]
     # crop slices
     for i in range(len(dask_slices)):
         sl = dask_slices[i]
-        sl = sl[offset:offset]
         if i != 0:
             sl = sl[overlap//2:]
         if i != len(dask_slices) - 1:
@@ -46,13 +47,13 @@ def stitch(
     # output
     zgroup = from_config(zarr_config)
     arr = zgroup.create_array("0",vol.shape,dtype= vol.dtype, zarr_config=zarr_config)
-    vol = vol.rechunk(zarr_config.chunk)
+    vol = vol.rechunk(zarr_config.chunk*3)
     vol.store(arr)
 
-    # read nifti properties
-    
-    pass
 
+    zgroup.generate_pyramid()
+    # zgroup = zarr.open_group(zgroup.store_path, mode= "a")
+    write_ome_metadata(zgroup, ["z", "y", "x"])
 
 
 
