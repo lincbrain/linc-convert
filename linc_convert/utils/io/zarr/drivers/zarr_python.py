@@ -141,6 +141,7 @@ class ZarrPythonGroup(ZarrGroup):
             opt["chunk_key_encoding"] = chunk_key_encoding
         arr = self._zgroup.create_array(name=name,
                                         shape=shape,
+                                        overwrite=True,
                                         **opt)
         if data:
             arr[:] = data
