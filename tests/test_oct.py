@@ -46,7 +46,8 @@ def multi_slice_mats(tmp_path):
         (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
     ],
 )
-def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr):
+def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr,
+                       driver):
     output = tmp_path / "single_volume.nii.zarr"
 
     single_volume.convert(
@@ -56,7 +57,7 @@ def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr)
         zarr_version=zarr_version,
         overwrite=True,
         chunk=(64,),
-        driver="tensorstore",
+        driver=driver,
     )
 
     assert_zarr_equal(
@@ -72,7 +73,7 @@ def test_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr)
         (3, "data/oct_multi_slice_zarr3.nii.zarr.zip"),
     ],
 )
-def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zarr):
+def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zarr, driver):
     output = tmp_path / "multi_slice.nii.zarr"
 
     multi_slice.convert(
@@ -82,7 +83,7 @@ def test_multi_slice(tmp_path, multi_slice_mats, zarr_version, expected_zarr):
         zarr_version=zarr_version,
         overwrite=True,
         chunk=(64,),
-        driver="tensorstore",
+        driver=driver,
     )
 
     assert_zarr_equal(
@@ -153,12 +154,15 @@ def test_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version,
         (3, "zarr3.nii.zarr.zip"),
     ],
 )
-def test_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, expected_zarr):
-    files = glob.glob(test_data_heavy_dir / "sub-test_oct_multi_slice" / "*.mat")
+def test_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, expected_zarr,
+                           driver):
+    files = glob.glob(str(test_data_heavy_dir / "sub-test_oct_multi_slice" / "*.mat"))
     files.sort()
+    expected_zarr = test_data_heavy_dir / "sub-test_oct_multi_slice" / expected_zarr
     output_zarr = tmp_path / "output.zarr"
     multi_slice.convert(
-        files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version=2, overwrite=True
+        files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version=2, overwrite=True,
+        driver=driver
     )
     assert_zarr_equal(
         str(output_zarr),
