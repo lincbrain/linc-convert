@@ -191,6 +191,8 @@ class ZarrPythonGroup(ZarrGroup):
     def __delitem__(self, key):
         del self._zgroup[key]
 
+    def _get_zarr_python_group(self):
+        return self._zgroup
 
 def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
     """Build compressor object from name and options."""
@@ -222,8 +224,7 @@ def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) 
 
 SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
                          2 *  # TB
-                         2 ** 30  # TB->Bytes
-                         # I use 2GB for now
+                         2 ** 30  # GB->Bytes
                          )
 
 
@@ -379,3 +380,4 @@ def compute_zarr_layout(
 
     shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))
     return chunk, shard
+

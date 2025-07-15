@@ -57,6 +57,7 @@ class ZarrTSArray(ZarrArray):
     def __setitem__(self, idx, val):
         self._ts[idx] = val
 
+    # TODO: implement
     @property
     def attrs(self):
         return {}
@@ -184,6 +185,7 @@ class ZarrTSGroup(ZarrGroup):
     def from_config(cls, zarr_config: ZarrConfig) -> 'ZarrGroup':
         return cls.open(zarr_config.out, zarr_version=zarr_config.zarr_version)
 
+
     @classmethod
     def open(cls, path: Union[str, PathLike], mode="a", *,
              zarr_version: Literal[2, 3] = 3) -> 'ZarrTSGroup':
@@ -227,7 +229,9 @@ class ZarrTSGroup(ZarrGroup):
                 f"Invalid mode '{mode}'. Use 'r', 'r+', 'a', 'w', or 'w-' ")
 
         return cls(p)
-
+    def _get_zarr_python_group(self):
+        import zarr
+        return zarr.open_group(self._path, mode='a')
 
 def make_compressor(name: str, **prm: dict) -> numcodecs.abc.Codec:
     """Build compressor object from name and options."""

@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod, ABCMeta
 from os import PathLike
-from typing import Union, Tuple, Optional, Any, Literal
+from typing import Union, Tuple, Optional, Any, Literal, List
 
 import numpy as np
+from nibabel import Nifti1Header, Nifti2Header
 from numpy.typing import DTypeLike
 import tqdm
 from dask import array as da
 from dask.diagnostics import ProgressBar
+import niizarr
 
 from linc_convert.utils.zarr import ZarrConfig
 from linc_convert.utils.zarr.generate_pyramid import default_levels, next_level_shape, \
@@ -101,7 +103,7 @@ class ZarrArray(ZarrNode):
 
 class ZarrGroup(ZarrNode, metaclass=ABCMeta):
     """
-    Abstract interface for a Zarr group (container of arrays and/or subgroups).
+    Abstract interface for a Zarr group (container of arrays/subgroups).
     """
 
     @classmethod
@@ -217,3 +219,38 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             with ProgressBar():
                 dat.store(arr)
         return all_shapes
+
+    def write_ome_metadata(self, axes: List[str],
+        space_scale: Union[float, List[float]] = 1.0,
+        time_scale: float = 1.0,
+        space_unit: str = "micrometer",
+        time_unit: str = "second",
+        name: str = "",
+        pyramid_aligns: Union[str, int, List[str], List[int]] = 2,
+        levels: Optional[int] = None,
+        no_pool: Optional[int] = None,
+        multiscales_type: str = "",
+        ome_version: Literal["0.4", "0.5"] = "0.4"):
+
+        zg = self._get_zarr_python_group()
+        niizarr.write_ome_metadata(zg,
+                                   space_scale = space_scale,
+                                   time_scale = time_scale,
+                                   space_unit = space_unit,
+                                   time_unit = time_unit,
+                                   axes = axes,
+                                   name= name,
+                                   pyramid_aligns = pyramid_aligns,
+                                   levels = levels,
+                                   no_pool = no_pool,
+                                   multiscales_type = multiscales_type,
+                                   ome_version = ome_version)
+
+
+    def write_nifti_header(self, header: Union[Nifti1Header, Nifti2Header]) -> None:
+        zg = self._get_zarr_python_group()
+        niizarr.write_nifti_header(zg, header)
+
+    @abstractmethod
+    def _get_zarr_python_group(self):
+        ...
