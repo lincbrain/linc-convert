@@ -85,7 +85,6 @@ def convert(
     """
     zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
 
-
     if max_load % 2:
         max_load += 1
 
@@ -121,7 +120,6 @@ def convert(
         all_chunks_info["y"].append(int(parsed.group("y")))
 
     # default output name
-
     default_name = all_chunks_info["prefix"][0] + all_chunks_info["suffix"][0]
     zarr_config.set_default_name(default_name)
 
@@ -218,100 +216,29 @@ def convert(
     print("")
     omz.generate_pyramid(mode="median")
 
-    nblevel = 5
-
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
-            "datasets": [],
-            "type": "median window 2x2x2",
-            "name": "",
-        }
-    ]
-    multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
+    omz.write_ome_metadata(["c", "z", "y", "x"], list(map(float, reversed(voxel_size))))
 
-    voxel_size = list(map(float, reversed(voxel_size)))
-    factor = [1] * 3
-    for n in range(nblevel):
-        shape = omz[str(n)].shape[-3:]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
+    if not zarr_config.nii:
+        print("done.")
+        return
 
-        # We made sure that the downsampling level is exactly 2
-        # However, once a dimension has size 1, we stop downsampling.
-        if n > 0:
-            shape_prev = omz[str(n - 1)].shape[-3:]
-            if shape_prev[0] != shape[0]:
-                factor[0] *= 2
-            if shape_prev[1] != shape[1]:
-                factor[1] *= 2
-            if shape_prev[2] != shape[2]:
-                factor[2] *= 2
-
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": [1.0]
-                + [
-                    factor[0] * voxel_size[0],
-                    factor[1] * voxel_size[1],
-                    factor[2] * voxel_size[2],
-                ],
-            },
-            {
-                "type": "translation",
-                "translation": [0.0]
-                + [
-                    (factor[0] - 1) * voxel_size[0] * 0.5,
-                    (factor[1] - 1) * voxel_size[1] * 0.5,
-                    (factor[2] - 1) * voxel_size[2] * 0.5,
-                ],
-            },
-        ]
-    multiscales[0]["coordinateTransformations"] = [
-        {"scale": [1.0] * 4, "type": "scale"}
-    ]
-    omz = zarr.open(zarr_config.out, mode="a")
-    omz.attrs["multiscales"] = multiscales
-
-    # if not nii:
-    #     print("done.")
-    #     return
-
-    # # Write NIfTI-Zarr header
-    # # NOTE: we use nifti2 because dimensions typically do not fit in a short
-    # # TODO: we do not write the json zattrs, but it should be added in
-    # #       once the nifti-zarr package is released
-    # shape = list(reversed(omz["0"].shape))
-    # shape = shape[:3] + [1] + shape[3:]  # insert time dimension
-    # affine = orientation_to_affine(orientation, *voxel_size)
-    # if center:
-    #     affine = center_affine(affine, shape[:3])
-    # header = nib.Nifti2Header()
-    # header.set_data_shape(shape)
-    # header.set_data_dtype(omz["0"].dtype)
-    # header.set_qform(affine)
-    # header.set_sform(affine)
-    # header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
-    # header.structarr["magic"] = b"nz2\0"
-    # write_nifti_header(omz, header)
-    # header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    # write_nifti_header()
-    # opt = {
-    #     "chunks": [len(header)],
-    #     "dimension_separator": r"/",
-    #     "order": "F",
-    #     "dtype": "|u1",
-    #     "fill_value": None,
-    #     "compressor": None,
-    # }
-    # omz.create_dataset("nifti", data=header, shape=shape, **opt)
+    # Write NIfTI-Zarr header
+    # NOTE: we use nifti2 because dimensions typically do not fit in a short
+    # TODO: we do not write the json zattrs, but it should be added in
+    #       once the nifti-zarr package is released
+    shape = list(reversed(omz["0"].shape))
+    shape = shape[:3] + [1] + shape[3:]  # insert time dimension
+    affine = orientation_to_affine(orientation, *voxel_size)
+    if center:
+        affine = center_affine(affine, shape[:3])
+    header = nib.Nifti2Header()
+    header.set_data_shape(shape)
+    header.set_data_dtype(omz["0"].dtype)
+    header.set_qform(affine)
+    header.set_sform(affine)
+    header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
+    header.structarr["magic"] = b"nz2\0"
+    omz.write_nifti_header(header)
     print("done.")
