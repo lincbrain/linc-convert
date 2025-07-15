@@ -9,7 +9,7 @@ import pytest
 import skimage
 import zarr
 
-from linc_convert.modalities.df import multi_slice
+from linc_convert.modalities.df import multi_slice, single_slice
 from utils.compare_file import assert_zarr_equal
 from utils.sample_data import generate_sample_data_variation
 
@@ -51,15 +51,15 @@ def test_single_slice_df(tmp_path, single_slice_jp2, zarr_version, expected_zarr
     Convert a single JP2 slice into a Zarr store and compare against golden.
     """
     output = tmp_path / "single_slice.zarr"
-    multi_slice.convert(
-        [str(single_slice_jp2)],
+    single_slice.convert(
+        str(single_slice_jp2),
         out=str(output),
         zarr_version=zarr_version,
+        # driver="tensorstore"
     )
     assert_zarr_equal(
         str(output),
-        zarr.storage.ZipStore(expected_zarr, mode="r"),
-        ignore_nii=True,
+        zarr.storage.ZipStore(expected_zarr, mode="r")
     )
 
 
@@ -79,11 +79,11 @@ def test_multi_slice_df(tmp_path, multi_slice_jp2, zarr_version, expected_zarr):
         multi_slice_jp2,
         out=str(output),
         zarr_version=zarr_version,
+        driver="tensorstore"
     )
     assert_zarr_equal(
         str(output),
-        zarr.storage.ZipStore(expected_zarr, mode="r"),
-        ignore_nii=True,
+        zarr.storage.ZipStore(expected_zarr, mode="r")
     )
 
 
@@ -97,12 +97,9 @@ def test_multi_slice_df(tmp_path, multi_slice_jp2, zarr_version, expected_zarr):
 )
 def test_single_slice_df_regen_golden(tmp_path, single_slice_jp2, zarr_version,
                                       expected_zarr):
-    """
-    Rebuild single‐slice golden Zarr archives. Run only with --regenerate-golden.
-    """
     output = tmp_path / "single_slice.zarr"
-    multi_slice.convert(
-        [str(single_slice_jp2)],
+    single_slice.convert(
+        str(single_slice_jp2),
         out=str(output),
         zarr_version=zarr_version,
     )
@@ -120,9 +117,6 @@ def test_single_slice_df_regen_golden(tmp_path, single_slice_jp2, zarr_version,
 )
 def test_multi_slice_df_regen_golden(tmp_path, multi_slice_jp2, zarr_version,
                                      expected_zarr):
-    """
-    Rebuild multi‐slice golden Zarr archives. Run only with --regenerate-golden.
-    """
     output = tmp_path / "multi_slice.zarr"
     multi_slice.convert(
         multi_slice_jp2,
