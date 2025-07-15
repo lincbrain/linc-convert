@@ -26,6 +26,10 @@ def test_data_heavy_dir(request):
     #     # subprocess.check_call()
     #     pass
 
+@pytest.fixture(scope="module", params= ["zarr-python", "tensorstore"])
+def driver(request):
+    return request.param
+
 @pytest.mark.heavy
 def test_heavy(test_data_heavy_dir):
     assert True
