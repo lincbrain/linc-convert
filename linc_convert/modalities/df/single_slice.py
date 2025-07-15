@@ -15,6 +15,7 @@ import nibabel as nib
 import numpy as np
 import zarr
 from cyclopts import App
+from niizarr import write_nifti_header
 
 # internals
 from linc_convert import utils
@@ -22,6 +23,7 @@ from linc_convert.modalities.df.cli import df
 from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
+from linc_convert.utils.zarr import from_config
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
 from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 
@@ -33,7 +35,6 @@ df.command(ss)
 def convert(
         inp: str,
         *,
-        out: str,
         zarr_config: ZarrConfig = None,
         max_load: int = 16384,
         orientation: str = "coronal",
@@ -83,36 +84,11 @@ def convert(
         Slice thickness
     """
     zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
-    chunk: int = zarr_config.chunk
-    compressor: str = zarr_config.compressor
-    compressor_opt: str = zarr_config.compressor_opt
-    nii: bool = zarr_config.nii
-
-    if not out:
-        out = os.path.splitext(inp)[0]
-        out += ".nii.zarr" if nii else ".ome.zarr"
-
-    nii = nii or out.endswith(".nii.zarr")
-
-    if isinstance(compressor_opt, str):
-        compressor_opt = ast.literal_eval(compressor_opt)
+    zarr_config.set_default_name(os.path.splitext(inp)[0])
+    omz = from_config(zarr_config)
 
     j2k = glymur.Jp2k(inp)
     vxw, vxh = get_pixelsize(j2k)
-
-    # Prepare Zarr group
-    omz = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=omz, overwrite=True)
-
-    # Prepare chunking options
-    opt = {
-        "chunks": list(j2k.shape[2:]) + [chunk, chunk],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": np.dtype(j2k.dtype).str,
-        "fill_value": None,
-        "compressor": make_compressor(compressor, **compressor_opt),
-    }
 
     # Write each level
     nblevel = j2k.codestream.segment[2].num_res
@@ -121,8 +97,8 @@ def convert(
         subdat = WrappedJ2K(j2k, level=level)
         shape = subdat.shape
         print("Convert level", level, "with shape", shape)
-        omz.create_dataset(str(level), shape=shape, **opt)
-        array = omz[str(level)]
+        array = omz.create_array(str(level), shape=shape, zarr_config=zarr_config)
+
         if max_load is None or (shape[-2] < max_load and shape[-1] < max_load):
             array[...] = subdat[...]
         else:
@@ -193,7 +169,7 @@ def convert(
     ]
     omz.attrs["multiscales"] = multiscales
 
-    if not nii:
+    if not zarr_config.nii:
         print("done.")
         return
 
@@ -214,7 +190,7 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
     header.structarr["magic"] = b"n+2\0"
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
+    # header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
     opt = {
         "chunks": [len(header)],
         "dimension_separator": r"/",
@@ -223,5 +199,5 @@ def convert(
         "fill_value": None,
         "compressor": None,
     }
-    omz.create_dataset("nifti", data=header, shape=shape, **opt)
+    write_nifti_header(omz, header)
     print("done.")
