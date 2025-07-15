@@ -1,14 +1,10 @@
-import itertools
 import re
-from typing import Any, Literal, Generator
+from typing import Any, Generator
 
-import nibabel as nib
 import numpy as np
-import zarr
 from numpy.typing import ArrayLike
 from scipy import io as sio
 
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.unit import convert_unit
 
 
@@ -34,7 +30,7 @@ def make_json(oct_meta: str) -> dict:
     """
 
     def _parse_value_unit(
-        string: str, n: int = None
+            string: str, n: int = None
     ) -> tuple[float | list[float], str | Any]:
         number = r"-?(\d+\.?\d*|\d*\.?\d+)(E-?\d+)?"
         value = "x".join([number] * (n or 1))

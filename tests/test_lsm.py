@@ -1,12 +1,11 @@
 from pathlib import Path
 
 import numpy as np
-import pytest
 import tifffile
 import zarr
 
-from utils.compare_file import _cmp_zarr_archives, assert_zarr_equal
 from linc_convert.modalities.lsm import mosaic
+from utils.compare_file import assert_zarr_equal
 
 
 def _write_test_data(directory: str) -> None:
@@ -26,8 +25,8 @@ def _write_test_data(directory: str) -> None:
 def test_lsm(tmp_path):
     _write_test_data(tmp_path)
     output_zarr = tmp_path / "output.zarr"
-    mosaic.convert(str(tmp_path), out=str(output_zarr), zarr_version=2, driver="tensorstore")
+    mosaic.convert(str(tmp_path), out=str(output_zarr), zarr_version=2,
+                   driver="tensorstore")
     assert_zarr_equal(str(output_zarr),
-    zarr.storage.ZipStore(
-        "data/lsm.zarr.zip", mode="r"))
-
+                      zarr.storage.ZipStore(
+                          "data/lsm.zarr.zip", mode="r"))

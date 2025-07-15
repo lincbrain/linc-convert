@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 import numcodecs
 import numcodecs.abc
 import numpy as np
-import zarr
 from numpy.typing import DTypeLike
 from upath import UPath
 
@@ -160,7 +159,7 @@ class ZarrTSGroup(ZarrGroup):
                 chunk=zarr_config.chunk,
                 shard=zarr_config.shard,
                 compressor=zarr_config.compressor,
-                #TODO: implement this
+                # TODO: implement this
                 # compressor_opt=,
                 version=zarr_config.zarr_version,
             )
@@ -184,7 +183,6 @@ class ZarrTSGroup(ZarrGroup):
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> 'ZarrGroup':
         return cls.open(zarr_config.out, zarr_version=zarr_config.zarr_version)
-
 
     @classmethod
     def open(cls, path: Union[str, PathLike], mode="a", *,
@@ -229,9 +227,11 @@ class ZarrTSGroup(ZarrGroup):
                 f"Invalid mode '{mode}'. Use 'r', 'r+', 'a', 'w', or 'w-' ")
 
         return cls(p)
+
     def _get_zarr_python_group(self):
         import zarr
         return zarr.open_group(self._path, mode='a')
+
 
 def make_compressor(name: str, **prm: dict) -> numcodecs.abc.Codec:
     """Build compressor object from name and options."""

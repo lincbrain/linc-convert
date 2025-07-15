@@ -46,7 +46,8 @@ def multi_slice_jp2(tmp_path):
         (3, "data/df_single_slice_zarr3.nii.zarr.zip"),
     ],
 )
-def test_single_slice_df(tmp_path, single_slice_jp2, zarr_version, expected_zarr, driver):
+def test_single_slice_df(tmp_path, single_slice_jp2, zarr_version, expected_zarr,
+                         driver):
     """
     Convert a single JP2 slice into a Zarr store and compare against golden.
     """

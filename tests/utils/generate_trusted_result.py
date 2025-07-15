@@ -1,20 +1,15 @@
-import glob
 import os
 import tempfile
-import zipfile
 from pathlib import Path
 
-import test_df
-import test_lsm
-import test_wk
 import zarr
 
-from linc_convert.modalities.df import multi_slice
+import test_lsm
+import test_wk
 from linc_convert.modalities.lsm import mosaic
 from linc_convert.modalities.wk import webknossos_annotation
 
 if __name__ == "__main__":
-
     with tempfile.TemporaryDirectory() as tmp_dir:
         test_lsm._write_test_data(tmp_dir)
         output_zarr = os.path.join(tmp_dir, "output.zarr")

@@ -15,8 +15,7 @@ from typing import Callable, Optional
 import cyclopts
 import h5py
 import numpy as np
-import zarr
-from niizarr import default_nifti_header, write_nifti_header, write_ome_metadata
+from niizarr import default_nifti_header
 
 from linc_convert import utils
 from linc_convert.modalities.psoct._utils import make_json
@@ -163,8 +162,7 @@ def convert(
 
     zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
-    zgroup = zarr.open(zarr_config.out, mode="a")
-    write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
+    zgroup.write_ome_metadata(axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:
         logger.info("Conversion complete.")
@@ -184,4 +182,4 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(to_nifti_unit(unit))
 
-    write_nifti_header(zgroup, header)
+    zgroup.write_nifti_header(header)

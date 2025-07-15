@@ -14,8 +14,7 @@ from typing import Callable, Optional
 import cyclopts
 import h5py
 import numpy as np
-import zarr
-from niizarr import write_ome_metadata, default_nifti_header, write_nifti_header
+from niizarr import default_nifti_header
 
 from linc_convert import utils
 from linc_convert.modalities.psoct._utils import make_json
@@ -23,11 +22,10 @@ from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils._array_wrapper import _ArrayWrapper, _MatArrayWrapper, \
     _H5ArrayWrapper
 from linc_convert.utils.chunk_processing import chunk_slice_generator
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
-from linc_convert.utils.zarr.zarr_io import ZarrPythonGroup, from_config
+from linc_convert.utils.zarr.zarr_io import from_config
 
 logger = logging.getLogger(__name__)
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
@@ -135,9 +133,6 @@ def convert(
         raise Exception("Input array is not 3d:", inp.shape)
 
     inp_chunk = [min(x, zarr_config.max_load) for x in inp.shape]
-    nk = ceildiv(inp.shape[0], inp_chunk[0])
-    nj = ceildiv(inp.shape[1], inp_chunk[1])
-    ni = ceildiv(inp.shape[2], inp_chunk[2])
 
     dataset = zgroup.create_array("0", shape=inp.shape, zarr_config=zarr_config,
                                   dtype=np.dtype(inp.dtype))
@@ -151,8 +146,7 @@ def convert(
 
     zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
-    zgroup = zarr.open(zarr_config.out, mode="a")
-    write_ome_metadata(zgroup, axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
+    zgroup.write_ome_metadata(axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
     if not zarr_config.nii:
         logger.info("Conversion complete.")
@@ -173,4 +167,4 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(to_nifti_unit(unit))
 
-    write_nifti_header(zgroup, header)
+    zgroup.write_nifti_header(header)

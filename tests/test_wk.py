@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 import wkw
 import zarr
-from utils.compare_file import _cmp_zarr_archives
 
 from linc_convert.modalities.wk import webknossos_annotation
+from utils.compare_file import _cmp_zarr_archives
 
 
 def _write_test_data(directory: str) -> None:
@@ -54,8 +54,8 @@ def _write_test_data(directory: str) -> None:
                 "scale": [
                     1.0,
                     1.0,
-                    float(2**n),
-                    float(2**n),
+                    float(2 ** n),
+                    float(2 ** n),
                 ],
             },
             {
@@ -63,12 +63,13 @@ def _write_test_data(directory: str) -> None:
                 "translation": [
                     0.0,
                     0.0,
-                    float(2**n - 1) * 0.5,
-                    float(2**n - 1) * 0.5,
+                    float(2 ** n - 1) * 0.5,
+                    float(2 ** n - 1) * 0.5,
                 ],
             },
         ]
     omz.attrs["multiscales"] = multiscales
+
 
 @pytest.mark.skip(reason="🚧 refactor in progress")
 def test_wk(tmp_path):
@@ -98,4 +99,4 @@ def get_mask_name(level):
     if level == 0:
         return "1"
     else:
-        return f"{2**level}-{2**level}-1"
+        return f"{2 ** level}-{2 ** level}-1"

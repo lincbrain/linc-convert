@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+
 import pytest
 
 DOWNLOAD_CMD = ["dandi",
@@ -12,9 +13,9 @@ DOWNLOAD_CMD = ["dandi",
                 "--preserve-tree"
                 ]
 
+
 @pytest.fixture(scope="session")
 def test_data_heavy_dir(request):
-
     data_dir = Path(__file__).parent / "data"
     if not any(data_dir.iterdir()):
         subprocess.check_call(DOWNLOAD_CMD)
@@ -25,9 +26,11 @@ def test_data_heavy_dir(request):
     #     # subprocess.check_call()
     #     pass
 
-@pytest.fixture(scope="module", params= ["zarr-python", "tensorstore"])
+
+@pytest.fixture(scope="module", params=["zarr-python", "tensorstore"])
 def driver(request):
     return request.param
+
 
 @pytest.mark.heavy
 def test_heavy(test_data_heavy_dir):

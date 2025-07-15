@@ -194,6 +194,7 @@ class ZarrPythonGroup(ZarrGroup):
     def _get_zarr_python_group(self):
         return self._zgroup
 
+
 def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
@@ -380,4 +381,3 @@ def compute_zarr_layout(
 
     shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))
     return chunk, shard
-

@@ -1,5 +1,4 @@
 import warnings
-from typing import Literal
 
 from linc_convert.utils.zarr import ZarrConfig
 from linc_convert.utils.zarr.zarr_config import DriverLike
