@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 from typing import Union
@@ -117,7 +118,7 @@ def assert_zarr_equal(
 
     if dict(zarr1.attrs) != dict(zarr2.attrs):
         diffs.append(
-            f"Group attrs differ:\n ‣ {dict(zarr1.attrs)}\n ‣ {dict(zarr2.attrs)}")
+            f"Group attrs differ:\n ‣ {json.dumps(dict(zarr1.attrs))}\n ‣ {json.dumps(dict(zarr2.attrs))}")
     if set(zarr1.keys()) != set(zarr2.keys()):
         diffs.append(
             f"Group keys differ:\n ‣ {set(zarr1.keys())}\n ‣ {set(zarr2.keys())}")
@@ -128,20 +129,19 @@ def assert_zarr_equal(
             continue
         obj1 = zarr1[key]
         obj2 = zarr2[key]
-        if dict(obj1.attrs) != dict(obj2.attrs):
-            diffs.append(
-                f"Attributes for key '{key}' differ:\n ‣ {dict(obj1.attrs)}\n ‣ {dict(obj2.attrs)}")
         if isinstance(obj1, zarr.Array) ^ isinstance(obj2, zarr.Array):
             diffs.append(f"Key '{key}' is an array in one group but not the other.")
-            continue
         elif isinstance(obj1, zarr.Array):
+            if dict(obj1.attrs) != dict(obj2.attrs):
+                diffs.append(
+                    f"Attributes for key '{key}' differ:\n ‣ {dict(obj1.attrs)}\n ‣ {dict(obj2.attrs)}")
             try:
                 np.testing.assert_array_equal(obj1[:], obj2[:])
             except AssertionError as e:
                 diffs.append(f"Array '{key}' differs:\n ‣ {e}")
         elif isinstance(obj1, zarr.Group):
             try:
-                np.testing.assert_allclose(obj1, obj2)
+                assert_zarr_equal(obj1, obj2)
             except AssertionError as e:
                 diffs.append(f"Group '{key}' differs:\n ‣ {e}")
         else:
