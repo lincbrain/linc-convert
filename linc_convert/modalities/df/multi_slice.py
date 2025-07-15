@@ -6,7 +6,6 @@ levels (obtained by wavelet transform).
 """
 
 # stdlib
-import ast
 import json
 import os
 
@@ -14,7 +13,6 @@ import os
 import glymur
 import nibabel as nib
 import numpy as np
-import zarr
 from cyclopts import App
 
 # internals
@@ -25,7 +23,6 @@ from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr import from_config
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 
 HOME = "/space/aspasia/2/users/linc/000003"
 
@@ -115,7 +112,7 @@ def convert(
         new_size += (3,)
     print(len(inp), new_size, nblevel, has_channel)
     chunks = list(new_size[2:]) + [1] + list(zarr_config.chunk[-2:])
-    zarr_config.update(chunk = tuple(chunks))
+    zarr_config.update(chunk=tuple(chunks))
     print(new_size)
     # Write each level
     for level in range(nblevel):
@@ -185,57 +182,11 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {"name": "z", "type": "space", "unit": "micrometer"},
-                {"name": "y", "type": "distance", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
-            "datasets": [],
-            "type": "jpeg2000",
-            "name": "",
-        }
-    ]
+    axes = ["z", "y", "x"]
     if has_channel:
-        multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
-
-    for n in range(nblevel):
-        shape0 = omz["0"].shape[-2:]
-        shape = omz[str(n)].shape[-2:]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
-
-        # I assume that wavelet transforms end up aligning voxel edges
-        # across levels, so the effective scaling is the shape ratio,
-        # and there is a half voxel shift wrt to the "center of first voxel"
-        # frame
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": [1.0] * has_channel
-                         + [
-                             1.0,
-                             (shape0[0] / shape[0]) * vxh,
-                             (shape0[1] / shape[1]) * vxw,
-                         ],
-            },
-            {
-                "type": "translation",
-                "translation": [0.0] * has_channel
-                               + [
-                                   0.0,
-                                   (shape0[0] / shape[0] - 1) * vxh * 0.5,
-                                   (shape0[1] / shape[1] - 1) * vxw * 0.5,
-                               ],
-            },
-        ]
-    multiscales[0]["coordinateTransformations"] = [
-        {"scale": [1.0] * (3 + has_channel), "type": "scale"}
-    ]
-    omz.attrs["multiscales"] = multiscales
+        axes.insert(0, "c")
+    omz.write_ome_metadata(axes=axes, space_scale=[1.0] + list(get_pixelsize(j2k)),
+                           multiscales_type="jpeg2000", no_pool=0)
 
     # Write NIfTI-Zarr header
     # NOTE: we use nifti2 because dimensions typically do not fit in a short
@@ -254,20 +205,10 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
     header.structarr["magic"] = b"n+2\0"
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    opt = {
-        "chunks": [len(header)],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None,
-    }
-    omz.create_dataset("nifti", data=header, shape=shape, **opt)
+    omz.write_nifti_header(header)
 
-    out = zarr_config.out
     # Write sidecar .json file
-    json_name = os.path.splitext(out)[0]
+    json_name = os.path.splitext(zarr_config.out)[0]
     json_name += ".json"
     dic = {}
     dic["PixelSize"] = json.dumps([vxw, vxh])

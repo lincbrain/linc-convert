@@ -6,16 +6,12 @@ It does not recompute the image pyramid but instead reuse the JPEG2000 levels
 """
 
 # stdlib
-import ast
 import os
 
 # externals
 import glymur
 import nibabel as nib
-import numpy as np
-import zarr
 from cyclopts import App
-from niizarr import write_nifti_header
 
 # internals
 from linc_convert import utils
@@ -25,7 +21,6 @@ from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr import from_config
 from linc_convert.utils.zarr.zarr_config import ZarrConfig
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import make_compressor
 
 ss = App(name="singleslice", help_format="markdown")
 df.command(ss)
@@ -120,54 +115,9 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {"name": "y", "type": "space", "unit": "micrometer"},
-                {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
-            "datasets": [],
-            "type": "jpeg2000",
-            "name": "",
-        }
-    ]
-    if has_channel:
-        multiscales[0]["axes"].insert(0, {"name": "c", "type": "channel"})
-
-    for n in range(nblevel):
-        shape0 = omz["0"].shape[-2:]
-        shape = omz[str(n)].shape[-2:]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
-
-        # I assume that wavelet transforms end up aligning voxel edges
-        # across levels, so the effective scaling is the shape ratio,
-        # and there is a half voxel shift wrt to the "center of first voxel"
-        # frame
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": [1.0] * has_channel
-                         + [
-                             (shape0[0] / shape[0]) * vxh,
-                             (shape0[1] / shape[1]) * vxw,
-                         ],
-            },
-            {
-                "type": "translation",
-                "translation": [0.0] * has_channel
-                               + [
-                                   (shape0[0] / shape[0] - 1) * vxh * 0.5,
-                                   (shape0[1] / shape[1] - 1) * vxw * 0.5,
-                               ],
-            },
-        ]
-    multiscales[0]["coordinateTransformations"] = [
-        {"scale": [1.0] * (2 + has_channel), "type": "scale"}
-    ]
-    omz.attrs["multiscales"] = multiscales
+    axes = ["c", "y", "x"] if has_channel else ["y", "x"]
+    omz.write_ome_metadata(axes=axes, space_scale=get_pixelsize(j2k),
+                           multiscales_type="jpeg2000")
 
     if not zarr_config.nii:
         print("done.")
@@ -190,14 +140,6 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
     header.structarr["magic"] = b"n+2\0"
-    # header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
-    opt = {
-        "chunks": [len(header)],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None,
-    }
-    write_nifti_header(omz, header)
+
+    omz.write_nifti_header(header)
     print("done.")
