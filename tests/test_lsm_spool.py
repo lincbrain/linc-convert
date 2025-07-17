@@ -117,7 +117,7 @@ ImagesPerFile = {images_per_file}
 
 
 def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
-    expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
+    expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool.nii.zarr"
     spool.convert(inp=spool_dat, out=str(output), overlap=0)
 
@@ -130,7 +130,7 @@ def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
 
 @pytest.mark.golden
 def test_lsm_spool_regen_golden(tmp_path, spool_dat, zarr_version):
-    expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
+    expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool_output.nii.zarr"
     spool.convert(inp=spool_dat, out=str(output), overlap=0)
 
