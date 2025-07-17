@@ -5,12 +5,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skimage
-import tifffile
 import zarr
 
-from linc_convert.modalities.lsm import mosaic, spool
+from linc_convert.modalities.lsm import spool
 from utils.compare_file import assert_zarr_equal
-from utils.sample_data import generate_sample_data_variation
 
 
 @pytest.fixture

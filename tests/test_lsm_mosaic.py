@@ -3,11 +3,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import skimage
 import tifffile
 import zarr
 
-from linc_convert.modalities.lsm import mosaic, spool
+from linc_convert.modalities.lsm import mosaic
 from utils.compare_file import assert_zarr_equal
 from utils.sample_data import generate_sample_data_variation
 
@@ -30,17 +29,11 @@ def mosaic_tiff(tmp_path):
     return root
 
 
-@pytest.mark.parametrize(
-    "zarr_version, expected_zarr",
-    [
-        (2, "data/lsm_mosaic_zarr2.nii.zarr.zip"),
-        (3, "data/lsm_mosaic_zarr3.nii.zarr.zip"),
-    ],
-)
-def test_mosaic_lsm(tmp_path, mosaic_tiff, zarr_version, expected_zarr, driver):
+def test_mosaic_lsm(tmp_path, mosaic_tiff, zarr_version, driver):
     """
     Convert multiple JP2 slices into a Zarr store and compare against golden.
     """
+    expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "mosaic.nii.zarr"
     mosaic.convert(
         str(mosaic_tiff),
@@ -55,14 +48,8 @@ def test_mosaic_lsm(tmp_path, mosaic_tiff, zarr_version, expected_zarr, driver):
 
 
 @pytest.mark.golden
-@pytest.mark.parametrize(
-    ("zarr_version", "expected_zarr"),
-    [
-        (2, "data/lsm_mosaic_zarr2.nii.zarr.zip"),
-        (3, "data/lsm_mosaic_zarr3.nii.zarr.zip"),
-    ],
-)
-def test_mosaic_lsm_regen_golden(tmp_path, mosaic_tiff, zarr_version, expected_zarr):
+def test_mosaic_lsm_regen_golden(tmp_path, mosaic_tiff, zarr_version):
+    expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "mosaic.nii.zarr"
     mosaic.convert(
         str(mosaic_tiff),

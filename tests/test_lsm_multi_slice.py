@@ -1,7 +1,6 @@
 import shutil
 from pathlib import Path
 
-import numpy as np
 import pytest
 import skimage
 import tifffile
@@ -9,7 +8,6 @@ import zarr
 
 from linc_convert.modalities.lsm import multi_slice
 from utils.compare_file import assert_zarr_equal
-from utils.sample_data import generate_sample_data_variation
 
 
 @pytest.fixture
@@ -25,21 +23,12 @@ def multi_slice_tiff(tmp_path):
     return root
 
 
-@pytest.mark.parametrize(
-    "zarr_version, expected_zarr",
-    [
-        (2, "data/lsm_multi_slice_zarr2.nii.zarr.zip"),
-        (3, "data/lsm_multi_slice_zarr3.nii.zarr.zip"),
-    ],
-)
 def test_lsm_multi_slice(tmp_path, multi_slice_tiff, zarr_version, expected_zarr,
                          driver):
-    """
-    Convert multiple JP2 slices into a Zarr store and compare against golden.
-    """
-    output = tmp_path / "multi_slice.zarr"
+    expected_zarr = f"data/lsm_multi_slice_zarr{zarr_version}.nii.zarr.zip"
+    output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
-        multi_slice_tiff,
+        str(multi_slice_tiff),
         overlap=0,
         out=str(output),
         zarr_version=zarr_version,
@@ -52,16 +41,9 @@ def test_lsm_multi_slice(tmp_path, multi_slice_tiff, zarr_version, expected_zarr
 
 
 @pytest.mark.golden
-@pytest.mark.parametrize(
-    ("zarr_version", "expected_zarr"),
-    [
-        (2, "data/lsm_multi_slice_zarr2.nii.zarr.zip"),
-        (3, "data/lsm_multi_slice_zarr3.nii.zarr.zip"),
-    ],
-)
-def test_lsm_multi_slice_regen_golden(tmp_path, multi_slice_tiff, zarr_version,
-                                      expected_zarr):
-    output = tmp_path / "single_slice.zarr"
+def test_lsm_multi_slice_regen_golden(tmp_path, multi_slice_tiff, zarr_version):
+    expected_zarr = f"data/lsm_multi_slice_zarr{zarr_version}.nii.zarr.zip"
+    output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
         str(multi_slice_tiff),
         overlap=0,
