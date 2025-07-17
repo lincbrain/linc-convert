@@ -1,5 +1,5 @@
 import ast
-from typing import Iterator, Union, Literal, Any
+from typing import Any, Iterator, Literal, Union
 
 import numpy as np
 import zarr
@@ -7,8 +7,8 @@ import zarr.codecs
 from numpy.typing import DTypeLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingParams
 
-from linc_convert.utils.zarr_config import ZarrConfig
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrGroup
+from linc_convert.utils.zarr_config import ZarrConfig
 
 
 class ZarrPythonArray(ZarrArray):
@@ -57,7 +57,7 @@ class ZarrPythonArray(ZarrArray):
             return getattr(self._array, name)
         else:
             raise AttributeError(
-                f"'{self.__class__.__name__}' object has no attribute '{name}'")
+                    f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
 
 class ZarrPythonGroup(ZarrGroup):
@@ -133,10 +133,10 @@ class ZarrPythonGroup(ZarrGroup):
             "fill_value": None,
             "compressors": make_compressor(compressor, zarr_config.zarr_version,
                                            **compressor_opt),
-        }
+            }
 
         chunk_key_encoding = dimension_separator_to_chunk_key_encoding(
-            zarr_config.dimension_separator, zarr_config.zarr_version)
+                zarr_config.dimension_separator, zarr_config.zarr_version)
         if chunk_key_encoding:
             opt["chunk_key_encoding"] = chunk_key_encoding
         arr = self._zgroup.create_array(name=name,
@@ -153,23 +153,23 @@ class ZarrPythonGroup(ZarrGroup):
         """
         base_level = self['0']
         opts = dict(
-            dtype=base_level.dtype,
-            chunks=base_level.chunks,
-            shards=getattr(base_level, "shards", None),
-            filters=getattr(base_level._array, "filters", None),
-            compressors=getattr(base_level._array, "compressors", None),
-            fill_value=getattr(base_level._array, "fill_value", None),
-            order=getattr(base_level._array, "order", None),
-            attributes=getattr(getattr(base_level._array, "metadata", None),
-                               "attributes", None),
-            overwrite=True,
-        )
+                dtype=base_level.dtype,
+                chunks=base_level.chunks,
+                shards=getattr(base_level, "shards", None),
+                filters=getattr(base_level._array, "filters", None),
+                compressors=getattr(base_level._array, "compressors", None),
+                fill_value=getattr(base_level._array, "fill_value", None),
+                order=getattr(base_level._array, "order", None),
+                attributes=getattr(getattr(base_level._array, "metadata", None),
+                                   "attributes", None),
+                overwrite=True,
+                )
         # Handle extra options based on metadata type
         meta = getattr(base_level, "metadata", None)
         if meta is not None:
             if hasattr(meta, "dimension_separator"):
                 opts["chunk_key_encoding"] = dimension_separator_to_chunk_key_encoding(
-                    meta.dimension_separator, 2)
+                        meta.dimension_separator, 2)
             if hasattr(meta, "chunk_key_encoding"):
                 opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
             if hasattr(base_level, "serializer"):
@@ -202,16 +202,18 @@ def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) 
 
     if zarr_version == 2:
         import numcodecs
+
         compressor_map = {
             "blosc": numcodecs.Blosc,
             "zlib": numcodecs.Zstd,
-        }
+            }
     elif zarr_version == 3:
         import zarr.codecs
+
         compressor_map = {
             "blosc": zarr.codecs.BloscCodec,
             "zlib": zarr.codecs.ZstdCodec,
-        }
+            }
     else:
         raise ValueError()
     name = name.lower()
@@ -242,7 +244,7 @@ def create_array(
         zarr_config: ZarrConfig,
         dtype: DTypeLike = np.int32,
         data=None
-) -> zarr.Array:
+        ) -> zarr.Array:
     compressor = zarr_config.compressor
     compressor_opt = zarr_config.compressor_opt
     chunk, shard = compute_zarr_layout(shape, dtype, zarr_config)
@@ -258,10 +260,10 @@ def create_array(
         "fill_value": None,
         "compressors": make_compressor(compressor, zarr_config.zarr_version,
                                        **compressor_opt),
-    }
+        }
 
     chunk_key_encoding = dimension_separator_to_chunk_key_encoding(
-        zarr_config.dimension_separator, zarr_config.zarr_version)
+            zarr_config.dimension_separator, zarr_config.zarr_version)
     if chunk_key_encoding:
         opt["chunk_key_encoding"] = chunk_key_encoding
     arr = omz.create_array(name=name,
@@ -280,8 +282,8 @@ def dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version)
         pass
     else:
         dimension_separator = ChunkKeyEncodingParams(
-            name="default" if zarr_version == 3 else "v2",
-            separator=dimension_separator)
+                name="default" if zarr_version == 3 else "v2",
+                separator=dimension_separator)
         return dimension_separator
 
 
@@ -289,7 +291,7 @@ def compute_zarr_layout(
         shape: tuple,
         dtype: DTypeLike,
         zarr_config: ZarrConfig
-) -> tuple[tuple, tuple | None]:
+        ) -> tuple[tuple, tuple | None]:
     ndim = len(shape)
     if ndim == 5:
         if zarr_config.no_time:
@@ -297,11 +299,11 @@ def compute_zarr_layout(
         chunk_tc = (
             1 if zarr_config.chunk_time else shape[0],
             1 if zarr_config.chunk_channels else shape[1],
-        )
+            )
         shard_tc = (
             chunk_tc[0] if zarr_config.shard_time else shape[0],
             chunk_tc[1] if zarr_config.shard_channels else shape[1]
-        )
+            )
 
     elif ndim == 4:
         if zarr_config.no_time:
@@ -351,7 +353,8 @@ def compute_zarr_layout(
         M = []
         free_dims = []
         for i in range(dims):
-            # If the uniform guess already overshoots the data, clamp to the minimal covering multiplier.
+            # If the uniform guess already overshoots the data, clamp to the minimal
+            # covering multiplier.
             if m_uniform * chunk_spatial[i] >= shape_spatial[i]:
                 M.append(L[i])
             else:
@@ -369,8 +372,8 @@ def compute_zarr_layout(
                 if candidate * chunk_spatial[i] >= shape_spatial[i]:
                     candidate = L[i]
                 new_product = np.prod(
-                    [candidate if j == i else M[j] for j in range(dims)]
-                )
+                        [candidate if j == i else M[j] for j in range(dims)]
+                        )
                 if new_product <= B_multiplier and candidate > M[i]:
                     M[i] = candidate
                     improved = True

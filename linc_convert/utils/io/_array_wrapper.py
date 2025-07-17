@@ -18,9 +18,9 @@ class _ArrayWrapper:
                     break
             if len(f.keys()) > 1:
                 warn(
-                    f"More than one key in .mat file {self.file}, "
-                    f'arbitrarily loading "{key}"'
-                )
+                        f"More than one key in .mat file {self.file}, "
+                        f'arbitrarily loading "{key}"'
+                        )
 
         if key not in f.keys():
             raise Exception(f"Key {key} not found in file {self.file}")

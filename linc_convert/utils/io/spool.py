@@ -1,5 +1,6 @@
 """
-The following script is derived from https://github.com/CBI-PITT/holis_tools/blob/main/holis_tools/zyla_spool_reader.py.
+The following script is derived from
+https://github.com/CBI-PITT/holis_tools/blob/main/holis_tools/zyla_spool_reader.py.
 
 Copyright (c) 2021, Alan M Watson
 
@@ -62,7 +63,7 @@ class SpoolSetInterpreter:
 
         except (KeyError, IndexError, ValueError) as e:
             warnings.warn(
-                f"ERROR: Unable to extract frame information from info file. {e}")
+                    f"ERROR: Unable to extract frame information from info file. {e}")
             return None
         num_frames_per_spool = int(self.config['multiimage']['ImagesPerFile'])
         num_frames_to_load = num_total_frames - num_bg_frames
@@ -86,10 +87,10 @@ class SpoolSetInterpreter:
 
     def _list_spool_files(self):
         return sorted(
-            tuple(
-                [x for x in self.entries if '0spool.dat' in x]
-            )
-        )
+                tuple(
+                        [x for x in self.entries if '0spool.dat' in x]
+                        )
+                )
 
     def _get_acquisitionparameters_str(self):
         file = self._make_filename_from_spool_set('acquisitionmetadata.ini')

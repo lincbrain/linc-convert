@@ -8,15 +8,14 @@ import shutil
 
 import cyclopts
 import numpy as np
-
 # externals
 import wkw
 import zarr
 
 # internals
 from linc_convert.modalities.wk.cli import wk
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.io.zarr.drivers.zarr_python import make_compressor
+from linc_convert.utils.math import ceildiv
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
 wk.command(webknossos)
@@ -24,16 +23,16 @@ wk.command(webknossos)
 
 @webknossos.default
 def convert(
-    wkw_dir: str = None,
-    ome_dir: str = None,
-    out: str = None,
-    dic: str = None,
-    *,
-    chunk: int = 1024,
-    compressor: str = "blosc",
-    compressor_opt: str = "{}",
-    max_load: int = 16384,
-) -> None:
+        wkw_dir: str = None,
+        ome_dir: str = None,
+        out: str = None,
+        dic: str = None,
+        *,
+        chunk: int = 1024,
+        compressor: str = "blosc",
+        compressor_opt: str = "{}",
+        max_load: int = 16384,
+        ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
 
@@ -83,8 +82,8 @@ def convert(
     for idx in range(n):
         offset_x, offset_y = 0, 0
         data = wkw_dataset.read(
-            off=(offset_y, offset_x, idx), shape=[size[1], size[0], 1]
-        )
+                off=(offset_y, offset_x, idx), shape=[size[1], size[0], 1]
+                )
         data = data[0, :, :, 0]
         data = np.transpose(data, (1, 0))
         [t0, b0, l0, r0] = find_borders(data)
@@ -113,7 +112,7 @@ def convert(
         "dtype": "uint8",
         "fill_value": None,
         "compressor": make_compressor(compressor, **compressor_opt),
-    }
+        }
     print(opt)
 
     # Write each level
@@ -136,7 +135,7 @@ def convert(
 
             top, bottom, left, right = [
                 k * 2 ** (nblevel - level - 1) for k in low_res_offsets[idx]
-            ]
+                ]
             height, width = size[0] - top - bottom, size[1] - left - right
 
             data = wkw_dataset.read(off=(left, top, idx), shape=[width, height, 1])
@@ -144,28 +143,28 @@ def convert(
             data = np.transpose(data, (1, 0))
             if dic:
                 data = np.array(
-                    [
-                        [dic[data[i][j]] for j in range(data.shape[1])]
-                        for i in range(data.shape[0])
-                    ]
-                )
+                        [
+                            [dic[data[i][j]] for j in range(data.shape[1])]
+                            for i in range(data.shape[0])
+                            ]
+                        )
             subdat_size = data.shape
 
             print(
-                "Convert level",
-                level,
-                "with shape",
-                shape,
-                "and slice",
-                idx,
-                "with size",
-                subdat_size,
-            )
+                    "Convert level",
+                    level,
+                    "with shape",
+                    shape,
+                    "and slice",
+                    idx,
+                    "with size",
+                    subdat_size,
+                    )
             if max_load is None or (
-                subdat_size[-2] < max_load and subdat_size[-1] < max_load
+                    subdat_size[-2] < max_load and subdat_size[-1] < max_load
             ):
                 array[
-                    0, idx, top : top + subdat_size[-2], left : left + subdat_size[-1]
+                0, idx, top: top + subdat_size[-2], left: left + subdat_size[-1]
                 ] = data[...]
             else:
                 ni = ceildiv(subdat_size[-2], max_load)
@@ -173,17 +172,17 @@ def convert(
 
                 for i in range(ni):
                     for j in range(nj):
-                        print(f"\r{i+1}/{ni}, {j+1}/{nj}", end=" ")
+                        print(f"\r{i + 1}/{ni}, {j + 1}/{nj}", end=" ")
                         start_x, end_x = (i * max_load,)
                         min((i + 1) * max_load, subdat_size[-2])
 
                         start_y, end_y = (j * max_load,)
                         min((j + 1) * max_load, subdat_size[-1])
                         array[
-                            0,
-                            idx,
-                            top + start_x : top + end_x,
-                            left + start_y : left + end_y,
+                        0,
+                        idx,
+                        top + start_x: top + end_x,
+                        left + start_y: left + end_y,
                         ] = data[start_x:end_x, start_y:end_y]
                 print("")
 
@@ -209,7 +208,7 @@ def get_mask_name(level: int) -> str:
     if level == 0:
         return "1"
     else:
-        return f"{2**level}-{2**level}-1"
+        return f"{2 ** level}-{2 ** level}-1"
 
 
 def cal_distance(img: np.ndarray) -> int:

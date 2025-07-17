@@ -1,6 +1,6 @@
-from abc import ABC, abstractmethod, ABCMeta
+from abc import ABC, ABCMeta, abstractmethod
 from os import PathLike
-from typing import Union, Tuple, Optional, Any, Literal, List
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 import niizarr
 import numpy as np
@@ -10,10 +10,10 @@ from dask.diagnostics import ProgressBar
 from nibabel import Nifti1Header, Nifti2Header
 from numpy.typing import DTypeLike
 
-from linc_convert.utils.zarr_config import ZarrConfig
-from linc_convert.utils.io.generate_pyramid import default_levels, next_level_shape, \
-    compute_next_level
+from linc_convert.utils.io.generate_pyramid import (compute_next_level, default_levels,
+                                                    next_level_shape)
 from linc_convert.utils.io.zarr import logger
+from linc_convert.utils.zarr_config import ZarrConfig
 
 
 class ZarrNode(ABC):
@@ -145,7 +145,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             *,
             zarr_config: ZarrConfig = None,
             **kwargs
-    ) -> ZarrArray:
+            ) -> ZarrArray:
         """
         Create a new array within this group.
         """
@@ -158,7 +158,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             shape: Tuple[int, ...],
             data: Optional[Any] = None,
             **kwargs
-    ) -> ZarrArray:
+            ) -> ZarrArray:
         """
         Create a new array using metadata of an existing base-level array.
         """
@@ -170,7 +170,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             ndim: int = 3,
             mode: Literal["mean", "median"] = "median",
             no_pyramid_axis: Optional[int] = None,
-    ) -> list[list[int]]:
+            ) -> list[list[int]]:
         """
         Generate the levels of a pyramid in an existing Zarr.
 
@@ -214,7 +214,7 @@ class ZarrGroup(ZarrNode, metaclass=ABCMeta):
             all_shapes.append(spatial_shape)
             logger.info(f"Compute level {lvl} with shape {spatial_shape}")
             arr = self.create_array_from_base(
-                str(lvl), shape=batch_shape + spatial_shape)
+                    str(lvl), shape=batch_shape + spatial_shape)
             # dat = da.from_zarr(self[str(lvl - 1)]._array)
             dat = da.from_array(self[str(lvl - 1)], chunks=self[str(lvl - 1)].chunks)
             dat = compute_next_level(dat, ndim, no_pyramid_axis, window_func)

@@ -3,18 +3,18 @@ import json
 import math
 import os
 from os import PathLike
-from typing import Optional, Tuple, Literal, Union, Mapping, Any
+from typing import Any, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import numcodecs
 import numcodecs.abc
 import numpy as np
+import tensorstore as ts
 from numpy.typing import DTypeLike
 from upath import UPath
 
-import tensorstore as ts
-from linc_convert.utils.zarr_config import ZarrConfig
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrGroup
+from linc_convert.utils.zarr_config import ZarrConfig
 
 
 class ZarrTSArray(ZarrArray):
@@ -40,7 +40,8 @@ class ZarrTSArray(ZarrArray):
 
     @property
     def shards(self) -> Optional[Tuple[int, ...]]:
-        if self._ts.chunk_layout.read_chunk.shape == self._ts.chunk_layout.write_chunk.shape:
+        if (self._ts.chunk_layout.read_chunk.shape ==
+        self._ts.chunk_layout.write_chunk.shape):
             return None
         else:
             return self._ts.chunk_layout.write_chunk.shape
@@ -70,7 +71,7 @@ class ZarrTSArray(ZarrArray):
             "open": True,
             "create": False,
             "delete_existing": False,
-        }
+            }
         return cls(ts.open(conf).result())
 
 
@@ -78,6 +79,7 @@ class ZarrTSGroup(ZarrGroup):
     def __init__(self, store_path: Union[str, PathLike]):
         super().__init__(store_path)
         from upath import UPath
+
         if not isinstance(store_path, UPath):
             store_path = UPath(store_path)
         self._path = store_path
@@ -99,7 +101,7 @@ class ZarrTSGroup(ZarrGroup):
         return (
             sub_dir.name for sub_dir in self._path.iterdir()
             if sub_dir.is_dir() and _detect_metadata(sub_dir)
-        )
+            )
 
     def __getitem__(self, key) -> Union[ZarrTSArray, 'ZarrTSGroup']:
         metadata = _detect_metadata(self._path / key)
@@ -145,24 +147,24 @@ class ZarrTSGroup(ZarrGroup):
                      ) -> ZarrArray:
         if zarr_config is None:
             conf = default_write_config(
-                self._path / name,
-                shape=shape,
-                dtype=dtype,
-                **kwargs
-            )
+                    self._path / name,
+                    shape=shape,
+                    dtype=dtype,
+                    **kwargs
+                    )
         else:
             compressor_opt = ast.literal_eval(zarr_config.compressor_opt)
             conf = default_write_config(
-                self._path / name,
-                shape=shape,
-                dtype=dtype,
-                chunk=zarr_config.chunk,
-                shard=zarr_config.shard,
-                compressor=zarr_config.compressor,
-                # TODO: implement this
-                # compressor_opt=,
-                version=zarr_config.zarr_version,
-            )
+                    self._path / name,
+                    shape=shape,
+                    dtype=dtype,
+                    chunk=zarr_config.chunk,
+                    shard=zarr_config.shard,
+                    compressor=zarr_config.compressor,
+                    # TODO: implement this
+                    # compressor_opt=,
+                    version=zarr_config.zarr_version,
+                    )
         conf['delete_existing'] = True
         conf['create'] = True
         arr = ts.open(conf).result()
@@ -224,12 +226,13 @@ class ZarrTSGroup(ZarrGroup):
             _init_group(p, zarr_version)
         else:
             raise ValueError(
-                f"Invalid mode '{mode}'. Use 'r', 'r+', 'a', 'w', or 'w-' ")
+                    f"Invalid mode '{mode}'. Use 'r', 'r+', 'a', 'w', or 'w-' ")
 
         return cls(p)
 
     def _get_zarr_python_group(self):
         import zarr
+
         return zarr.open_group(self._path, mode='a')
 
 
@@ -296,7 +299,7 @@ def auto_shard_size(
         itemsize: int | np.dtype | str,
         max_file_size: int = 2 * 1024 ** 4,
         compression_ratio: float = 2,
-) -> list[int]:
+        ) -> list[int]:
     """
     Find maximal shard size that ensures file size below cap.
 
@@ -349,7 +352,7 @@ def fix_shard_chunk(
         shard: list[int],
         chunk: list[int],
         shape: list[int],
-) -> tuple[list[int], list[int]]:
+        ) -> tuple[list[int], list[int]]:
     """
     Fix incompatibilities between chunk and shard size.
 
@@ -400,7 +403,7 @@ def default_read_config(path: os.PathLike | str) -> dict:
         "open": True,
         "create": False,
         "delete_existing": False,
-    }
+        }
 
 
 def _is_array(path):
@@ -476,7 +479,7 @@ def default_write_config(
         compressor: str = "blosc",
         compressor_opt: dict | None = None,
         version: int = 3,
-) -> dict:
+        ) -> dict:
     """
     Generate a default TensorStore configuration.
 
@@ -497,6 +500,7 @@ def default_write_config(
         Configuration
     """
     from upath import UPath
+
     path = UPath(path)
     if not path.protocol:
         path = "file://" / path
@@ -543,7 +547,7 @@ def default_write_config(
             chunk_grid = {
                 "name": "regular",
                 "configuration": {"chunk_shape": shard},
-            }
+                }
 
             sharding_codec = {
                 "name": "sharding_indexed",
@@ -552,14 +556,14 @@ def default_write_config(
                     "codecs": [
                         codec_little_endian,
                         *compressor,
-                    ],
+                        ],
                     "index_codecs": [
                         codec_little_endian,
                         {"name": "crc32c"},
-                    ],
+                        ],
                     "index_location": "end",
-                },
-            }
+                    },
+                }
             codecs = [sharding_codec]
 
         else:
@@ -567,7 +571,7 @@ def default_write_config(
             codecs = [
                 codec_little_endian,
                 *compressor,
-            ]
+                ]
 
         metadata = {
             "chunk_grid": chunk_grid,
@@ -577,12 +581,12 @@ def default_write_config(
             "chunk_key_encoding": {
                 "name": "default",
                 "configuration": {"separator": r"/"},
-            },
-        }
+                },
+            }
         config = {
             "driver": "zarr3",
             "metadata": metadata,
-        }
+            }
 
     # ------------------------------------------------------------------
     #   Zarr 2
@@ -601,12 +605,12 @@ def default_write_config(
             "dtype": np.dtype(dtype).str,
             "fill_value": 0,
             "compressor": compressor,
-        }
+            }
         config = {
             "driver": "zarr",
             "metadata": metadata,
             "key_encoding": r"/",
-        }
+            }
 
     # Prepare store
     config["metadata"]["shape"] = shape
@@ -619,9 +623,9 @@ def _init_group(group_path: PathLike, version: int):
     group_path.mkdir(parents=True, exist_ok=True)
     if version == 3:
         (group_path / 'zarr.json').write_text(
-            json.dumps({'zarr_format': 3, 'node_type': 'group'})
-        )
+                json.dumps({'zarr_format': 3, 'node_type': 'group'})
+                )
     else:
         (group_path / '.zgroup').write_text(
-            json.dumps({'zarr_format': 2})
-        )
+                json.dumps({'zarr_format': 2})
+                )

@@ -19,13 +19,13 @@ from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.io._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
-    _MatArrayWrapper
+from linc_convert.utils.io._array_wrapper import (_ArrayWrapper, _H5ArrayWrapper,
+                                                  _MatArrayWrapper)
+from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
-from linc_convert.utils.io.zarr import from_config
 
 logger = logging.getLogger(__name__)
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
@@ -70,7 +70,7 @@ def convert(
         dtype: Optional[str] = None,
         zarr_config: ZarrConfig = None,
         **kwargs
-) -> None:
+        ) -> None:
     """
     Matlab to OME-Zarr.
 
@@ -143,9 +143,10 @@ def convert(
                            j * chunk_size[1]: (j + 1) * chunk_size[1],
                            ]
             logger.info(
-                f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: {k + 1:03d}] "
-                f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
-            )
+                    f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: "
+                    f"{k + 1:03d}] "
+                    f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
+                    )
             z_start = k * chunk_size[0]
             z_end = z_start + loaded_chunk.shape[-2]
             y_start = j * chunk_size[1]
@@ -169,7 +170,7 @@ def convert(
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
     header = default_nifti_header(arr, zgroup.attrs.get("ome", zgroup.attrs).get(
-        "multiscales"))
+            "multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:

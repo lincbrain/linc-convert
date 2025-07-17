@@ -5,7 +5,8 @@ from linc_convert.utils.math import ceildiv
 
 def chunk_slice_generator(arr_shape, chunk_shape):
     """
-    Generate slice indices for chunking an array based on its shape and the provided chunk_shape
+    Generate slice indices for chunking an array based on its shape and the provided
+    chunk_shape
     for the last dimensions.
 
     Parameters:

@@ -24,7 +24,7 @@ def generate_pyramid_old(
         max_load: int = 512,
         mode: Literal["mean", "median"] = "median",
         no_pyramid_axis: Optional[int] = None,
-) -> list[list[int]]:
+        ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
 
@@ -90,21 +90,22 @@ def generate_pyramid_old(
             slicer = [Ellipsis] + [
                 slice(i * max_load, min((i + 1) * max_load, n))
                 for i, n in zip(chunk_index, prev_shape)
-            ]
+                ]
             dat = omz[str(lvl - 1)][tuple(slicer)]
 
             # Discard the last voxel along odd dimensions
             # if one dimension has length 1, it should not be cropped
             crop = [
                 0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], prev_shape)
-            ]
+                ]
             # Only crop the axes that are downsampled
             if no_pyramid_axis is not None:
                 crop[no_pyramid_axis] = 0
             slcr = [slice(-1) if x else slice(None) for x in crop]
             dat = dat[tuple([Ellipsis, *slcr])]
 
-            # last strip had a single voxel and become empty after cropping, nothing to do
+            # last strip had a single voxel and become empty after cropping, nothing
+            # to do
             if 0 in dat.shape:
                 continue
 
@@ -113,7 +114,7 @@ def generate_pyramid_old(
             # Reshape into patches of shape 2x2x2
             windowed_shape = [
                 x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
-            ]
+                ]
             if no_pyramid_axis is not None:
                 windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
                 windowed_shape[2 * no_pyramid_axis + 1] = 1
@@ -121,10 +122,10 @@ def generate_pyramid_old(
             dat = dat.reshape(tuple(batch_shape + windowed_shape))
             # -> last `ndim` dimensions have shape 2x2x2
             dat = dat.transpose(
-                list(range(len(batch_shape)))
-                + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
-                + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
-            )
+                    list(range(len(batch_shape)))
+                    + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
+                    + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
+                    )
             # -> flatten patches
             smaller_shape = [max(n // 2, 1) for n in patch_shape]
             if no_pyramid_axis is not None:
@@ -143,7 +144,7 @@ def generate_pyramid_old(
                 if axis_index != no_pyramid_axis
                 else slice(i * max_load, min((i + 1) * max_load, n))
                 for i, axis_index, n in zip(chunk_index, range(ndim), spatial_shape)
-            ]
+                ]
 
             arr[tuple(slicer)] = dat
 
@@ -154,12 +155,12 @@ def default_levels(
         spatial_shape: tuple,
         spatial_chunk: tuple,
         no_pyramid_axis: Optional[int]
-) -> int:
+        ) -> int:
     default_levels = max(
-        int(math.ceil(math.log2(s / spatial_chunk[i])))
-        for i, s in enumerate(spatial_shape)
-        if no_pyramid_axis is None or i != no_pyramid_axis
-    )
+            int(math.ceil(math.log2(s / spatial_chunk[i])))
+            for i, s in enumerate(spatial_shape)
+            if no_pyramid_axis is None or i != no_pyramid_axis
+            )
     levels = max(default_levels, 0)
     return levels
 
@@ -178,26 +179,26 @@ def get_zarray_options(base_level):
     from .zarr_io.drivers.zarr_python import dimension_separator_to_chunk_key_encoding
 
     opts = dict(
-        dtype=base_level.dtype,
-        chunks=base_level.chunks,
-        shards=base_level.shards,
-        filters=base_level.filters,
-        compressors=base_level.compressors,
-        fill_value=base_level.fill_value,
-        order=base_level.order,
-        attributes=base_level.metadata.attributes,
-        overwrite=True,
-    )
+            dtype=base_level.dtype,
+            chunks=base_level.chunks,
+            shards=base_level.shards,
+            filters=base_level.filters,
+            compressors=base_level.compressors,
+            fill_value=base_level.fill_value,
+            order=base_level.order,
+            attributes=base_level.metadata.attributes,
+            overwrite=True,
+            )
     if isinstance(base_level.metadata, ArrayV2Metadata):
         opts_extra = dict(
-            chunk_key_encoding=dimension_separator_to_chunk_key_encoding(
-                base_level.metadata.dimension_separator, 2)
-        )
+                chunk_key_encoding=dimension_separator_to_chunk_key_encoding(
+                        base_level.metadata.dimension_separator, 2)
+                )
     elif isinstance(base_level.metadata, ArrayV3Metadata):
         opts_extra = dict(
-            chunk_key_encoding=base_level.metadata.chunk_key_encoding,
-            serializer=base_level.serializer,
-            dimension_names=base_level.metadata.dimension_names, )
+                chunk_key_encoding=base_level.metadata.chunk_key_encoding,
+                serializer=base_level.serializer,
+                dimension_names=base_level.metadata.dimension_names, )
     else:
         opts_extra = {}
     opts.update(**opts_extra)
@@ -229,7 +230,7 @@ def generate_pyramid(
         ndim: int = 3,
         mode: Literal["mean", "median"] = "median",
         no_pyramid_axis: Optional[int] = None,
-) -> list[list[int]]:
+        ) -> list[list[int]]:
     """
     Generate the levels of a pyramid in an existing Zarr.
 
@@ -343,7 +344,7 @@ def compute_next_level(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
                 no_pyramid_axis]) or arr.shape[axis] == 1
             else 2)
         for axis in pyramid_axes
-    }
+        }
     dtype = arr.dtype
 
     return da.coarsen(window_func, arr, factors, trim_excess=True).astype(dtype)
@@ -364,17 +365,17 @@ def compute_next_level_old(arr, ndim, no_pyramid_axis, window_func):
     # Reshape into patches of shape 2x2x2
     windowed_shape = [
         x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
-    ]
+        ]
     if no_pyramid_axis is not None:
         windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
         windowed_shape[2 * no_pyramid_axis + 1] = 1
     arr = arr.reshape(tuple(batch_shape + windowed_shape))
     # -> last `ndim` dimensions have shape 2x2x2
     arr = arr.transpose(
-        list(range(len(batch_shape)))
-        + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
-        + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
-    )
+            list(range(len(batch_shape)))
+            + list(range(len(batch_shape), len(batch_shape) + 2 * ndim, 2))
+            + list(range(len(batch_shape) + 1, len(batch_shape) + 2 * ndim, 2))
+            )
     # -> flatten patches
     smaller_shape = [max(n // 2, 1) for n in patch_shape]
     if no_pyramid_axis is not None:

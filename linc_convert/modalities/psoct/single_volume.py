@@ -18,13 +18,13 @@ from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.io._array_wrapper import _ArrayWrapper, _MatArrayWrapper, \
-    _H5ArrayWrapper
 from linc_convert.utils.chunk_processing import chunk_slice_generator
+from linc_convert.utils.io._array_wrapper import (_ArrayWrapper, _H5ArrayWrapper,
+                                                  _MatArrayWrapper)
+from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
 from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
-from linc_convert.utils.io.zarr import from_config
 
 logger = logging.getLogger(__name__)
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
@@ -71,7 +71,7 @@ def convert(
         center: bool = True,
         zarr_config: ZarrConfig = None,
         **kwargs
-) -> None:
+        ) -> None:
     """
     Matlab to OME-Zarr.
 
@@ -138,8 +138,8 @@ def convert(
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(
-            f"Processing chunk {idx} of "  # [{nx:03d}, {ny:03d}, {nz:03d}]
-        )
+                f"Processing chunk {idx} of "  # [{nx:03d}, {ny:03d}, {nz:03d}]
+                )
         loaded_chunk = inp[slc]
         dataset[slc] = loaded_chunk
 
@@ -155,7 +155,7 @@ def convert(
     arr = zgroup["0"]
     header = default_nifti_header(arr,
                                   zgroup.attrs.get("ome", zgroup.attrs).get(
-                                      "multiscales"))
+                                          "multiscales"))
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:

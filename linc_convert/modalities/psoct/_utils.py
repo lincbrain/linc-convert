@@ -31,7 +31,7 @@ def make_json(oct_meta: str) -> dict:
 
     def _parse_value_unit(
             string: str, n: int = None
-    ) -> tuple[float | list[float], str | Any]:
+            ) -> tuple[float | list[float], str | Any]:
         number = r"-?(\d+\.?\d*|\d*\.?\d+)(E-?\d+)?"
         value = "x".join([number] * (n or 1))
         match = re.fullmatch(r"(?P<value>" + value + r")(?P<unit>\w*)", string)
@@ -45,7 +45,7 @@ def make_json(oct_meta: str) -> dict:
         "BodyPart": "BRAIN",
         "Environment": "exvivo",
         "SampleStaining": "none",
-    }
+        }
 
     for line in oct_meta.split("\n"):
         if ":" not in line:
