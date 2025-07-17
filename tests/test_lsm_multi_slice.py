@@ -27,16 +27,16 @@ def test_lsm_multi_slice(tmp_path, multi_slice_tiff, zarr_version, driver):
     expected_zarr = f"data/lsm_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
-        str(multi_slice_tiff),
-        overlap=0,
-        out=str(output),
-        zarr_version=zarr_version,
-        driver=driver
-    )
+            str(multi_slice_tiff),
+            overlap=0,
+            out=str(output),
+            zarr_version=zarr_version,
+            driver=driver
+            )
     assert_zarr_equal(
-        str(output),
-        zarr.storage.ZipStore(expected_zarr, mode="r")
-    )
+            str(output),
+            zarr.storage.ZipStore(expected_zarr, mode="r")
+            )
 
 
 @pytest.mark.golden
@@ -44,10 +44,10 @@ def test_lsm_multi_slice_regen_golden(tmp_path, multi_slice_tiff, zarr_version):
     expected_zarr = f"data/lsm_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
-        str(multi_slice_tiff),
-        overlap=0,
-        out=str(output),
-        zarr_version=zarr_version,
-    )
+            str(multi_slice_tiff),
+            overlap=0,
+            out=str(output),
+            zarr_version=zarr_version,
+            )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

@@ -11,7 +11,8 @@ import zarr
 def load_file(path):
     """
     Load data from a file based on its extension.
-    Supports .nii, .nii.gz (via nibabel), .mat (via scipy.io), and .zarr (via zarr-python).
+    Supports .nii, .nii.gz (via nibabel), .mat (via scipy.io), and .zarr (via
+    zarr-python).
     """
     ext = os.path.splitext(path)[1].lower()
     # Handle .nii and .nii.gz
@@ -37,7 +38,8 @@ def load_file(path):
         keys = [k for k in mat.keys() if not k.startswith('__')]
         if len(keys) != 1:
             print(
-                f"Error: Expected one variable in the MAT file, found {len(keys)}: {keys}")
+                    f"Error: Expected one variable in the MAT file, found "
+                    f"{len(keys)}: {keys}")
             sys.exit(1)
         return mat[keys[0]]
 
@@ -99,7 +101,8 @@ def assert_zarr_equal(
         store2: Union[str, zarr.storage.StoreLike],
         ignore_nii: bool = False) -> None:
     """
-    Assert that two Zarr groups—opened from either a path or a store—have identical contents.
+    Assert that two Zarr groups—opened from either a path or a store—have identical
+    contents.
 
     Parameters
     ----------
@@ -118,10 +121,12 @@ def assert_zarr_equal(
 
     if dict(zarr1.attrs) != dict(zarr2.attrs):
         diffs.append(
-            f"Group attrs differ:\n ‣ {json.dumps(dict(zarr1.attrs))}\n ‣ {json.dumps(dict(zarr2.attrs))}")
+                f"Group attrs differ:\n ‣ {json.dumps(dict(zarr1.attrs))}\n ‣ "
+                f"{json.dumps(dict(zarr2.attrs))}")
     if set(zarr1.keys()) != set(zarr2.keys()):
         diffs.append(
-            f"Group keys differ:\n ‣ {set(zarr1.keys())} in {zarr1.store_path}\n ‣ {set(zarr2.keys())} in {zarr2.store_path}")
+                f"Group keys differ:\n ‣ {set(zarr1.keys())} in {zarr1.store_path}\n "
+                f"‣ {set(zarr2.keys())} in {zarr2.store_path}")
 
     keys = set(zarr1.keys()).intersection(set(zarr2.keys()))
     for key in keys:
@@ -134,7 +139,9 @@ def assert_zarr_equal(
         elif isinstance(obj1, zarr.Array):
             if dict(obj1.attrs) != dict(obj2.attrs):
                 diffs.append(
-                    f"Attributes for key '{key}' differ:\n ‣ {dict(obj1.attrs)}\n ‣ {dict(obj2.attrs)}")
+                        f"Attributes for key '{key}' differ:\n"
+                        f" ‣ {dict(obj1.attrs)}\n"
+                        f" ‣ {dict(obj2.attrs)}")
             try:
                 np.testing.assert_array_equal(obj1[:], obj2[:])
             except AssertionError as e:

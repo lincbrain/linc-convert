@@ -31,7 +31,7 @@ def write_zyla_spool_set(
         *,
         pixel_encoding: str = 'Mono16',
         images_per_file: int = None,
-):
+        ):
     """
     Given `image` of shape (numDepths, numColumns, numFrames),
     create a Zyla‑compatible spool directory at `spool_set_path`
@@ -47,7 +47,8 @@ def write_zyla_spool_set(
     pixel_encoding : {'Mono16','Mono8'}
         Selects dtype and controls AOIStride = numColumns * itemsize.
     images_per_file : int, optional
-        How many frames to pack into each spool file.  Defaults to all frames in one file.
+        How many frames to pack into each spool file.  Defaults to all frames in one
+        file.
     """
     numDepths, numColumns, numFrames = image.shape
     if images_per_file is None:
@@ -123,9 +124,9 @@ def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
 
     # assert_zarr_equal is assumed available from your test utils
     assert_zarr_equal(
-        str(output),
-        zarr.storage.ZipStore(expected_zarr, mode="r")
-    )
+            str(output),
+            zarr.storage.ZipStore(expected_zarr, mode="r")
+            )
 
 
 @pytest.mark.golden

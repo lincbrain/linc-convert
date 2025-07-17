@@ -2,11 +2,9 @@ import os
 import tempfile
 from pathlib import Path
 
-import test_lsm
-import test_wk
 import zarr
 
-from linc_convert.modalities.lsm import mosaic
+import test_wk
 from linc_convert.modalities.wk import webknossos_annotation
 
 if __name__ == "__main__":
@@ -20,8 +18,8 @@ if __name__ == "__main__":
         basename = os.path.basename(ome_dir)[:-9]
         initials = wkw_dir.split("/")[-2][:2]
         output_zarr = os.path.join(
-            tmp_dir, basename + "_dsec_" + initials + ".ome.zarr"
-        )
+                tmp_dir, basename + "_dsec_" + initials + ".ome.zarr"
+                )
 
         webknossos_annotation.convert(wkw_dir, ome_dir, tmp_dir, "{}")
         zarr.copy_all(zarr.open(output_zarr), zarr.open("data/wk.zarr.zip", "w"))

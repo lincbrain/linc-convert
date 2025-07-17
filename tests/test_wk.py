@@ -37,12 +37,12 @@ def _write_test_data(directory: str) -> None:
                 {"name": "z", "type": "space", "unit": "millimeter"},
                 {"name": "y", "type": "space", "unit": "micrometer"},
                 {"name": "x", "type": "space", "unit": "micrometer"},
-            ],
+                ],
             "datasets": [],
             "type": "jpeg2000",
             "name": "",
-        }
-    ]
+            }
+        ]
     for n in range(5):
         multiscales[0]["datasets"].append({})
         level = multiscales[0]["datasets"][-1]
@@ -56,8 +56,8 @@ def _write_test_data(directory: str) -> None:
                     1.0,
                     float(2 ** n),
                     float(2 ** n),
-                ],
-            },
+                    ],
+                },
             {
                 "type": "translation",
                 "translation": [
@@ -65,9 +65,9 @@ def _write_test_data(directory: str) -> None:
                     0.0,
                     float(2 ** n - 1) * 0.5,
                     float(2 ** n - 1) * 0.5,
-                ],
-            },
-        ]
+                    ],
+                },
+            ]
     omz.attrs["multiscales"] = multiscales
 
 
