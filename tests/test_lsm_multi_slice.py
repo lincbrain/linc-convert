@@ -23,8 +23,7 @@ def multi_slice_tiff(tmp_path):
     return root
 
 
-def test_lsm_multi_slice(tmp_path, multi_slice_tiff, zarr_version, expected_zarr,
-                         driver):
+def test_lsm_multi_slice(tmp_path, multi_slice_tiff, zarr_version, driver):
     expected_zarr = f"data/lsm_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(

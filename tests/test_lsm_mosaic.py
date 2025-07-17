@@ -29,7 +29,7 @@ def mosaic_tiff(tmp_path):
     return root
 
 
-def test_mosaic_lsm(tmp_path, mosaic_tiff, zarr_version, driver):
+def test_lsm_mosaic(tmp_path, mosaic_tiff, zarr_version, driver):
     """
     Convert multiple JP2 slices into a Zarr store and compare against golden.
     """
@@ -48,7 +48,7 @@ def test_mosaic_lsm(tmp_path, mosaic_tiff, zarr_version, driver):
 
 
 @pytest.mark.golden
-def test_mosaic_lsm_regen_golden(tmp_path, mosaic_tiff, zarr_version):
+def test_lsm_mosaic_regen_golden(tmp_path, mosaic_tiff, zarr_version):
     expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "mosaic.nii.zarr"
     mosaic.convert(

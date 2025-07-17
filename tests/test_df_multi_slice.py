@@ -27,7 +27,7 @@ def multi_slice_jp2(tmp_path):
     return files
 
 
-def test_multi_slice_df(tmp_path, multi_slice_jp2, zarr_version, driver):
+def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
     expected_zarr = f"data/df_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.zarr"
     multi_slice.convert(
@@ -43,7 +43,7 @@ def test_multi_slice_df(tmp_path, multi_slice_jp2, zarr_version, driver):
 
 
 @pytest.mark.golden
-def test_multi_slice_df_regen_golden(tmp_path, multi_slice_jp2, zarr_version):
+def test_df_multi_slice_regen_golden(tmp_path, multi_slice_jp2, zarr_version):
     expected_zarr = f"data/df_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.zarr"
     multi_slice.convert(
