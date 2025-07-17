@@ -13,8 +13,8 @@ from numpy.typing import DTypeLike
 from upath import UPath
 
 import tensorstore as ts
-from linc_convert.utils.zarr import ZarrConfig
-from linc_convert.utils.zarr.zarr_io.abc import ZarrArray, ZarrGroup
+from linc_convert.utils.zarr_config import ZarrConfig
+from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrGroup
 
 
 class ZarrTSArray(ZarrArray):
@@ -525,7 +525,9 @@ def default_write_config(
 
         # Fix incompatibilities
         shard, chunk = fix_shard_chunk(shard, chunk, shape)
-
+    else:
+        for i, c in enumerate(chunk):
+            chunk[i] = min(chunk[i], shape[i])
     # ------------------------------------------------------------------
     #   Zarr 3
     # ------------------------------------------------------------------

@@ -122,7 +122,8 @@ class ZarrConfig:
         return replace(self, **kwargs)
 
 
-def update(zarr_config: ZarrConfig | None, **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
+def update_default_config(zarr_config: ZarrConfig | None,
+                          **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
     if zarr_config is None:
         zarr_config = ZarrConfig()
     return replace(zarr_config, **kwargs)

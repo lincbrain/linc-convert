@@ -10,10 +10,10 @@ from dask.diagnostics import ProgressBar
 from nibabel import Nifti1Header, Nifti2Header
 from numpy.typing import DTypeLike
 
-from linc_convert.utils.zarr import ZarrConfig
-from linc_convert.utils.zarr.generate_pyramid import default_levels, next_level_shape, \
+from linc_convert.utils.zarr_config import ZarrConfig
+from linc_convert.utils.io.generate_pyramid import default_levels, next_level_shape, \
     compute_next_level
-from linc_convert.utils.zarr.zarr_io import logger
+from linc_convert.utils.io.zarr import logger
 
 
 class ZarrNode(ABC):
@@ -42,6 +42,13 @@ class ZarrNode(ABC):
         Return the Zarr format version (e.g., 2 or 3).
         """
         ...
+    # TODO: implement these and more built-in methods
+    # def __repr__(self):
+    #     ...
+    # def __str__(self):
+    #     ...
+    # def __eq__(self, other):
+    #     ...
 
 
 class ZarrArray(ZarrNode):

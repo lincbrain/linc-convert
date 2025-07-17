@@ -17,17 +17,15 @@ import h5py
 import numpy as np
 from niizarr import default_nifti_header
 
-from linc_convert import utils
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
+from linc_convert.utils.io._array_wrapper import _ArrayWrapper, _H5ArrayWrapper, \
     _MatArrayWrapper
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr import generate_pyramid
-from linc_convert.utils.zarr.zarr_config import ZarrConfig
-from linc_convert.utils.zarr.zarr_io import from_config
+from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.io.zarr import from_config
 
 logger = logging.getLogger(__name__)
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
@@ -98,7 +96,7 @@ def convert(
     dtype : Optional[str]
         Data type to write into.
     """
-    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
+    zarr_config = update_default_config(zarr_config, **kwargs)
     zarr_config.set_default_name(os.path.splitext(inp[0].file)[0])
 
     # Process metadata if provided

@@ -7,8 +7,8 @@ import zarr.codecs
 from numpy.typing import DTypeLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingParams
 
-from linc_convert.utils.zarr import ZarrConfig
-from linc_convert.utils.zarr.zarr_io.abc import ZarrArray, ZarrGroup
+from linc_convert.utils.zarr_config import ZarrConfig
+from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrGroup
 
 
 class ZarrPythonArray(ZarrArray):

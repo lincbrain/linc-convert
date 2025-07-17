@@ -1,9 +1,8 @@
 import warnings
 
-from linc_convert.utils.zarr import ZarrConfig
-from linc_convert.utils.zarr.zarr_config import DriverLike
-from linc_convert.utils.zarr.zarr_io.abc import ZarrGroup
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import ZarrPythonArray, \
+from linc_convert.utils.zarr_config import DriverLike, ZarrConfig
+from linc_convert.utils.io.zarr.abc import ZarrGroup
+from linc_convert.utils.io.zarr.drivers.zarr_python import ZarrPythonArray, \
     ZarrPythonGroup
 
 _DRIVER_ARRAY = {
@@ -14,7 +13,7 @@ _DRIVER_GROUP = {
 }
 
 try:
-    from linc_convert.utils.zarr.zarr_io.drivers.tensorstore import ZarrTSArray, \
+    from linc_convert.utils.io.zarr.drivers.tensorstore import ZarrTSArray, \
         ZarrTSGroup
 
     _DRIVER_ARRAY["tensorstore"] = ZarrTSArray

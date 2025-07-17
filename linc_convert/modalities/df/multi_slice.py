@@ -16,13 +16,12 @@ import numpy as np
 from cyclopts import App
 
 # internals
-from linc_convert import utils
 from linc_convert.modalities.df.cli import df
-from linc_convert.utils.j2k import WrappedJ2K, get_pixelsize
+from linc_convert.utils.io.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr import from_config
-from linc_convert.utils.zarr.zarr_config import ZarrConfig
+from linc_convert.utils.io.zarr import from_config
+from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
 
 HOME = "/space/aspasia/2/users/linc/000003"
 
@@ -89,7 +88,7 @@ def convert(
     thickness
         Slice thickness
     """
-    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
+    zarr_config = update_default_config(zarr_config, **kwargs)
     zarr_config.set_default_name(os.path.splitext(inp[0])[0])
 
     omz = from_config(zarr_config)
