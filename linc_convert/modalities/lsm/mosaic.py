@@ -6,7 +6,6 @@ https://lincbrain.org/dandiset/000004/0.240319.1924/files?location=derivatives%2
 """
 
 # stdlib
-import ast
 import os
 import re
 from glob import glob
@@ -14,18 +13,13 @@ from glob import glob
 # externals
 import cyclopts
 import nibabel as nib
-import numpy as np
-import zarr
-from niizarr import write_nifti_header
 from tifffile import TiffFile
 
 # internals
-from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.zarr.zarr_config import ZarrConfig
-from linc_convert.utils.zarr.zarr_io import from_config
+from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.io.zarr import from_config
 
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")
 lsm.command(mosaic)
@@ -83,7 +77,7 @@ def convert(
     voxel_size
         Voxel size along the X, Y and Z dimension, in micron.
     """
-    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
+    zarr_config = update_default_config(zarr_config, **kwargs)
 
     if max_load % 2:
         max_load += 1
@@ -197,7 +191,8 @@ def convert(
 
             zstart = sum(shape[0][0] for shape in allshapes[:chunkz])
             ystart = sum(
-                shape[1] for subshapes in allshapes for shape in subshapes[:chunky]
+                shape[1]
+                for shape in allshapes[chunkz][:chunky]
             )
             print(
                 f"Write plane "

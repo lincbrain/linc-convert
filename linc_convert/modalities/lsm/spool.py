@@ -9,16 +9,15 @@ from glob import glob
 import cyclopts
 import nibabel as nib
 import numpy as np
-from niizarr import default_nifti_header, write_nifti_header
-from niizarr._nii2zarr import write_ome_metadata
+from niizarr import default_nifti_header
 
 # internals
-from linc_convert import utils
 from linc_convert.modalities.lsm.cli import lsm
+from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.spool import SpoolSetInterpreter
-from linc_convert.utils.zarr import (generate_pyramid, ZarrConfig)
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import open_zarr_group, \
+from linc_convert.utils.io.spool import SpoolSetInterpreter
+from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.io.zarr.drivers.zarr_python import open_zarr_group, \
     create_array
 
 spool = cyclopts.App(name="spool", help_format="markdown")
@@ -36,7 +35,6 @@ https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata%
 def convert(
         inp: str,
         *,
-        out: str,
         overlap: int = 192,
         orientation: str = "coronal",
         center: bool = True,
@@ -71,7 +69,7 @@ def convert(
     ----------
     inp
         Path to the root directory, which contains a collection of
-        subfolders named `*_y{:02d}_z{:02d}*`, each containing a
+        subfolders named `*_y{:02d}_z{:02d}*_HR`, each containing a
         collection of files named `*spool.dat`.
         TODO: add instrution for metadata file and info file
     out
@@ -89,7 +87,7 @@ def convert(
     kwargs
         used for internal api
     """
-    zarr_config = utils.zarr.zarr_config.update(zarr_config, **kwargs)
+    zarr_config = update_default_config(zarr_config, **kwargs)
 
     CHUNK_PATTERN = re.compile(
         r"^(?P<prefix>\w*)"
@@ -202,8 +200,8 @@ def convert(
     fullshape = (full_shape_z, full_shape_y, full_shape_x)
 
     # Initialize Zarr group and array
-    omz = open_zarr_group(zarr_config)
-    array = create_array(omz, "0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
+    omz = from_config(zarr_config)
+    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
     # TODO: logger
     # print(out)
 
@@ -240,15 +238,17 @@ def convert(
     print("")
 
     # Generate Zarr pyramid and metadata
-    generate_pyramid(omz, levels=zarr_config.levels)
-    write_ome_metadata(omz, axes = ["z","y","x"],space_scale=voxel_size)
+    omz.generate_pyramid(levels=zarr_config.levels)
+    omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
 
     # Write NIfTI-Zarr header:
     if not zarr_config.nii:
         return
 
     # TODO: header has some problem with unit when deal with zarr 2, furthur debugging needed
-    header, _ = default_nifti_header(omz["0"], omz.attrs.get("ome", omz.attrs).get("multiscales", None))
+    header = default_nifti_header(omz["0"],
+                                  omz.attrs.get("ome", omz.attrs).get("multiscales",
+                                                                      None))
     shape = list(reversed(omz["0"].shape))
     shape = shape[:3] + [1] + shape[3:]  # insert time dimension
     affine = orientation_to_affine(orientation, *voxel_size)
@@ -260,5 +260,4 @@ def convert(
     header.set_sform(affine)
     header.set_xyzt_units(nib.nifti1.unit_codes.code["micron"])
 
-    write_nifti_header(omz, header)
-
+    omz.write_nifti_header(header)
