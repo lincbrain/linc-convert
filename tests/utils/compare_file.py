@@ -121,7 +121,7 @@ def assert_zarr_equal(
             f"Group attrs differ:\n ‣ {json.dumps(dict(zarr1.attrs))}\n ‣ {json.dumps(dict(zarr2.attrs))}")
     if set(zarr1.keys()) != set(zarr2.keys()):
         diffs.append(
-            f"Group keys differ:\n ‣ {set(zarr1.keys())}\n ‣ {set(zarr2.keys())}")
+            f"Group keys differ:\n ‣ {set(zarr1.keys())} in {zarr1.store_path}\n ‣ {set(zarr2.keys())} in {zarr2.store_path}")
 
     keys = set(zarr1.keys()).intersection(set(zarr2.keys()))
     for key in keys:
