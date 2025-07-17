@@ -23,25 +23,31 @@ classifiers = [
 packages = [{include = "linc_convert"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
-zarr = "^2.0.0"
+zarr = "^3.0.0"
 nifti-zarr = "*"
+tqdm = "*"
+dask = "*"
+universal_pathlib = "*"
+
 # optionals
 glymur = { version = "*", optional = true }
 tifffile = { version = "*", optional = true }
 h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
+tensorstore = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
 lsm = ["tifffile"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
-all = ["glymur", "tifffile", "h5py", "scipy", "wkw"]
+ts = ["tensorstore"]
+all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore"]
 
 [tool.poetry.group.dev]
 optional = true

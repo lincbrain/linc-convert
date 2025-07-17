@@ -1,5 +1,6 @@
 """
-The following script is derived from https://github.com/CBI-PITT/holis_tools/blob/main/holis_tools/zyla_spool_reader.py.
+The following script is derived from
+https://github.com/CBI-PITT/holis_tools/blob/main/holis_tools/zyla_spool_reader.py.
 
 Copyright (c) 2021, Alan M Watson
 
@@ -47,8 +48,9 @@ class SpoolSetInterpreter:
                 warnings.warn('ERROR: Info file not found.')
         self.assembled_spool_shape = (self.numDepths,
                                       self.spool_shape[2],
-                                      self.spool_shape[0]*len(self.spool_files),
+                                      self.spool_shape[0] * len(self.spool_files),
                                       )
+
     def _load_info_file(self, info_file):
         loaded_info = loadmat(info_file)
         info = loaded_info.get("info", None)
@@ -61,7 +63,7 @@ class SpoolSetInterpreter:
 
         except (KeyError, IndexError, ValueError) as e:
             warnings.warn(
-                f"ERROR: Unable to extract frame information from info file. {e}")
+                    f"ERROR: Unable to extract frame information from info file. {e}")
             return None
         num_frames_per_spool = int(self.config['multiimage']['ImagesPerFile'])
         num_frames_to_load = num_total_frames - num_bg_frames
@@ -85,10 +87,10 @@ class SpoolSetInterpreter:
 
     def _list_spool_files(self):
         return sorted(
-            tuple(
-                [x for x in self.entries if '0spool.dat' in x]
-            )
-        )
+                tuple(
+                        [x for x in self.entries if '0spool.dat' in x]
+                        )
+                )
 
     def _get_acquisitionparameters_str(self):
         file = self._make_filename_from_spool_set('acquisitionmetadata.ini')
@@ -183,9 +185,8 @@ class SpoolSetInterpreter:
             start = idx * axis_0_shape
             stop = start + axis_0_shape
             canvas[start:stop] = spool_file
-        print(canvas.shape)
         return canvas
 
     # this is the modified version for lsm pipeline
     def assemble_cropped(self):
-        return self.assemble().transpose(1, 2, 0)[:self.numDepths,:,:]
+        return self.assemble().transpose(1, 2, 0)[:self.numDepths, :, :]
