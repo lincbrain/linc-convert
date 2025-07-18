@@ -1,11 +1,13 @@
 """
-This module includes components that are based on the https://github.com/CarolineMagnain/OCTAnalysis repository (currently private).  We have permission from the owner to include the code here.
+This module includes components that are based on the
+https://github.com/CarolineMagnain/OCTAnalysis repository (currently private).  We
+have permission from the owner to include the code here.
 """
 
 import logging
 import os.path as op
 from colorsys import hsv_to_rgb
-from typing import Optional, Tuple, Dict
+from typing import Dict, Optional, Tuple
 
 import cyclopts
 import dask
@@ -14,16 +16,14 @@ import imageio
 import nibabel as nib
 import numpy as np
 import scipy.io as sio
-import tensorstore as ts
-import zarr
 from skimage.exposure import exposure
 
+from linc_convert.modalities.psoct._utils import (atleast_2d_trailing,
+                                                  find_experiment_params, load_mat,
+                                                  struct_arr_to_dict)
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.modalities.psoct._utils import struct_arr_to_dict, \
-    atleast_2d_trailing, find_experiment_params, load_mat
-from linc_convert.utils.zarr.zarr_io.drivers.tensorstore import default_write_config
-from linc_convert.utils.zarr import ZarrConfig, generate_pyramid
-from linc_convert.utils.zarr.zarr_io.drivers.zarr_python import compute_zarr_layout
+from linc_convert.utils.io.zarr import from_config
+from linc_convert.utils.zarr_config import ZarrConfig
 
 logger = logging.getLogger(__name__)
 mosaic2d = cyclopts.App(name="mosaic2d", help_format="markdown")
@@ -39,7 +39,7 @@ def mosaic2d_telesto(
         tilted_illumination: bool = False,
         tiff_output_dir: str = None,
         zarr_config: ZarrConfig = None,
-) -> None:
+        ) -> None:
     """
     Python translation of Mosaic2D_Telesto.
 
@@ -75,9 +75,11 @@ def mosaic2d_telesto(
     if tilted_illumination:
         tile_width = int(exp_params['NbPix' + tilt_postfix]) - clip_x
     x_coords, y_coords = _normalize_tile_coords(
-        exp_params[method]['X_Mean'] if method else exp_params['X_Mean' + tilt_postfix],
-        exp_params[method]['Y_Mean'] if method else exp_params['Y_Mean' + tilt_postfix],
-    )
+            exp_params[method]['X_Mean'] if method else exp_params[
+                'X_Mean' + tilt_postfix],
+            exp_params[method]['Y_Mean'] if method else exp_params[
+                'Y_Mean' + tilt_postfix],
+            )
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
     depth = 4 if modality.lower() == 'orientation' else 1
@@ -103,28 +105,20 @@ def mosaic2d_telesto(
                     x_coords=x_coords, y_coords=y_coords, clip_x=clip_x, clip_y=clip_y,
                     transpose_needed=transpose_needed, tiff_output_dir=tiff_output_dir,
                     gray_range=gray_range, tilted_illumination=tilted_illumination,
-                    no_tilted_illumination_scan = no_tilted_illumination_scan) for s in
+                    no_tilted_illumination_scan=no_tilted_illumination_scan) for s in
         range(num_slices)]
-    arr = da.stack(slices,axis=-1)
-    zgroup = zarr.create_group(zarr_config.out, overwrite=True, zarr_format=zarr_config.zarr_version)
-
-    #TODO: stack 2d -> nifti = arr.rot90.swapaxes(0,1)
-    chunk, shard = compute_zarr_layout(arr.shape, arr.dtype, zarr_config)
-    write_cfg = default_write_config(op.join(zarr_config.out, '0'), arr.shape, dtype=np.float32,
-                                     chunk=chunk, shard=shard, version=zarr_config.zarr_version)
-    if shard:
-        arr = da.rechunk(arr,chunks=shard)
+    arr = da.stack(slices, axis=-1)
+    # TODO: stack 2d -> nifti = arr.rot90.swapaxes(0,1)
+    zgroup = from_config(zarr_config)
+    if zarr_config.shard:
+        arr = da.rechunk(arr, chunks=zarr_config.shard)
     else:
-        arr = da.rechunk(arr,chunks=chunk)
-    write_cfg["create"] = True
-    write_cfg["delete_existing"] = True
+        arr = da.rechunk(arr, chunks=zarr_config.chunk)
 
-    tswriter = ts.open(write_cfg).result()
-    ts.TensorStore
-    tswriter.__repr__
-
-    arr.store(tswriter)
-    generate_pyramid(zgroup)
+    writer = zgroup.create_array("0", shape=arr.shape, zarr_config=zarr_config)
+    arr.store(writer)
+    zgroup.generate_pyramid()
+    # zgroup.write_ome_metadata()
     return None
 
 
@@ -158,14 +152,16 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
 
         if file_type == 'mat':
             arr = _load_mat_tile(
-                get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
+                    get_volname(file_path_template, mosaic_idx, tile_id,
+                                modality_token))
         elif file_type == 'nifti':
             if modality == "mus":
                 arr = _load_nifti_tile(
-                    get_volname(file_path_template, mosaic_idx, tile_id, "cropped"))
+                        get_volname(file_path_template, mosaic_idx, tile_id, "cropped"))
             else:
                 arr = _load_nifti_tile(
-                    get_volname(file_path_template, mosaic_idx, tile_id, modality_token))
+                        get_volname(file_path_template, mosaic_idx, tile_id,
+                                    modality_token))
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -178,7 +174,8 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
         if modality == "mus" and file_type == 'nifti':
             # TODO: is this necessary in Mosaic2D?
             # as total_depth will be 1 and we will crop 1 depth
-            # TODO: in the updated version, it was said 2d mus is not updated yet so skip it
+            # TODO: in the updated version, it was said 2d mus is not updated yet so
+            #  skip it
             raise NotImplementedError
             arr = process_mus_nifti(arr, depth)
 
@@ -215,14 +212,16 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
         if tiff_output_dir:
             logging.info("Save .tiff mosaic")
             normed = exposure.rescale_intensity(
-                canvas,
-                in_range=gray_range if gray_range is not None else 'image')
+                    canvas,
+                    in_range=gray_range if gray_range is not None else 'image')
             imageio.imwrite(
-                op.join(tiff_output_dir, f"{modality}{tilt_postfix}_slice{slice_idx_out:03d}.tiff"),
-                (normed * 255).astype(np.uint8))
+                    op.join(tiff_output_dir,
+                            f"{modality}{tilt_postfix}_slice{slice_idx_out:03d}.tiff"),
+                    (normed * 255).astype(np.uint8))
 
         # ref = loadmat(op.join(
-        #     "/local_mount/space/megaera/1/users/kchai/psoct/process_data/StitchingFiji",
+        #     "/local_mount/space/megaera/1/users/kchai/psoct/process_data
+        #     /StitchingFiji",
         #     f"{modality}_slice{1:03d}.mat"))['MosaicFinal']
         # diff = np.abs(ref-canvas).compute()
         # i,j = np.where(diff==np.max(diff))
@@ -235,7 +234,8 @@ def build_slice(slice_idx, slice_indices, scan_info, exp_params, input_dirs,
 
 def _load_nifti_tile(path: str) -> da.Array:
     img = nib.load(path, mmap=True)
-    # return da.from_delayed(dask.delayed(img.dataobj), shape=img.shape, dtype=img.get_data_dtype())
+    # return da.from_delayed(dask.delayed(img.dataobj), shape=img.shape,
+    # dtype=img.get_data_dtype())
     return da.from_array(img.dataobj, chunks=img.shape)
     delayed = dask.delayed(img.get_fdata)()
     return da.from_delayed(delayed, shape=img.shape, dtype=img.get_data_dtype())
@@ -243,24 +243,26 @@ def _load_nifti_tile(path: str) -> da.Array:
 
 def _load_mat_tile(path: str) -> da.Array:
     var_name, shape, dtype = next(
-        (n, s, dt) for n, s, dt in sio.whosmat(path) if not n.startswith("__")
-    )
+            (n, s, dt) for n, s, dt in sio.whosmat(path) if not n.startswith("__")
+            )
     delayed = dask.delayed(load_mat)(path, var_name)
     return da.from_delayed(delayed, shape=shape, dtype=dtype)
 
-def _load_tile(path:str):
+
+def _load_tile(path: str):
     if path.endswith('.mat'):
         return _load_mat_tile(path)
     if path.endswith('.nii' or '.nii.gz'):
         return _load_nifti_tile(path)
     raise ValueError(f"Unsupported file type: {path}")
 
+
 def _compute_blending_ramp(
         tile_width: int,
         tile_height: int,
         x_coords: np.ndarray,
         y_coords: np.ndarray,
-) -> da.Array:
+        ) -> da.Array:
     """
     Create a 2D blending weight map for overlapping tiles.
     """
@@ -288,7 +290,7 @@ def _normalize_tile_coords(x_arr: np.ndarray, y_arr: np.ndarray) -> Tuple[
 
 def _get_gray_range(
         params_dict: Dict[str, any], modality: str
-) -> Tuple[Optional[tuple | str], bool]:
+        ) -> Tuple[Optional[tuple | str], bool]:
     """
     Determine gray-level range for a modality; return (range, save_tiff_flag).
     """
@@ -299,7 +301,7 @@ def _get_gray_range(
         'birefringence': 'BirefGrayRange',
         'mus': 'musGrayRange',
         'surf': 'surfGrayRange',
-    }
+        }
     low = modality.lower()
     if low in key_map:
         gray_range = params_dict.get(key_map[low])
@@ -307,8 +309,8 @@ def _get_gray_range(
         gray_range = params_dict.get(f"{modality}GrayRange")
     if gray_range is None:
         logger.warning(
-            f"{modality} grayscale range not found. TIFF output disabled."
-        )
+                f"{modality} grayscale range not found. TIFF output disabled."
+                )
         return None, False
     if isinstance(gray_range, np.ndarray):
         gray_range = tuple(gray_range[:2])
@@ -325,8 +327,8 @@ def _select_modality_token(raw_mat: dict[str, any], modality: str) -> str:
         if prefix in token.lower():
             return token
     logger.warning(
-        f"Modality '{modality}' not found in Enface.save; using first 3 letters."
-    )
+            f"Modality '{modality}' not found in Enface.save; using first 3 letters."
+            )
     return modality[:3]
 
 
@@ -389,7 +391,8 @@ def process_mus_nifti(arr, total_depth):
     sum_excl_rev = cumsum_rev[:, :, :-1]
     # flip back to original order → (H,W,N-1)
     sum_excl = sum_excl_rev[:, :, ::-1]
-    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,z+1:end),3)
+    # Now sum_excl[..., k] == sum of I[..., k+1:] exactly as in MATLAB’s sum(I(:,:,
+    # z+1:end),3)
     sum_excl = sum_excl[:, :,
                :total_depth]  # keep only the first MZL sums → (H,W,MZL)
     # divide elementwise and apply the constant factors
