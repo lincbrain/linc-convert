@@ -91,7 +91,8 @@ def convert(
         subdat = WrappedJ2K(j2k, level=level)
         shape = subdat.shape
         print("Convert level", level, "with shape", shape)
-        array = omz.create_array(str(level), shape=shape, zarr_config=zarr_config)
+        array = omz.create_array(str(level), shape=shape, zarr_config=zarr_config,
+                                 dtype=j2k.dtype)
 
         if max_load is None or (shape[-2] < max_load and shape[-1] < max_load):
             array[...] = subdat[...]

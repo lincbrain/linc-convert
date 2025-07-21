@@ -66,7 +66,6 @@ def convert(
         *,
         key: Optional[str] = None,
         meta: str = None,
-        no_pool: Optional[int] = None,
         orientation: str = "RAS",
         center: bool = True,
         zarr_config: ZarrConfig = None,
