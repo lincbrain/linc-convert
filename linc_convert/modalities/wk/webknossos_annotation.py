@@ -19,6 +19,7 @@ from linc_convert.utils.io.zarr.drivers.zarr_python import (
     _make_compressor as make_compressor,
     )
 from linc_convert.utils.math import ceildiv
+from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
 wk.command(webknossos)
@@ -28,13 +29,10 @@ wk.command(webknossos)
 def convert(
         wkw_dir: str = None,
         ome_dir: str = None,
-        out: str = None,
         dic: str = None,
         *,
-        chunk: int = 1024,
-        compressor: str = "blosc",
-        compressor_opt: str = "{}",
-        max_load: int = 16384,
+        zarr_config: ZarrConfig = None,
+        **kwargs
         ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
@@ -69,6 +67,8 @@ def convert(
         - 6: Dense Terminal
         - 7: Single Fiber
     """
+    zarr_config = update_default_config(zarr_config, **kwargs)
+
     dic = json.loads(dic)
     dic = {int(key): int(value) for key, value in dic.items()}
 
@@ -79,7 +79,7 @@ def convert(
     wkw_dataset = wkw.Dataset.open(wkw_dataset_path)
 
     low_res_offsets = []
-    omz_res = omz_data[nblevel - 1]
+    omz_res = omz_data[str(nblevel - 1)]
     n = omz_res.shape[1]
     size = omz_res.shape[-2:]
     for idx in range(n):
@@ -95,39 +95,23 @@ def convert(
     # setup save info
     basename = os.path.basename(ome_dir)[:-9]
     initials = wkw_dir.split("/")[-2][:2]
-    out = os.path.join(out, basename + "_dsec_" + initials + ".ome.zarr")
-    if os.path.exists(out):
-        shutil.rmtree(out)
-    os.makedirs(out, exist_ok=True)
 
-    if isinstance(compressor_opt, str):
-        compressor_opt = ast.literal_eval(compressor_opt)
 
     # Prepare Zarr group
-    store = zarr.storage.DirectoryStore(out)
-    omz = zarr.group(store=store, overwrite=True)
-
-    # Prepare chunking options
-    opt = {
-        "chunks": [1, 1] + [chunk, chunk],
-        "dimension_separator": r"/",
-        "order": "F",
-        "dtype": "uint8",
-        "fill_value": None,
-        "compressor": make_compressor(compressor, **compressor_opt),
-        }
-    print(opt)
+    omz = from_config(zarr_config)
+    max_load = zarr_config.max_load
 
     # Write each level
     for level in range(nblevel):
-        omz_res = omz_data[level]
+        omz_res = omz_data[str(level)]
         size = omz_res.shape[-2:]
         shape = [1, n] + [i for i in size]
 
         wkw_dataset_path = os.path.join(wkw_dir, get_mask_name(level))
         wkw_dataset = wkw.Dataset.open(wkw_dataset_path)
 
-        omz.create_dataset(f"{level}", shape=shape, **opt)
+        omz.create_array(f"{level}", shape=shape, dtype="uint8",
+                         zarr_config=zarr_config)
         array = omz[f"{level}"]
 
         # Write each slice
@@ -191,8 +175,7 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    omz.attrs["multiscales"] = omz_data.attrs["multiscales"]
-
+    omz._get_zarr_python_group().attrs["multiscales"] = omz_data.attrs["multiscales"]
 
 def get_mask_name(level: int) -> str:
     """
