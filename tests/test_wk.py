@@ -75,7 +75,7 @@ def _write_test_data(directory: str) -> None:
     omz.attrs["multiscales"] = multiscales
 
 
-@pytest.skip("Jingjing said she wants to rewrite this part herself")
+@pytest.mark.skip("Jingjing said she wants to rewrite this part herself")
 def test_wk(tmp_path):
     _write_test_data(tmp_path)
 
