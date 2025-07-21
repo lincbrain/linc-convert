@@ -19,8 +19,11 @@ from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.io._array_wrapper import (_ArrayWrapper, _H5ArrayWrapper,
-                                                  _MatArrayWrapper)
+from linc_convert.utils.io._array_wrapper import (
+    _ArrayWrapper,
+    _H5ArrayWrapper,
+    _MatArrayWrapper,
+    )
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine

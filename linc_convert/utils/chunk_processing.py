@@ -9,11 +9,14 @@ def chunk_slice_generator(arr_shape, chunk_shape):
     chunk_shape
     for the last dimensions.
 
-    Parameters:
+    Parameters
+    ----------
         arr_shape (tuple): The shape of the array.
-        chunk_shape (tuple): A tuple of integers representing the chunk size for each of the last dimensions.
+        chunk_shape (tuple): A tuple of integers representing the chunk size for each
+        of the last dimensions.
 
-    Yields:
+    Yields
+    ------
         tuple: A tuple (index, full_slice) where:
             - index is a tuple representing the multi-index of the chunk.
             - full_slice is a tuple of slice objects (prefixed by an Ellipsis to preserve any non-chunked dimensions)

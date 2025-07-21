@@ -162,11 +162,12 @@ class SpoolSetInterpreter:
         return len(self.spool_files)
 
     def _get_spool_names_in_order(self):
-        '''
-        Spool files are ordered sequentially in the order they were collected 0,1,2,...,201,202,203,...
+        """
+        Spool files are ordered sequentially in the order they were collected 0,1,2,
+        ...,201,202,203,...
         but file names are recorded as the reversed number padded to
         10 digits (0000000000,1000000000,20000000000,...,1020000000,2020000000,3020000000,...) + spool.dat
-        '''
+        """
         spool_files = self._list_spool_files()
         for idx in range(len(spool_files)):
             # Convert index to string, pad with zeros to 10 digits and reverse

@@ -1,3 +1,4 @@
+"""Factory module for creating/opening Zarr Nodes with different drivers."""
 import warnings
 
 from linc_convert.utils.io.zarr import ZarrNode

@@ -1,6 +1,6 @@
 """Abstract base classes for ZarrIO interfaces."""
 
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from numbers import Number
 from os import PathLike
 from typing import (
@@ -37,6 +37,8 @@ NiftiHeaderLike = Union[Nifti1Header, Nifti2Header]
 
 
 class ZarrArrayConfig(TypedDict):
+    """Configuration for creating a Zarr Array."""
+
     chunks: tuple[int, ...]
     shards: Optional[tuple[int, ...]]
     compressors: Literal["blosc", "zlib", None]

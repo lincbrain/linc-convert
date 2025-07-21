@@ -111,10 +111,12 @@ def struct_arr_to_dict(arr: np.void) -> dict:
     """
     Convert a NumPy structured array (single record) to a dictionary.
 
-    Parameters:
+    Parameters
+    ----------
         arr (np.void): A structured array element.
 
-    Returns:
+    Returns
+    -------
         dict: Dictionary mapping field names to their values.
     """
     return {name: arr[name].item() for name in arr.dtype.names}
@@ -124,15 +126,18 @@ def find_experiment_params(exp_file: str) -> tuple[dict, bool]:
     """
     Load experiment parameters from a .mat file, detecting if it's a Fiji experiment.
 
-    Parameters:
+    Parameters
+    ----------
         exp_file (str): Path to the .mat file.
 
-    Returns:
+    Returns
+    -------
         tuple:
             - dict: Experiment parameters.
             - bool: True if it's a Fiji experiment, False otherwise.
 
-    Raises:
+    Raises
+    ------
         ValueError: If no experiment key is found in the file.
     """
     is_fiji = False
@@ -157,10 +162,12 @@ def mat_vars(mat_file: str) -> Generator[str, None, None]:
     """
     Yield variable names from a .mat file, excluding internal variables.
 
-    Parameters:
+    Parameters
+    ----------
         mat_file (str): Path to the .mat file.
 
-    Yields:
+    Yields
+    ------
         str: Variable names not starting with '__'.
     """
     yield from (name for name, *_ in sio.whosmat(mat_file) if not name.startswith('__'))
@@ -174,10 +181,12 @@ def atleast_2d_trailing(arr: ArrayLike) -> np.ndarray:
     If the input is 0D (scalar), it becomes shape (1, 1).
     If it's already 2D or more, it's returned unchanged.
 
-    Parameters:
+    Parameters
+    ----------
         arr (ArrayLike): Input array-like object.
 
-    Returns:
+    Returns
+    -------
         np.ndarray: A 2D or higher NumPy array with at least two dimensions.
     """
     arr = np.asarray(arr)

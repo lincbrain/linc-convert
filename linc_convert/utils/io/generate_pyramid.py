@@ -2,7 +2,6 @@ import logging
 import math
 from typing import Optional
 
-import dask
 import dask.array as da
 
 logger = logging.getLogger(__name__)
@@ -54,7 +53,6 @@ def compute_next_level(arr, ndim, no_pyramid_axis=None, window_func=da.mean):
         Array of shape (..., ceil(N1/2), ceil(N2/2), ...,ceil(Nndim/2))
         except on `no_pyramid_axis` where the length is unchanged.
     """
-
     # figure out which global axes we’re coarsening
     start = arr.ndim - ndim
     pyramid_axes = list(range(start, arr.ndim))

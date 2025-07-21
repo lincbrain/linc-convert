@@ -3,7 +3,8 @@ import ast
 from numbers import Number
 from typing import (
     Any,
-    Iterator, Literal,
+    Iterator,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -16,7 +17,8 @@ import numpy as np
 import zarr
 import zarr.codecs
 from numpy.typing import ArrayLike, DTypeLike
-from zarr.core.chunk_key_encodings import ChunkKeyEncodingParams
+from zarr.core.array import CompressorsLike
+from zarr.core.chunk_key_encodings import ChunkKeyEncodingLike, ChunkKeyEncodingParams
 
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
 from linc_convert.utils.zarr_config import ZarrConfig
@@ -27,6 +29,8 @@ class ZarrPythonArray(ZarrArray):
 
     def __init__(self, array: zarr.Array) -> None:
         """
+        Initialize the ZarrPythonArray with a zarr.Array.
+
         Parameters
         ----------
         array : zarr.Array
@@ -70,16 +74,16 @@ class ZarrPythonArray(ZarrArray):
         """Get the Zarr format version."""
         return self._array.metadata.zarr_format
 
-    def __getitem__(self, key) -> ArrayLike:
+    def __getitem__(self, key: str) -> ArrayLike:
         """Read data from the array."""
         return self._array[key]
 
-    def __setitem__(self, key, value: ArrayLike | Number) -> None:
+    def __setitem__(self, key: str, value: ArrayLike | Number) -> None:
         """Write data to the array."""
         self._array[key] = value
 
-    def __getattr__(self, name: str):
-        # Delegate any unknown attributes to the underlying array
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        """Delegate any unknown attributes to the underlying array."""
         if name == "_array":
             return self._array
         if hasattr(self._array, name):
@@ -94,6 +98,8 @@ class ZarrPythonGroup(ZarrGroup):
 
     def __init__(self, zarr_group: zarr.Group) -> None:
         """
+        Initialize the ZarrPythonGroup with a zarr.Group.
+        
         Parameters
         ----------
         zarr_group : zarr.Group
@@ -122,7 +128,8 @@ class ZarrPythonGroup(ZarrGroup):
         """Get the Zarr format version."""
         return self._zgroup.metadata.zarr_format
 
-    def keys(self):
+    def keys(self) -> Iterator[str]:
+        """Get the names of all subgroups and arrays in this group."""
         yield from self._zgroup.keys()
 
     def __getitem__(self, name: str) -> Union[ZarrPythonArray, "ZarrPythonGroup"]:
@@ -142,9 +149,11 @@ class ZarrPythonGroup(ZarrGroup):
         del self._zgroup[name]
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over the names of all subgroups and arrays in this group."""
         yield from self.keys()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        """Delegate attribute access to the underlying Zarr group."""
         return getattr(self._zgroup, name)
 
     def _get_zarr_python_group(self) -> zarr.Group:
@@ -243,7 +252,11 @@ class ZarrPythonGroup(ZarrGroup):
         return ZarrPythonArray(arr)
 
 
-def _make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
+def _make_compressor(
+        name: str | None,
+        zarr_version: Literal[2, 3],
+        **prm: dict
+        ) -> CompressorsLike:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
         return name
@@ -273,7 +286,9 @@ def _make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict)
     return Compressor(**prm)
 
 
-def _dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version):
+def _dimension_separator_to_chunk_key_encoding(
+        dimension_separator: Literal[".", "/"],
+        zarr_version: Literal[2, 3]) -> ChunkKeyEncodingLike:
     dimension_separator = dimension_separator
     if dimension_separator == '.' and zarr_version == 2:
         pass
