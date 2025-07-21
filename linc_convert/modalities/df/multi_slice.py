@@ -111,7 +111,7 @@ def convert(
         new_size += (3,)
     print(len(inp), new_size, nblevel, has_channel)
     chunks = list(new_size[2:]) + [1] + list(zarr_config.chunk[-2:])
-    zarr_config.update(chunk=tuple(chunks))
+    zarr_config.chunk = tuple(chunks)
     print(new_size)
     # Write each level
     for level in range(nblevel):
