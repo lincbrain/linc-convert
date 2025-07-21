@@ -79,6 +79,7 @@ class ZarrConfig:
     driver : {"zarr-python", "tensorstore", "zarrita"}
         library used for Zarr IO Operation
     """
+
     out: Annotated[str, Parameter(name=["--out", "-o"])] = None
     zarr_version: Literal[2, 3] = 3
     chunk: tuple[int] = (128,)
@@ -101,13 +102,38 @@ class ZarrConfig:
     driver: DriverLike = "zarr-python"
 
     def __post_init__(self) -> None:
+        """
+        Perform post-initialization checks and adjustments.
+
+        - Automatically enable NIfTI mode if the output path ends with ".nii.zarr".
+        - Ensure that sharding options (shard, shard_channels, shard_time) are only
+          used when zarr_version == 3; otherwise raise NotImplementedError.
+        """
         if self.out:
-            self.nii |= self.out.endswith(".nii.zarr")
+            self.nii |= str(self.out).endswith(".nii.zarr")
         if self.zarr_version == 2:
             if self.shard or self.shard_channels or self.shard_time:
                 raise NotImplementedError("Shard is not supported for Zarr 2.")
 
-    def set_default_name(self, name: str):
+    def set_default_name(self, name: str) -> None:
+        """
+        Assign a default output name if none was specified.
+
+        Parameters
+        ----------
+        name : str
+            Base filename (without extension) to use for the output archive.
+
+        Returns
+        -------
+        None
+        --------
+        - If `self.out` is already set, does nothing.
+        - Otherwise sets `self.out` to `name + ".nii.zarr"` if NIfTI mode
+          is active, or `name + ".ome.zarr"` otherwise.
+        - If the resulting path exists and `overwrite` is False, prompts
+          the user for confirmation and raises FileExistsError if not confirmed.
+        """
         if self.out is not None:
             return
         self.out = name
@@ -118,14 +144,27 @@ class ZarrConfig:
                     f"overwrite it? (y/n): ")
             if answer.lower() not in ("y", "yes"):
                 raise FileExistsError(
-                        f"Output path '{self.out}' exists and overwrite was not confirmed.")
-
-    def update(self, **kwargs):
-        return replace(self, **kwargs)
+                        f"Output path '{self.out}' exists and overwrite was not "
+                        f"confirmed.")
 
 
 def update_default_config(zarr_config: ZarrConfig | None,
                           **kwargs: Unpack[ZarrConfig]) -> ZarrConfig:
+    """
+    Merge user overrides into an existing ZarrConfig or create a new one.
+
+    Parameters
+    ----------
+    zarr_config : ZarrConfig or None
+        Existing configuration to update. If None, a fresh ZarrConfig is created.
+    **kwargs
+        Fields of ZarrConfig to override in the returned instance.
+
+    Returns
+    -------
+    ZarrConfig
+        A new ZarrConfig instance with the given overrides applied.
+    """
     if zarr_config is None:
         zarr_config = ZarrConfig()
     return replace(zarr_config, **kwargs)
