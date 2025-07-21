@@ -2,10 +2,14 @@ import os
 
 import numpy as np
 import pytest
+import skimage
 import wkw
 import zarr
+import niizarr
+from nibabel import Nifti1Image
 
 from linc_convert.modalities.wk import webknossos_annotation
+from linc_convert.modalities.wk.webknossos_annotation import get_mask_name
 from utils.compare_file import _cmp_zarr_archives
 
 
@@ -13,7 +17,7 @@ def _write_test_data(directory: str) -> None:
     wkw_dir = f"{directory}/wkw"
     ome_dir = f"{directory}/ome"
 
-    store = zarr.storage.DirectoryStore(ome_dir)
+    store = zarr.storage.LocalStore(ome_dir)
     omz = zarr.group(store=store, overwrite=True)
 
     for level in range(5):
@@ -25,7 +29,7 @@ def _write_test_data(directory: str) -> None:
         with wkw.Dataset.create(wkw_filepath, wkw.Header(np.uint8)) as dataset:
             dataset.write((0, 0, 0), wkw_array)
 
-        omz.create_dataset(f"{level}", shape=[1, 5, size, size])
+        omz.create_dataset(f"{level}", shape=[1, 5, size, size], dtype=np.uint8)
         array = omz[f"{level}"]
         array[...] = ome_array
 
@@ -71,7 +75,7 @@ def _write_test_data(directory: str) -> None:
     omz.attrs["multiscales"] = multiscales
 
 
-@pytest.mark.skip(reason="🚧 refactor in progress")
+@pytest.skip("Jingjing said she wants to rewrite this part herself")
 def test_wk(tmp_path):
     _write_test_data(tmp_path)
 
@@ -82,7 +86,7 @@ def test_wk(tmp_path):
     output_zarr = os.path.join(tmp_path, basename + "_dsec_" + initials + ".ome.zarr")
 
     print("starting the convert process")
-    webknossos_annotation.convert(wkw_dir, ome_dir, tmp_path, "{}")
+    webknossos_annotation.convert(wkw_dir, ome_dir, out=tmp_path, dic="{}")
 
     z = zarr.open(output_zarr, mode="r")
     for level in range(5):
@@ -93,10 +97,3 @@ def test_wk(tmp_path):
         print("trusted result has", np.shape(z[level]), np.unique(z[level]))
 
     assert _cmp_zarr_archives(str(output_zarr), "data/wk.zarr.zip")
-
-
-def get_mask_name(level):
-    if level == 0:
-        return "1"
-    else:
-        return f"{2 ** level}-{2 ** level}-1"
