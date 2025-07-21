@@ -1,8 +1,11 @@
 import warnings
 
+from linc_convert.utils.io.zarr import ZarrNode
 from linc_convert.utils.io.zarr.abc import ZarrGroup
-from linc_convert.utils.io.zarr.drivers.zarr_python import (ZarrPythonArray,
-                                                            ZarrPythonGroup)
+from linc_convert.utils.io.zarr.drivers.zarr_python import (
+    ZarrPythonArray,
+    ZarrPythonGroup,
+    )
 from linc_convert.utils.zarr_config import DriverLike, ZarrConfig
 
 _DRIVER_ARRAY = {
@@ -13,8 +16,7 @@ _DRIVER_GROUP = {
     }
 
 try:
-    from linc_convert.utils.io.zarr.drivers.tensorstore import (ZarrTSArray,
-                                                                ZarrTSGroup)
+    from linc_convert.utils.io.zarr.drivers.tensorstore import ZarrTSArray, ZarrTSGroup
 
     _DRIVER_ARRAY["tensorstore"] = ZarrTSArray
     _DRIVER_GROUP["tensorstore"] = ZarrTSGroup
@@ -22,7 +24,7 @@ except ImportError as e:
     warnings.warn(f"Tensorstore driver not available: {e}.")
 
 
-def open(driver: DriverLike):
+def open(driver: DriverLike) -> ZarrNode:
     raise NotImplementedError
 
 

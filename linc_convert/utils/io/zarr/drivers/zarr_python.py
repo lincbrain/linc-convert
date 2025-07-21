@@ -1,99 +1,135 @@
+"""ZarrIO Implementation using the zarr-python library."""
 import ast
-from typing import Any, Iterator, Literal, Union
+from numbers import Number
+from typing import (
+    Any,
+    Iterator, Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    Unpack,
+    )
 
 import numpy as np
 import zarr
 import zarr.codecs
-from numpy.typing import DTypeLike
+from numpy.typing import ArrayLike, DTypeLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingParams
 
-from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrGroup
+from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
 from linc_convert.utils.zarr_config import ZarrConfig
 
 
 class ZarrPythonArray(ZarrArray):
-    def __init__(self, array: zarr.Array):
+    """Zarr Array implementation using the zarr-python library."""
+
+    def __init__(self, array: zarr.Array) -> None:
+        """
+        Parameters
+        ----------
+        array : zarr.Array
+            Underlying Zarr array.
+        """
         super().__init__(str(array.store_path))
         self._array = array
 
     @property
-    def attrs(self):
-        return self._array.attrs
+    def ndim(self) -> int:
+        """Number of dimensions of the array."""
+        return self._array.ndim
 
     @property
-    def shape(self) -> tuple[int, ...]:
+    def shape(self) -> Tuple[int, ...]:
+        """Shape of the array."""
         return self._array.shape
 
     @property
     def dtype(self) -> np.dtype:
+        """Data type of the array."""
         return self._array.dtype
 
     @property
-    def chunks(self) -> tuple:
+    def chunks(self) -> Tuple[int, ...]:
+        """Chunk shape for the array."""
         return self._array.chunks
 
     @property
-    def shards(self) -> tuple:
-        return self._array.shards
+    def shards(self) -> Optional[Tuple[int, ...]]:
+        """Shard shape, if supported; otherwise None."""
+        return getattr(self._array, "shards", None)
+
+    @property
+    def attrs(self) -> Mapping[str, Any]:
+        """Access metadata/attributes for this node."""
+        return self._array.attrs
 
     @property
     def zarr_version(self) -> int:
+        """Get the Zarr format version."""
         return self._array.metadata.zarr_format
 
-    @property
-    def ndim(self) -> int:
-        return self._array.ndim
+    def __getitem__(self, key) -> ArrayLike:
+        """Read data from the array."""
+        return self._array[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value: ArrayLike | Number) -> None:
+        """Write data to the array."""
         self._array[key] = value
 
-    def __getitem__(self, item):
-        return self._array[item]
-
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
+        # Delegate any unknown attributes to the underlying array
         if name == "_array":
             return self._array
         if hasattr(self._array, name):
             return getattr(self._array, name)
-        else:
-            raise AttributeError(
-                    f"'{self.__class__.__name__}' object has no attribute '{name}'")
+        raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{name}'"
+                )
 
 
 class ZarrPythonGroup(ZarrGroup):
+    """Zarr Group implementation using the zarr-python library."""
+
+    def __init__(self, zarr_group: zarr.Group) -> None:
+        """
+        Parameters
+        ----------
+        zarr_group : zarr.Group
+            Underlying Zarr Python group.
+        """
+        super().__init__(str(zarr_group.store_path))
+
+        self._zgroup = zarr_group
+
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> 'ZarrPythonGroup':
+        """Create a Zarr group from a configuration object."""
         store = zarr.storage.LocalStore(zarr_config.out)
         return cls(zarr.group(store=store,
                               # TODO: figure out overwrite
                               # overwrite=overwrite,
                               zarr_format=zarr_config.zarr_version))
 
-    def __init__(self, zarr_group: zarr.Group):
-        super().__init__(str(zarr_group.store_path))
-        self._zgroup = zarr_group
+    @property
+    def attrs(self) -> Mapping[str, Any]:
+        """Access metadata/attributes for this node."""
+        return self._zgroup.attrs
 
-    def create_group(self, *args, **kwargs):
-        """
-        Create a new subgroup in the group.
-        """
-        return ZarrPythonGroup(self._zgroup.create_group(*args, **kwargs))
+    @property
+    def zarr_version(self) -> Literal[2, 3]:
+        """Get the Zarr format version."""
+        return self._zgroup.metadata.zarr_format
 
     def keys(self):
         yield from self._zgroup.keys()
 
-    @property
-    def attrs(self):
-        return self._zgroup.attrs
-
-    def __iter__(self) -> Iterator[str]:
-        yield from self.keys()
-
-    def __getitem__(self, key) -> Union[ZarrPythonArray, 'ZarrPythonGroup']:
-        if key not in self._zgroup:
-            raise KeyError(f"Key '{key}' not found in group '{self.path}'")
-
-        item = self._zgroup[key]
+    def __getitem__(self, name: str) -> Union[ZarrPythonArray, "ZarrPythonGroup"]:
+        """Get a subgroup or array by name within this group."""
+        if name not in self._zgroup:
+            raise KeyError(f"Key '{name}' not found in group '{self.store_path}'")
+        item = self._zgroup[name]
         if isinstance(item, zarr.Group):
             return ZarrPythonGroup(item)
         elif isinstance(item, zarr.Array):
@@ -101,17 +137,36 @@ class ZarrPythonGroup(ZarrGroup):
         else:
             raise TypeError(f"Unsupported item type: {type(item)}")
 
+    def __delitem__(self, name: str) -> None:
+        """Delete a subgroup or array by name within this group."""
+        del self._zgroup[name]
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self.keys()
+
     def __getattr__(self, name):
         return getattr(self._zgroup, name)
 
-    def create_array(self,
-                     name: str,
-                     shape: tuple,
-                     zarr_config: ZarrConfig = None,
-                     dtype: DTypeLike = np.int32,
-                     data=None,
-                     **kwargs
-                     ) -> zarr.Array:
+    def _get_zarr_python_group(self) -> zarr.Group:
+        """Get the underlying Zarr Python group object."""
+        return self._zgroup
+
+    def create_group(self, name: str, overwrite: bool = False) -> "ZarrPythonGroup":
+        """Create or open a subgroup within this group."""
+        subgroup = self._zgroup.create_group(name, overwrite=overwrite)
+        return ZarrPythonGroup(subgroup)
+
+    def create_array(
+            self,
+            name: str,
+            shape: Sequence[int],
+            dtype: DTypeLike,
+            *,
+            zarr_config: ZarrConfig = None,
+            data: Optional[ArrayLike] = None,
+            **kwargs: Unpack[ZarrArrayConfig]
+            ) -> ZarrPythonArray:
+        """Create a new array within this group."""
         if zarr_config is None:
             arr = self._zgroup.create_array(name, shape, dtype, **kwargs)
             if data is not None:
@@ -120,7 +175,7 @@ class ZarrPythonGroup(ZarrGroup):
 
         compressor = zarr_config.compressor
         compressor_opt = zarr_config.compressor_opt
-        chunk, shard = compute_zarr_layout(shape, dtype, zarr_config)
+        chunk, shard = _compute_zarr_layout(shape, dtype, zarr_config)
 
         if isinstance(compressor_opt, str):
             compressor_opt = ast.literal_eval(compressor_opt)
@@ -131,11 +186,11 @@ class ZarrPythonGroup(ZarrGroup):
             "order": zarr_config.order,
             "dtype": np.dtype(dtype).str,
             "fill_value": None,
-            "compressors": make_compressor(compressor, zarr_config.zarr_version,
-                                           **compressor_opt),
+            "compressors": _make_compressor(compressor, zarr_config.zarr_version,
+                                            **compressor_opt),
             }
 
-        chunk_key_encoding = dimension_separator_to_chunk_key_encoding(
+        chunk_key_encoding = _dimension_separator_to_chunk_key_encoding(
                 zarr_config.dimension_separator, zarr_config.zarr_version)
         if chunk_key_encoding:
             opt["chunk_key_encoding"] = chunk_key_encoding
@@ -146,11 +201,14 @@ class ZarrPythonGroup(ZarrGroup):
             arr[:] = data
         return ZarrPythonArray(arr)
 
-    def create_array_from_base(self, name: str, shape: tuple, data=None,
-                               **kwargs) -> 'ZarrPythonArray':
-        """
-        Create a new array using the properties from a base_level object.
-        """
+    def create_array_from_base(
+            self,
+            name: str,
+            shape: Sequence[int],
+            data: ArrayLike = None,
+            **kwargs: Unpack[ZarrArrayConfig]
+            ) -> ZarrPythonArray:
+        """Create a new array using the properties from a base_level object."""
         base_level = self['0']
         opts = dict(
                 dtype=base_level.dtype,
@@ -168,7 +226,7 @@ class ZarrPythonGroup(ZarrGroup):
         meta = getattr(base_level, "metadata", None)
         if meta is not None:
             if hasattr(meta, "dimension_separator"):
-                opts["chunk_key_encoding"] = dimension_separator_to_chunk_key_encoding(
+                opts["chunk_key_encoding"] = _dimension_separator_to_chunk_key_encoding(
                         meta.dimension_separator, 2)
             if hasattr(meta, "chunk_key_encoding"):
                 opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
@@ -184,18 +242,8 @@ class ZarrPythonGroup(ZarrGroup):
             arr[:] = data
         return ZarrPythonArray(arr)
 
-    @property
-    def zarr_version(self) -> Literal[2, 3]:
-        return self._zgroup.metadata.zarr_format
 
-    def __delitem__(self, key):
-        del self._zgroup[key]
-
-    def _get_zarr_python_group(self):
-        return self._zgroup
-
-
-def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
+def _make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) -> Any:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
         return name
@@ -225,56 +273,7 @@ def make_compressor(name: str | None, zarr_version: Literal[2, 3], **prm: dict) 
     return Compressor(**prm)
 
 
-SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
-                         2 *  # TB
-                         2 ** 30  # GB->Bytes
-                         )
-
-
-def open_zarr_group(zarr_config: ZarrConfig):
-    # TODO: check out is not none or empty
-    store = zarr.storage.LocalStore(zarr_config.out)
-    return zarr.group(store=store, overwrite=True, zarr_format=zarr_config.zarr_version)
-
-
-def create_array(
-        omz: zarr.Group,
-        name: str,
-        shape: tuple,
-        zarr_config: ZarrConfig,
-        dtype: DTypeLike = np.int32,
-        data=None
-        ) -> zarr.Array:
-    compressor = zarr_config.compressor
-    compressor_opt = zarr_config.compressor_opt
-    chunk, shard = compute_zarr_layout(shape, dtype, zarr_config)
-
-    if isinstance(compressor_opt, str):
-        compressor_opt = ast.literal_eval(compressor_opt)
-
-    opt = {
-        "chunks": chunk,
-        "shards": shard,
-        "order": zarr_config.order,
-        "dtype": np.dtype(dtype).str,
-        "fill_value": None,
-        "compressors": make_compressor(compressor, zarr_config.zarr_version,
-                                       **compressor_opt),
-        }
-
-    chunk_key_encoding = dimension_separator_to_chunk_key_encoding(
-            zarr_config.dimension_separator, zarr_config.zarr_version)
-    if chunk_key_encoding:
-        opt["chunk_key_encoding"] = chunk_key_encoding
-    arr = omz.create_array(name=name,
-                           shape=shape,
-                           **opt)
-    if data:
-        arr[:] = data
-    return arr
-
-
-def dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version):
+def _dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version):
     dimension_separator = dimension_separator
     if dimension_separator == '.' and zarr_version == 2:
         pass
@@ -287,7 +286,13 @@ def dimension_separator_to_chunk_key_encoding(dimension_separator, zarr_version)
         return dimension_separator
 
 
-def compute_zarr_layout(
+SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
+                         2 *  # TB
+                         2 ** 30  # GB->Bytes
+                         )
+
+
+def _compute_zarr_layout(
         shape: tuple,
         dtype: DTypeLike,
         zarr_config: ZarrConfig
@@ -361,7 +366,8 @@ def compute_zarr_layout(
                 M.append(m_uniform)
                 free_dims.append(i)
 
-        # Iteratively try to increase free dimensions while keeping the overall product ≤ B_multiplier.
+        # Iteratively try to increase free dimensions while keeping the overall
+        # product ≤ B_multiplier.
         improved = True
         while improved and free_dims:
             improved = False
