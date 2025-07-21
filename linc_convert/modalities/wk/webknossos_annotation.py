@@ -14,7 +14,10 @@ import zarr
 
 # internals
 from linc_convert.modalities.wk.cli import wk
-from linc_convert.utils.io.zarr.drivers.zarr_python import make_compressor
+from linc_convert.utils.io.zarr import from_config
+from linc_convert.utils.io.zarr.drivers.zarr_python import (
+    _make_compressor as make_compressor,
+    )
 from linc_convert.utils.math import ceildiv
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
