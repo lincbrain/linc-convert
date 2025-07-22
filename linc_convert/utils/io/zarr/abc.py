@@ -1,5 +1,6 @@
 """Abstract base classes for ZarrIO interfaces."""
 
+import logging
 from abc import ABC, abstractmethod
 from numbers import Number
 from os import PathLike
@@ -30,7 +31,6 @@ from linc_convert.utils.io.generate_pyramid import (
     default_levels,
     next_level_shape,
 )
-from linc_convert.utils.io.zarr import logger
 from linc_convert.utils.zarr_config import ZarrConfig
 
 NiftiHeaderLike = Union[Nifti1Header, Nifti2Header]
@@ -210,6 +210,7 @@ class ZarrGroup(ZarrNode):
         shapes : list[list[int]]
             Shapes of each level, from finest to coarsest.
         """
+        logger = logging.getLogger(__name__)
         base = self["0"]
         batch_shape, spatial_shape = base.shape[:-ndim], base.shape[-ndim:]
         all_shapes = [spatial_shape]

@@ -1,4 +1,5 @@
 """TensorStore driver for Zarr arrays and groups."""
+
 import json
 import math
 import os
@@ -126,7 +127,6 @@ class ZarrTSArray(ZarrArray):
         return cls(ts_array)
 
 
-
 class ZarrTSGroup(ZarrGroup):
     """Zarr Group implementation using TensorStore as backend."""
 
@@ -161,8 +161,9 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSGroup
         """
-        return cls.open(zarr_config.out, mode="a",
-                        zarr_version=zarr_config.zarr_version)
+        return cls.open(
+                zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
+                )
 
     @classmethod
     def open(
@@ -236,9 +237,7 @@ class ZarrTSGroup(ZarrGroup):
     def keys(self) -> Iterator[str]:
         """Get the names of all subgroups and arrays in this group."""
         return (
-            p.name
-            for p in self._path.iterdir()
-            if p.is_dir() and _detect_metadata(p)
+            p.name for p in self._path.iterdir() if p.is_dir() and _detect_metadata(p)
             )
 
     def __contains__(self, name: str) -> bool:
@@ -293,8 +292,9 @@ class ZarrTSGroup(ZarrGroup):
         ZarrTSArray
         """
         if zarr_config is None:
-            conf = default_write_config(self._path / name, shape=shape, dtype=dtype,
-                                        **kwargs)
+            conf = default_write_config(
+                    self._path / name, shape=shape, dtype=dtype, **kwargs
+                    )
         else:
             conf = default_write_config(
                     self._path / name,
@@ -554,24 +554,24 @@ def _detect_metadata(path: PathLike) -> Optional[Tuple[str, int]]:
     Checks zarr.json (v3), then .zarray/.zgroup (v2).
     """
     # Zarr v3
-    z3 = path / 'zarr.json'
+    z3 = path / "zarr.json"
     if z3.is_file():
         try:
             meta = json.loads(z3.read_text())
-            fmt = meta.get('zarr_format')
+            fmt = meta.get("zarr_format")
             if fmt == 3:
-                node = meta.get('node_type', 'array')
-                if node in ('array', 'group'):
+                node = meta.get("node_type", "array")
+                if node in ("array", "group"):
                     return node, 3
         except json.JSONDecodeError:
             pass
     # Zarr v2
-    for fname, ntype in (('.zarray', 'array'), ('.zgroup', 'group')):
+    for fname, ntype in ((".zarray", "array"), (".zgroup", "group")):
         f = path / fname
         if f.is_file():
             try:
                 meta = json.loads(f.read_text())
-                if meta.get('zarr_format') == 2:
+                if meta.get("zarr_format") == 2:
                     return ntype, 2
             except json.JSONDecodeError:
                 pass
@@ -730,10 +730,8 @@ def default_write_config(
 def _init_group(group_path: PathLike, version: int) -> None:
     group_path.mkdir(parents=True, exist_ok=True)
     if version == 3:
-        (group_path / 'zarr.json').write_text(
-                json.dumps({'zarr_format': 3, 'node_type': 'group'})
+        (group_path / "zarr.json").write_text(
+                json.dumps({"zarr_format": 3, "node_type": "group"})
                 )
     else:
-        (group_path / '.zgroup').write_text(
-                json.dumps({'zarr_format': 2})
-                )
+        (group_path / ".zgroup").write_text(json.dumps({"zarr_format": 2}))

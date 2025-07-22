@@ -16,10 +16,10 @@ DOWNLOAD_CMD = ["dandi",
 
 @pytest.fixture(scope="session")
 def test_data_heavy_dir(request):
-    data_dir = Path(__file__).parent / "data"
+    data_dir = Path(__file__).parent / "data" / "000051" / "sourcedata"
     if not any(data_dir.iterdir()):
         subprocess.check_call(DOWNLOAD_CMD)
-    yield data_dir / "000051" / "sourcedata"
+    yield data_dir
     if request.node.get_closest_marker("golden"):
         print("updating dandi archive")
     # if request.config.getoption("--upload-data"):

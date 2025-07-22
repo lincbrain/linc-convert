@@ -1,21 +1,27 @@
+"""Logging utility for the linc_convert application."""
+
 import logging
+from os import PathLike
 
 logger = logging.getLogger()
 
 
-def setup_logging():
+def setup_logging() -> None:
+    """Set up the logging configuration for the application."""
     logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             )
     logging.captureWarnings(True)
 
 
-def add_file_handler(log_file_path=None):
+def add_file_handler(log_file_path: str | PathLike[str] = None) -> None:
+    """Add a file handler to the logger to log messages to a file."""
     file_handler = logging.FileHandler(log_file_path)
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 

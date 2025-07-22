@@ -10,7 +10,7 @@ import logging
 import os
 from functools import wraps
 from itertools import product
-from typing import Callable, Optional
+from typing import Callable, Optional, Unpack
 
 import cyclopts
 import h5py
@@ -72,7 +72,7 @@ def convert(
         center: bool = True,
         dtype: Optional[str] = None,
         zarr_config: ZarrConfig = None,
-        **kwargs
+        **kwargs: Unpack[ZarrConfig],
         ) -> None:
     """
     Matlab to OME-Zarr.
@@ -134,8 +134,9 @@ def convert(
     ny = ceildiv(volume_shape[-2], chunk_size[1])
     nslices = len(inp)
 
-    dataset = zgroup.create_array("0", shape=volume_shape, zarr_config=zarr_config,
-                                  dtype=np.dtype(dtype))
+    dataset = zgroup.create_array(
+            "0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype)
+            )
 
     # Process and store data in chunks
     for i in range(nslices):
@@ -172,8 +173,9 @@ def convert(
 
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
-    header = default_nifti_header(arr, zgroup.attrs.get("ome", zgroup.attrs).get(
-            "multiscales"))
+    header = default_nifti_header(
+            arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
+            )
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:

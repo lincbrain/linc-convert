@@ -1,4 +1,5 @@
 """ZarrIO Implementation using the zarr-python library."""
+
 import ast
 from numbers import Number
 from typing import (
@@ -99,7 +100,7 @@ class ZarrPythonGroup(ZarrGroup):
     def __init__(self, zarr_group: zarr.Group) -> None:
         """
         Initialize the ZarrPythonGroup with a zarr.Group.
-        
+
         Parameters
         ----------
         zarr_group : zarr.Group
@@ -110,13 +111,17 @@ class ZarrPythonGroup(ZarrGroup):
         self._zgroup = zarr_group
 
     @classmethod
-    def from_config(cls, zarr_config: ZarrConfig) -> 'ZarrPythonGroup':
+    def from_config(cls, zarr_config: ZarrConfig) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
         store = zarr.storage.LocalStore(zarr_config.out)
-        return cls(zarr.group(store=store,
-                              # TODO: figure out overwrite
-                              # overwrite=overwrite,
-                              zarr_format=zarr_config.zarr_version))
+        return cls(
+                zarr.group(
+                        store=store,
+                        # TODO: figure out overwrite
+                        # overwrite=overwrite,
+                        zarr_format=zarr_config.zarr_version,
+                        )
+                )
 
     @property
     def attrs(self) -> Mapping[str, Any]:
@@ -173,7 +178,7 @@ class ZarrPythonGroup(ZarrGroup):
             *,
             zarr_config: ZarrConfig = None,
             data: Optional[ArrayLike] = None,
-            **kwargs: Unpack[ZarrArrayConfig]
+            **kwargs: Unpack[ZarrArrayConfig],
             ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
@@ -195,17 +200,17 @@ class ZarrPythonGroup(ZarrGroup):
             "order": zarr_config.order,
             "dtype": np.dtype(dtype).str,
             "fill_value": None,
-            "compressors": _make_compressor(compressor, zarr_config.zarr_version,
-                                            **compressor_opt),
+            "compressors": _make_compressor(
+                    compressor, zarr_config.zarr_version, **compressor_opt
+                    ),
             }
 
         chunk_key_encoding = _dimension_separator_to_chunk_key_encoding(
-                zarr_config.dimension_separator, zarr_config.zarr_version)
+                zarr_config.dimension_separator, zarr_config.zarr_version
+                )
         if chunk_key_encoding:
             opt["chunk_key_encoding"] = chunk_key_encoding
-        arr = self._zgroup.create_array(name=name,
-                                        shape=shape,
-                                        **opt)
+        arr = self._zgroup.create_array(name=name, shape=shape, **opt)
         if data:
             arr[:] = data
         return ZarrPythonArray(arr)
@@ -215,10 +220,10 @@ class ZarrPythonGroup(ZarrGroup):
             name: str,
             shape: Sequence[int],
             data: ArrayLike = None,
-            **kwargs: Unpack[ZarrArrayConfig]
+            **kwargs: Unpack[ZarrConfig],
             ) -> ZarrPythonArray:
         """Create a new array using the properties from a base_level object."""
-        base_level = self['0']
+        base_level = self["0"]
         opts = dict(
                 dtype=base_level.dtype,
                 chunks=base_level.chunks,
@@ -227,8 +232,9 @@ class ZarrPythonGroup(ZarrGroup):
                 compressors=getattr(base_level._array, "compressors", None),
                 fill_value=getattr(base_level._array, "fill_value", None),
                 order=getattr(base_level._array, "order", None),
-                attributes=getattr(getattr(base_level._array, "metadata", None),
-                                   "attributes", None),
+                attributes=getattr(
+                        getattr(base_level._array, "metadata", None), "attributes", None
+                        ),
                 overwrite=True,
                 )
         # Handle extra options based on metadata type
@@ -236,7 +242,8 @@ class ZarrPythonGroup(ZarrGroup):
         if meta is not None:
             if hasattr(meta, "dimension_separator"):
                 opts["chunk_key_encoding"] = _dimension_separator_to_chunk_key_encoding(
-                        meta.dimension_separator, 2)
+                        meta.dimension_separator, 2
+                        )
             if hasattr(meta, "chunk_key_encoding"):
                 opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
             if hasattr(base_level, "serializer"):
@@ -253,9 +260,7 @@ class ZarrPythonGroup(ZarrGroup):
 
 
 def _make_compressor(
-        name: str | None,
-        zarr_version: Literal[2, 3],
-        **prm: dict
+        name: str | None, zarr_version: Literal[2, 3], **prm: dict
         ) -> CompressorsLike:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
@@ -280,49 +285,49 @@ def _make_compressor(
     name = name.lower()
 
     if name not in compressor_map:
-        raise ValueError('Unknown compressor', name)
+        raise ValueError("Unknown compressor", name)
     Compressor = compressor_map[name]
 
     return Compressor(**prm)
 
 
 def _dimension_separator_to_chunk_key_encoding(
-        dimension_separator: Literal[".", "/"],
-        zarr_version: Literal[2, 3]) -> ChunkKeyEncodingLike:
+        dimension_separator: Literal[".", "/"], zarr_version: Literal[2, 3]
+        ) -> ChunkKeyEncodingLike:
     dimension_separator = dimension_separator
-    if dimension_separator == '.' and zarr_version == 2:
+    if dimension_separator == "." and zarr_version == 2:
         pass
-    elif dimension_separator == '/' and zarr_version == 3:
+    elif dimension_separator == "/" and zarr_version == 3:
         pass
     else:
         dimension_separator = ChunkKeyEncodingParams(
                 name="default" if zarr_version == 3 else "v2",
-                separator=dimension_separator)
+                separator=dimension_separator
+                )
         return dimension_separator
 
 
-SHARD_FILE_SIZE_LIMIT = (2 *  # compression ratio
-                         2 *  # TB
-                         2 ** 30  # GB->Bytes
-                         )
+SHARD_FILE_SIZE_LIMIT = (
+        2  # compression ratio
+        * 2  # TB
+        * 2 ** 30  # GB->Bytes
+)
 
 
 def _compute_zarr_layout(
-        shape: tuple,
-        dtype: DTypeLike,
-        zarr_config: ZarrConfig
+        shape: tuple, dtype: DTypeLike, zarr_config: ZarrConfig
         ) -> tuple[tuple, tuple | None]:
     ndim = len(shape)
     if ndim == 5:
         if zarr_config.no_time:
-            raise ValueError('no_time is not supported for 5D data')
+            raise ValueError("no_time is not supported for 5D data")
         chunk_tc = (
             1 if zarr_config.chunk_time else shape[0],
             1 if zarr_config.chunk_channels else shape[1],
             )
         shard_tc = (
             chunk_tc[0] if zarr_config.shard_time else shape[0],
-            chunk_tc[1] if zarr_config.shard_channels else shape[1]
+            chunk_tc[1] if zarr_config.shard_channels else shape[1],
             )
 
     elif ndim == 4:
@@ -399,8 +404,9 @@ def _compute_zarr_layout(
                     M[i] = candidate
                     improved = True
             # Remove dimensions that have reached or exceeded the data size.
-            free_dims = [i for i in free_dims if
-                         M[i] * chunk_spatial[i] < shape_spatial[i]]
+            free_dims = [
+                i for i in free_dims if M[i] * chunk_spatial[i] < shape_spatial[i]
+                ]
         shard = tuple(M[i] * chunk_spatial[i] for i in range(dims))
 
     shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))

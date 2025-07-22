@@ -1,13 +1,13 @@
 """Convert annotation downloaded from webknossos into ome.zarr format."""
 
 # stdlib
-import ast
 import json
 import os
-import shutil
+from typing import Unpack
 
 import cyclopts
 import numpy as np
+
 # externals
 import wkw
 import zarr
@@ -15,9 +15,6 @@ import zarr
 # internals
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.io.zarr.drivers.zarr_python import (
-    _make_compressor as make_compressor,
-    )
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
 
@@ -32,7 +29,7 @@ def convert(
         dic: str = None,
         *,
         zarr_config: ZarrConfig = None,
-        **kwargs
+        **kwargs: Unpack[ZarrConfig],
         ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
@@ -93,9 +90,8 @@ def convert(
         low_res_offsets.append([t0, b0, l0, r0])
 
     # setup save info
-    basename = os.path.basename(ome_dir)[:-9]
-    initials = wkw_dir.split("/")[-2][:2]
-
+    os.path.basename(ome_dir)[:-9]
+    wkw_dir.split("/")[-2][:2]
 
     # Prepare Zarr group
     omz = from_config(zarr_config)
@@ -110,8 +106,9 @@ def convert(
         wkw_dataset_path = os.path.join(wkw_dir, get_mask_name(level))
         wkw_dataset = wkw.Dataset.open(wkw_dataset_path)
 
-        omz.create_array(f"{level}", shape=shape, dtype="uint8",
-                         zarr_config=zarr_config)
+        omz.create_array(
+                f"{level}", shape=shape, dtype="uint8", zarr_config=zarr_config
+                )
         array = omz[f"{level}"]
 
         # Write each slice
@@ -176,6 +173,7 @@ def convert(
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
     omz._get_zarr_python_group().attrs["multiscales"] = omz_data.attrs["multiscales"]
+
 
 def get_mask_name(level: int) -> str:
     """

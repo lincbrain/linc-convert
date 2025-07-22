@@ -1,4 +1,5 @@
 import re
+from os import PathLike
 from typing import Any, Generator
 
 import numpy as np
@@ -144,11 +145,11 @@ def find_experiment_params(exp_file: str) -> tuple[dict, bool]:
     exp_key = None
 
     for key in mat_vars(exp_file):
-        if 'Experiment_Fiji' in key:
+        if "Experiment_Fiji" in key:
             exp_key = key
             is_fiji = True
             break
-        if 'Experiment' in key:
+        if "Experiment" in key:
             exp_key = key
 
     if not exp_key:
@@ -170,7 +171,7 @@ def mat_vars(mat_file: str) -> Generator[str, None, None]:
     ------
         str: Variable names not starting with '__'.
     """
-    yield from (name for name, *_ in sio.whosmat(mat_file) if not name.startswith('__'))
+    yield from (name for name, *_ in sio.whosmat(mat_file) if not name.startswith("__"))
 
 
 def atleast_2d_trailing(arr: ArrayLike) -> np.ndarray:
@@ -197,6 +198,6 @@ def atleast_2d_trailing(arr: ArrayLike) -> np.ndarray:
     return arr
 
 
-def load_mat(mat_path, varname):
+def load_mat(mat_path: str | PathLike[str], varname: str) -> np.ndarray:
     data = sio.loadmat(mat_path, squeeze_me=True)
     return data[varname]

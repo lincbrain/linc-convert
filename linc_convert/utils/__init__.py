@@ -1,2 +1,3 @@
 """Various utilities."""
-from . import logging
+
+from . import logging  # noqa: F401
