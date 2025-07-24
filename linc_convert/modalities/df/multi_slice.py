@@ -65,7 +65,7 @@ def convert(
     * the second letter corresponds to the vertical dimension and
       indicates the anatomical meaning of the _bottom_ of the jp2 image,
     * the third letter corresponds to the slice dimension and
-      indicates the anatomical meaninff of the _end_ of the stack.
+      indicates the anatomical meaning of the _end_ of the stack.
 
     We also provide the aliases
 
