@@ -31,6 +31,7 @@ from linc_convert.modalities.psoct.mosaic2d import (_compute_blending_ramp,
                                                     _normalize_tile_coords)
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.zarr_config import ZarrConfig
+from linc_convert.utils.io.zarr.drivers.zarr_python import _compute_zarr_layout
 
 logger = logging.getLogger(__name__)
 mosaic3d = cyclopts.App(name="mosaic3d", help_format="markdown")
@@ -126,8 +127,8 @@ def mosaic3d_telesto(
     else:
         temp_compensate = False
 
-    chunk, shard = zarr_config.chunk, zarr_config.shard
-
+    chunk, shard = _compute_zarr_layout((depth, full_height, full_width), np.float32,
+                                        zarr_config)
     dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx,
                                                      input_file_template,
                                                      blend_ramp, clip_x, clip_y,
