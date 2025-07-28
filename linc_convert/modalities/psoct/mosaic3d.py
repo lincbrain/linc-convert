@@ -20,7 +20,7 @@ import tqdm
 from cyclopts import Parameter
 from dask import delayed
 from dask.diagnostics import ProgressBar
-from niizarr import default_nifti_header, write_ome_metadata
+from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import (atleast_2d_trailing,
                                                   find_experiment_params,
@@ -30,8 +30,8 @@ from linc_convert.modalities.psoct.mosaic2d import (_compute_blending_ramp,
                                                     _load_nifti_tile, _load_tile,
                                                     _normalize_tile_coords)
 from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.zarr_config import ZarrConfig
 from linc_convert.utils.io.zarr.drivers.zarr_python import _compute_zarr_layout
+from linc_convert.utils.zarr_config import ZarrConfig
 
 logger = logging.getLogger(__name__)
 mosaic3d = cyclopts.App(name="mosaic3d", help_format="markdown")
@@ -51,7 +51,6 @@ def mosaic3d_telesto(
         r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
         tilted_illumination: bool = False,
         downsample: bool = False,
-        use_gpu: bool = False,
         zarr_config: ZarrConfig = None,
         ) -> None:
     """
@@ -129,6 +128,7 @@ def mosaic3d_telesto(
 
     chunk, shard = _compute_zarr_layout((depth, full_height, full_width), np.float32,
                                         zarr_config)
+
     dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx,
                                                      input_file_template,
                                                      blend_ramp, clip_x, clip_y,
@@ -168,14 +168,12 @@ def mosaic3d_telesto(
     with ProgressBar():
         task.compute()
 
-    scan_resolution = scan_resolution[:3][::-1]
+    scan_resolution = scan_resolution[:3][::-1].tolist()
     logger.info("finished")
     for zgroup in zgroups:
         zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["z", "y", "x"], scan_resolution,
+        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=scan_resolution,
                                   space_unit="millimeter")
-        write_ome_metadata(zgroup, ["z", "y", "x"], scan_resolution,
-                           space_unit="millimeter")
         nii_header = default_nifti_header(zgroup["0"],
                                           zgroup._get_zarr_python_group().attrs[
                                               "multiscales"])
@@ -191,6 +189,7 @@ def temporary_compensation(dBI, R3D, O3D, depth, focus, scan_info):
     mask_crop = focus <= scan_info['Focus_CropStart']  # (Ny, Nx)
     # 2) find, for each (y,x), the last index along z where dBI3D == -inf
     mask_inf = np.isneginf(dBI)  # (Ny, Nx, Nz)
+
     depth_idx = np.arange(Nz)[None, None, :]  # (1, 1, Nz)
     last_inf = np.max(np.where(mask_inf, depth_idx, -1), axis=2)
     # last_inf[y,x] is -1 if there was no -inf, or the maximum index otherwise
@@ -223,15 +222,14 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
                 chunk):
     coords = []
     tiles = []
-    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices)):
+    for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices), "Loading Tiles"):
         if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
                 y_coords[i, j]):
             continue
         x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
-        row_slice = slice(x0, x0 + tile_width)
-        col_slice = slice(y0, y0 + tile_height)
 
         input_file_path = input_file_template % (mosaic_idx, tile_idx)
+
         complex3d = _load_tile(input_file_path)
         if complex3d.shape[0] > 4 * raw_tile_width:
             warnings.warn(
@@ -263,6 +261,7 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
             results = da.swapaxes(results, 0, 1)
 
         results = results[clip_x:, clip_y:] * blend_ramp[:, :, None, None]
+
         tiles.append(results)
         coords.append((x0, y0))
 
@@ -331,12 +330,13 @@ def stitch_tiles(coords, tiles,
     Chunk‐aligned padding + per‐block summation (build_slice_chunked_padding).
     """
     pw, ph = tile_size
-    canvas = da.zeros((full_width, full_height, depth, 3),
-                      chunks=(pw, ph, depth, 3),
-                      dtype=np.float32)
-    weight = da.zeros((full_width, full_height),
-                      chunks=(pw, ph),
-                      dtype=np.float32)
+
+    # canvas = da.zeros((full_width, full_height, depth, 3),
+    #                   chunks=(pw, ph, depth, 3),
+    #                   dtype=np.float32)
+    canvas = da.broadcast_to(da.zeros((), dtype=np.float32),
+                             (full_width, full_height, depth, 3),
+                             chunks=(pw, ph, depth, 3))
 
     # collect per‐chunk pieces
     block_tiles = defaultdict(list)
