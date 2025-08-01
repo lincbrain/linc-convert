@@ -24,4 +24,4 @@ __all__ = [
     open_group,
     "ZarrTSArray",
     "ZarrTSGroup",
-    ]
+]

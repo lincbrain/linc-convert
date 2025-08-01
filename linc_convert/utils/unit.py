@@ -28,7 +28,7 @@ ome_valid_units = {
         "yottameter",
         "zeptometer",
         "zettameter",
-        ],
+    ],
     "time": [
         "attosecond",
         "centisecond",
@@ -53,8 +53,8 @@ ome_valid_units = {
         "yottasecond",
         "zeptosecond",
         "zettasecond",
-        ],
-    }
+    ],
+}
 
 nifti_valid_units = [
     "unknown",
@@ -67,7 +67,7 @@ nifti_valid_units = [
     "hz",
     "ppm",
     "rads",
-    ]
+]
 
 si_prefix_short2long = {
     "Q": "quetta",
@@ -98,7 +98,7 @@ si_prefix_short2long = {
     "y": "yocto",
     "r": "ronto",
     "q": "quecto",
-    }
+}
 
 si_prefix_long2short = {long: short for short, long in si_prefix_short2long.items()}
 
@@ -132,11 +132,11 @@ si_prefix_exponent = {
     "y": -24,
     "r": -27,
     "q": -30,
-    }
+}
 
 unit_space_short2long = {
     short + "m": long + "meter" for short, long in si_prefix_short2long.items()
-    }
+}
 unit_space_short2long.update(
         {
             "m": "meter",
@@ -148,14 +148,14 @@ unit_space_short2long.update(
             '"': "inch",
             "Å": "angstrom",
             "pc": "parsec",
-            }
-        )
+        }
+)
 unit_space_long2short = {long: short for short, long in unit_space_short2long.items()}
 unit_space_long2short["micron"] = "u"
 
 unit_time_short2long = {
     short + "s": long + "second" for short, long in si_prefix_short2long.items()
-    }
+}
 unit_time_short2long.update(
         {
             "y": "year",
@@ -163,13 +163,13 @@ unit_time_short2long.update(
             "h": "hour",
             "m": "minute",
             "s": "second",
-            }
-        )
+        }
+)
 unit_time_long2short = {long: short for short, long in unit_time_short2long.items()}
 
 unit_space_scale = {
     prefix + "m": 10 ** exponent for prefix, exponent in si_prefix_exponent.items()
-    }
+}
 unit_space_scale.update(
         {
             "mi": 1609.344,
@@ -180,20 +180,20 @@ unit_space_scale.update(
             '"': 25.4e-3,
             "Å": 1e-10,
             "pc": 3.0857e16,
-            }
-        )
+        }
+)
 
 unit_time_scale = {
     prefix + "s": 10 ** exponent for prefix, exponent in si_prefix_exponent.items()
-    }
+}
 unit_time_scale.update(
         {
             "y": 365.25 * 24 * 60 * 60,
             "d": 24 * 60 * 60,
             "h": 60 * 60,
             "m": 60,
-            }
-        )
+        }
+)
 
 
 def convert_unit(value: float, src: str, dst: str) -> float:
@@ -226,7 +226,7 @@ def to_nifti_unit(unit: str) -> str:
         "second": "sec",
         "millisecond": "msec",
         "microsecond": "usec",
-        }.get(unit, "unknown")
+    }.get(unit, "unknown")
 
 
 def unit_to_scale(unit: str) -> float:

@@ -39,12 +39,12 @@ def test_oct_multi_slice(tmp_path, multi_slice_mats, zarr_version, driver):
             overwrite=True,
             chunk=(64,),
             driver=driver,
-            )
+    )
 
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r"),
-            )
+    )
 
 
 @pytest.mark.golden
@@ -59,7 +59,7 @@ def test_oct_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version):
             overwrite=True,
             chunk=(64,),
             driver="zarr-python",
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
 
@@ -75,19 +75,21 @@ def test_oct_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, driv
             files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version=2,
             overwrite=True,
             driver=driver
-            )
+    )
     assert_zarr_equal(
             str(output_zarr),
             zarr.storage.ZipStore(expected_zarr, mode="r"),
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output_zarr))
 
 
 @pytest.mark.golden
 @pytest.mark.heavy
-def test_oct_multi_slice_heavy_regen_golden(test_data_heavy_dir, tmp_path,
-                                            zarr_version):
+def test_oct_multi_slice_heavy_regen_golden(
+        test_data_heavy_dir, tmp_path,
+        zarr_version
+):
     multi_slice_heavy_data_dir = test_data_heavy_dir / "sub-test_oct_multi_slice"
     expected_zarr = multi_slice_heavy_data_dir / f"zarr{zarr_version}.nii.zarr.zip"
     files = glob.glob(str(multi_slice_heavy_data_dir / "*.mat"))
@@ -96,6 +98,6 @@ def test_oct_multi_slice_heavy_regen_golden(test_data_heavy_dir, tmp_path,
     multi_slice.convert(
             files, out=str(output_zarr), key="Psi_ObsLSQ", zarr_version=zarr_version,
             overwrite=True
-            )
+    )
     base = expected_zarr.with_suffix("")
     shutil.make_archive(str(base), "zip", str(output_zarr))

@@ -31,7 +31,7 @@ def write_zyla_spool_set(
         *,
         pixel_encoding: str = 'Mono16',
         images_per_file: int = None,
-        ):
+):
     """
     Given `image` of shape (numDepths, numColumns, numFrames),
     create a Zyla‑compatible spool directory at `spool_set_path`
@@ -126,7 +126,7 @@ def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r")
-            )
+    )
 
 
 @pytest.mark.golden

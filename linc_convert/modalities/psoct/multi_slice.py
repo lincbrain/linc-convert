@@ -23,7 +23,7 @@ from linc_convert.utils.io._array_wrapper import (
     _ArrayWrapper,
     _H5ArrayWrapper,
     _MatArrayWrapper,
-    )
+)
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
@@ -73,7 +73,7 @@ def convert(
         dtype: Optional[str] = None,
         zarr_config: ZarrConfig = None,
         **kwargs: Unpack[ZarrConfig],
-        ) -> None:
+) -> None:
     """
     Matlab to OME-Zarr.
 
@@ -136,7 +136,7 @@ def convert(
 
     dataset = zgroup.create_array(
             "0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype)
-            )
+    )
 
     # Process and store data in chunks
     for i in range(nslices):
@@ -150,7 +150,7 @@ def convert(
                     f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: "
                     f"{k + 1:03d}] "
                     f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
-                    )
+            )
             z_start = k * chunk_size[0]
             z_end = z_start + loaded_chunk.shape[-2]
             y_start = j * chunk_size[1]
@@ -175,7 +175,7 @@ def convert(
     arr = zgroup["0"]
     header = default_nifti_header(
             arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
-            )
+    )
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])
     if center:

@@ -40,11 +40,11 @@ def test_lsm_mosaic(tmp_path, mosaic_tiff, zarr_version, driver):
             out=str(output),
             zarr_version=zarr_version,
             driver=driver
-            )
+    )
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r")
-            )
+    )
 
 
 @pytest.mark.golden
@@ -55,6 +55,6 @@ def test_lsm_mosaic_regen_golden(tmp_path, mosaic_tiff, zarr_version):
             str(mosaic_tiff),
             out=str(output),
             zarr_version=zarr_version,
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

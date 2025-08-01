@@ -99,7 +99,8 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
 def assert_zarr_equal(
         store1: Union[str, zarr.storage.StoreLike],
         store2: Union[str, zarr.storage.StoreLike],
-        ignore_nii: bool = False) -> None:
+        ignore_nii: bool = False
+) -> None:
     """
     Assert that two Zarr groups—opened from either a path or a store—have identical
     contents.

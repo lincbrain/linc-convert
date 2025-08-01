@@ -17,7 +17,7 @@ def single_slice_jp2(tmp_path):
     glymur.Jp2k(
             path,
             data=image,
-            )
+    )
     return path
 
 
@@ -29,11 +29,11 @@ def test_df_single_slice(tmp_path, single_slice_jp2, zarr_version, driver):
             out=str(output),
             zarr_version=zarr_version,
             driver=driver
-            )
+    )
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r")
-            )
+    )
 
 
 @pytest.mark.golden
@@ -44,6 +44,6 @@ def test_df_single_slice_regen_golden(tmp_path, single_slice_jp2, zarr_version):
             str(single_slice_jp2),
             out=str(output),
             zarr_version=zarr_version,
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

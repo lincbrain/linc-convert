@@ -20,7 +20,7 @@ class _ArrayWrapper:
                 warn(
                         f"More than one key in .mat file {self.file}, "
                         f'arbitrarily loading "{key}"'
-                        )
+                )
 
         if key not in f.keys():
             raise Exception(f"Key {key} not found in file {self.file}")

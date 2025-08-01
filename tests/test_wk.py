@@ -1,4 +1,3 @@
-import os
 import shutil
 from pathlib import Path
 
@@ -42,7 +41,7 @@ def test_wkw(tmp_path, wk_annotation, zarr_version, driver):
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r")
-            )
+    )
 
 
 @pytest.mark.golden

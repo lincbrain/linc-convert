@@ -15,7 +15,7 @@ from typing import (
     Tuple,
     Union,
     Unpack,
-    )
+)
 from urllib.parse import urlparse
 
 import numcodecs
@@ -99,7 +99,7 @@ class ZarrTSArray(ZarrArray):
             *,
             zarr_version: Literal[2, 3] = 3,
             mode: Literal["r", "r+", "a", "w", "w-"] = "a",
-            ) -> "ZarrTSArray":
+    ) -> "ZarrTSArray":
         """
         Open an existing TensorStore-based Zarr array.
 
@@ -122,7 +122,7 @@ class ZarrTSArray(ZarrArray):
             "open": True,
             "create": False,
             "delete_existing": False,
-            }
+        }
         ts_array = ts.open(spec).result()
         return cls(ts_array)
 
@@ -163,7 +163,7 @@ class ZarrTSGroup(ZarrGroup):
         """
         return cls.open(
                 zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
-                )
+        )
 
     @classmethod
     def open(
@@ -172,7 +172,7 @@ class ZarrTSGroup(ZarrGroup):
             mode: Literal["r", "r+", "a", "w", "w-"] = "a",
             *,
             zarr_version: Literal[2, 3] = 3,
-            ) -> "ZarrTSGroup":
+    ) -> "ZarrTSGroup":
         """
         Open or create a Zarr group backed by TensorStore.
 
@@ -238,7 +238,7 @@ class ZarrTSGroup(ZarrGroup):
         """Get the names of all subgroups and arrays in this group."""
         return (
             p.name for p in self._path.iterdir() if p.is_dir() and _detect_metadata(p)
-            )
+        )
 
     def __contains__(self, name: str) -> bool:
         """Check whether a subgroup or array exists in this group."""
@@ -275,7 +275,7 @@ class ZarrTSGroup(ZarrGroup):
             zarr_config: Optional[ZarrConfig] = None,
             data: Optional[ArrayLike] = None,
             **kwargs: Unpack[ZarrArrayConfig],
-            ) -> ZarrTSArray:
+    ) -> ZarrTSArray:
         """
         Create a new array within this group.
 
@@ -294,7 +294,7 @@ class ZarrTSGroup(ZarrGroup):
         if zarr_config is None:
             conf = default_write_config(
                     self._path / name, shape=shape, dtype=dtype, **kwargs
-                    )
+            )
         else:
             conf = default_write_config(
                     self._path / name,
@@ -306,7 +306,7 @@ class ZarrTSGroup(ZarrGroup):
                     # TODO: implement this
                     # compressor_opt=ast.literal_eval(zarr_config.compressor_opt),
                     version=zarr_config.zarr_version,
-                    )
+            )
         conf.update(delete_existing=True, create=True)
         arr = ts.open(conf).result()
         if data is not None:
@@ -319,7 +319,7 @@ class ZarrTSGroup(ZarrGroup):
             shape: Sequence[int],
             data: Optional[ArrayLike] = None,
             **kwargs: Unpack[ZarrArrayConfig],
-            ) -> ZarrTSArray:
+    ) -> ZarrTSArray:
         """
         Create a new array using metadata of an existing base-level array.
 
@@ -406,7 +406,7 @@ def auto_shard_size(
         itemsize: int | np.dtype | str,
         max_file_size: int = 2 * 1024 ** 4,
         compression_ratio: float = 2,
-        ) -> list[int]:
+) -> list[int]:
     """
     Find maximal shard size that ensures file size below cap.
 
@@ -459,7 +459,7 @@ def fix_shard_chunk(
         shard: list[int],
         chunk: list[int],
         shape: list[int],
-        ) -> tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int]]:
     """
     Fix incompatibilities between chunk and shard size.
 
@@ -510,7 +510,7 @@ def default_read_config(path: os.PathLike | str) -> dict:
         "open": True,
         "create": False,
         "delete_existing": False,
-        }
+    }
 
 
 def _is_array(path: PathLike) -> bool:
@@ -587,7 +587,7 @@ def default_write_config(
         compressor: str = "blosc",
         compressor_opt: dict | None = None,
         version: int = 3,
-        ) -> dict:
+) -> dict:
     """
     Generate a default TensorStore configuration.
 
@@ -655,7 +655,7 @@ def default_write_config(
             chunk_grid = {
                 "name": "regular",
                 "configuration": {"chunk_shape": shard},
-                }
+            }
 
             sharding_codec = {
                 "name": "sharding_indexed",
@@ -664,14 +664,14 @@ def default_write_config(
                     "codecs": [
                         codec_little_endian,
                         *compressor,
-                        ],
+                    ],
                     "index_codecs": [
                         codec_little_endian,
                         {"name": "crc32c"},
-                        ],
+                    ],
                     "index_location": "end",
-                    },
-                }
+                },
+            }
             codecs = [sharding_codec]
 
         else:
@@ -679,7 +679,7 @@ def default_write_config(
             codecs = [
                 codec_little_endian,
                 *compressor,
-                ]
+            ]
 
         metadata = {
             "chunk_grid": chunk_grid,
@@ -689,12 +689,12 @@ def default_write_config(
             "chunk_key_encoding": {
                 "name": "default",
                 "configuration": {"separator": r"/"},
-                },
-            }
+            },
+        }
         config = {
             "driver": "zarr3",
             "metadata": metadata,
-            }
+        }
 
     # ------------------------------------------------------------------
     #   Zarr 2
@@ -713,12 +713,12 @@ def default_write_config(
             "dtype": np.dtype(dtype).str,
             "fill_value": 0,
             "compressor": compressor,
-            }
+        }
         config = {
             "driver": "zarr",
             "metadata": metadata,
             "key_encoding": r"/",
-            }
+        }
 
     # Prepare store
     config["metadata"]["shape"] = shape
@@ -732,6 +732,6 @@ def _init_group(group_path: PathLike, version: int) -> None:
     if version == 3:
         (group_path / "zarr.json").write_text(
                 json.dumps({"zarr_format": 3, "node_type": "group"})
-                )
+        )
     else:
         (group_path / ".zgroup").write_text(json.dumps({"zarr_format": 2}))

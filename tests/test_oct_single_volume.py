@@ -26,10 +26,12 @@ def single_volume_mat(tmp_path):
         [
             (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
             (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
-            ],
-        )
-def test_oct_single_volume(tmp_path, single_volume_mat, zarr_version, expected_zarr,
-                           driver):
+        ],
+)
+def test_oct_single_volume(
+        tmp_path, single_volume_mat, zarr_version, expected_zarr,
+        driver
+):
     output = tmp_path / "single_volume.nii.zarr"
 
     single_volume.convert(
@@ -40,12 +42,12 @@ def test_oct_single_volume(tmp_path, single_volume_mat, zarr_version, expected_z
             overwrite=True,
             chunk=(64,),
             driver=driver,
-            )
+    )
 
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r"),
-            )
+    )
 
 
 @pytest.mark.golden
@@ -54,10 +56,12 @@ def test_oct_single_volume(tmp_path, single_volume_mat, zarr_version, expected_z
         [
             (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
             (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
-            ],
-        )
-def test_oct_single_volume_regen_golden(tmp_path, single_volume_mat, zarr_version,
-                                        expected_zarr):
+        ],
+)
+def test_oct_single_volume_regen_golden(
+        tmp_path, single_volume_mat, zarr_version,
+        expected_zarr
+):
     """
     Rebuild single-volume golden archives. Only run with --regenerate-golden.
     """
@@ -70,6 +74,6 @@ def test_oct_single_volume_regen_golden(tmp_path, single_volume_mat, zarr_versio
             overwrite=True,
             chunk=(64,),
             driver="zarr-python",
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

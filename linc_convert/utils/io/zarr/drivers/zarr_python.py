@@ -12,7 +12,7 @@ from typing import (
     Tuple,
     Union,
     Unpack,
-    )
+)
 
 import numpy as np
 import zarr
@@ -91,7 +91,7 @@ class ZarrPythonArray(ZarrArray):
             return getattr(self._array, name)
         raise AttributeError(
                 f"'{self.__class__.__name__}' object has no attribute '{name}'"
-                )
+        )
 
 
 class ZarrPythonGroup(ZarrGroup):
@@ -120,8 +120,8 @@ class ZarrPythonGroup(ZarrGroup):
                         # TODO: figure out overwrite
                         # overwrite=overwrite,
                         zarr_format=zarr_config.zarr_version,
-                        )
                 )
+        )
 
     @property
     def attrs(self) -> Mapping[str, Any]:
@@ -179,7 +179,7 @@ class ZarrPythonGroup(ZarrGroup):
             zarr_config: ZarrConfig = None,
             data: Optional[ArrayLike] = None,
             **kwargs: Unpack[ZarrArrayConfig],
-            ) -> ZarrPythonArray:
+    ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
             arr = self._zgroup.create_array(name, shape, dtype, **kwargs)
@@ -202,12 +202,12 @@ class ZarrPythonGroup(ZarrGroup):
             "fill_value": None,
             "compressors": _make_compressor(
                     compressor, zarr_config.zarr_version, **compressor_opt
-                    ),
-            }
+            ),
+        }
 
         chunk_key_encoding = _dimension_separator_to_chunk_key_encoding(
                 zarr_config.dimension_separator, zarr_config.zarr_version
-                )
+        )
         if chunk_key_encoding:
             opt["chunk_key_encoding"] = chunk_key_encoding
         arr = self._zgroup.create_array(name=name, shape=shape, **opt)
@@ -221,7 +221,7 @@ class ZarrPythonGroup(ZarrGroup):
             shape: Sequence[int],
             data: ArrayLike = None,
             **kwargs: Unpack[ZarrConfig],
-            ) -> ZarrPythonArray:
+    ) -> ZarrPythonArray:
         """Create a new array using the properties from a base_level object."""
         base_level = self["0"]
         opts = dict(
@@ -234,16 +234,16 @@ class ZarrPythonGroup(ZarrGroup):
                 order=getattr(base_level._array, "order", None),
                 attributes=getattr(
                         getattr(base_level._array, "metadata", None), "attributes", None
-                        ),
+                ),
                 overwrite=True,
-                )
+        )
         # Handle extra options based on metadata type
         meta = getattr(base_level, "metadata", None)
         if meta is not None:
             if hasattr(meta, "dimension_separator"):
                 opts["chunk_key_encoding"] = _dimension_separator_to_chunk_key_encoding(
                         meta.dimension_separator, 2
-                        )
+                )
             if hasattr(meta, "chunk_key_encoding"):
                 opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
             if hasattr(base_level, "serializer"):
@@ -261,7 +261,7 @@ class ZarrPythonGroup(ZarrGroup):
 
 def _make_compressor(
         name: str | None, zarr_version: Literal[2, 3], **prm: dict
-        ) -> CompressorsLike:
+) -> CompressorsLike:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
         return name
@@ -272,14 +272,14 @@ def _make_compressor(
         compressor_map = {
             "blosc": numcodecs.Blosc,
             "zlib": numcodecs.Zstd,
-            }
+        }
     elif zarr_version == 3:
         import zarr.codecs
 
         compressor_map = {
             "blosc": zarr.codecs.BloscCodec,
             "zlib": zarr.codecs.ZstdCodec,
-            }
+        }
     else:
         raise ValueError()
     name = name.lower()
@@ -293,7 +293,7 @@ def _make_compressor(
 
 def _dimension_separator_to_chunk_key_encoding(
         dimension_separator: Literal[".", "/"], zarr_version: Literal[2, 3]
-        ) -> ChunkKeyEncodingLike:
+) -> ChunkKeyEncodingLike:
     dimension_separator = dimension_separator
     if dimension_separator == "." and zarr_version == 2:
         pass
@@ -303,7 +303,7 @@ def _dimension_separator_to_chunk_key_encoding(
         dimension_separator = ChunkKeyEncodingParams(
                 name="default" if zarr_version == 3 else "v2",
                 separator=dimension_separator
-                )
+        )
         return dimension_separator
 
 
@@ -316,7 +316,7 @@ SHARD_FILE_SIZE_LIMIT = (
 
 def _compute_zarr_layout(
         shape: tuple, dtype: DTypeLike, zarr_config: ZarrConfig
-        ) -> tuple[tuple, tuple | None]:
+) -> tuple[tuple, tuple | None]:
     ndim = len(shape)
     if ndim == 5:
         if zarr_config.no_time:
@@ -324,11 +324,11 @@ def _compute_zarr_layout(
         chunk_tc = (
             1 if zarr_config.chunk_time else shape[0],
             1 if zarr_config.chunk_channels else shape[1],
-            )
+        )
         shard_tc = (
             chunk_tc[0] if zarr_config.shard_time else shape[0],
             chunk_tc[1] if zarr_config.shard_channels else shape[1],
-            )
+        )
 
     elif ndim == 4:
         if zarr_config.no_time:
@@ -399,14 +399,14 @@ def _compute_zarr_layout(
                     candidate = L[i]
                 new_product = np.prod(
                         [candidate if j == i else M[j] for j in range(dims)]
-                        )
+                )
                 if new_product <= B_multiplier and candidate > M[i]:
                     M[i] = candidate
                     improved = True
             # Remove dimensions that have reached or exceeded the data size.
             free_dims = [
                 i for i in free_dims if M[i] * chunk_spatial[i] < shape_spatial[i]
-                ]
+            ]
         shard = tuple(M[i] * chunk_spatial[i] for i in range(dims))
 
     shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))

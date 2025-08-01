@@ -7,7 +7,6 @@ from typing import Unpack
 
 import cyclopts
 import numpy as np
-
 # externals
 import wkw
 import zarr
@@ -30,7 +29,7 @@ def convert(
         *,
         zarr_config: ZarrConfig = None,
         **kwargs: Unpack[ZarrConfig],
-        ) -> None:
+) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
 
@@ -83,7 +82,7 @@ def convert(
         offset_x, offset_y = 0, 0
         data = wkw_dataset.read(
                 off=(offset_y, offset_x, idx), shape=[size[1], size[0], 1]
-                )
+        )
         data = data[0, :, :, 0]
         data = np.transpose(data, (1, 0))
         [t0, b0, l0, r0] = find_borders(data)
@@ -108,7 +107,7 @@ def convert(
 
         omz.create_array(
                 f"{level}", shape=shape, dtype="uint8", zarr_config=zarr_config
-                )
+        )
         array = omz[f"{level}"]
 
         # Write each slice
@@ -119,7 +118,7 @@ def convert(
 
             top, bottom, left, right = [
                 k * 2 ** (nblevel - level - 1) for k in low_res_offsets[idx]
-                ]
+            ]
             height, width = size[0] - top - bottom, size[1] - left - right
 
             data = wkw_dataset.read(off=(left, top, idx), shape=[width, height, 1])
@@ -130,8 +129,8 @@ def convert(
                         [
                             [dic[data[i][j]] for j in range(data.shape[1])]
                             for i in range(data.shape[0])
-                            ]
-                        )
+                        ]
+                )
             subdat_size = data.shape
 
             print(
@@ -143,7 +142,7 @@ def convert(
                     idx,
                     "with size",
                     subdat_size,
-                    )
+            )
             if max_load is None or (
                     subdat_size[-2] < max_load and subdat_size[-1] < max_load
             ):

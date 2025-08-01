@@ -9,7 +9,7 @@ from linc_convert.utils.io.zarr.abc import ZarrGroup
 from linc_convert.utils.io.zarr.drivers.zarr_python import (
     ZarrPythonArray,
     ZarrPythonGroup,
-    )
+)
 from linc_convert.utils.zarr_config import DriverLike, ZarrConfig
 
 _DRIVER_ARRAY = {"zarr-python": ZarrPythonArray}
@@ -29,7 +29,7 @@ def open(
         mode: Literal["r", "r+", "a", "w", "w-"] = "a",
         zarr_version: Literal[2, 3] = 3,
         driver: DriverLike = "zarr-python",
-        ) -> ZarrNode:
+) -> ZarrNode:
     """
     Open a Zarr Node (Array or Group) based on the specified driver.
 
@@ -57,7 +57,7 @@ def open_group(
         mode: Literal["r", "r+", "a", "w", "w-"] = "a",
         zarr_version: Literal[2, 3] = 3,
         driver: DriverLike = "zarr-python",
-        ) -> ZarrGroup:
+) -> ZarrGroup:
     """
     Open a Zarr Group based on the specified driver.
 

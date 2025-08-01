@@ -21,7 +21,7 @@ def multi_slice_jp2(tmp_path):
         glymur.Jp2k(
                 f"{tmp_path}/slice{i:03d}.jp2",
                 data=image[..., i],
-                )
+        )
     files = glob.glob(str(os.path.join(tmp_path, "*.jp2")))
     files.sort()
     return files
@@ -35,11 +35,11 @@ def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
             out=str(output),
             zarr_version=zarr_version,
             driver=driver
-            )
+    )
     assert_zarr_equal(
             str(output),
             zarr.storage.ZipStore(expected_zarr, mode="r")
-            )
+    )
 
 
 @pytest.mark.golden
@@ -50,6 +50,6 @@ def test_df_multi_slice_regen_golden(tmp_path, multi_slice_jp2, zarr_version):
             multi_slice_jp2,
             out=str(output),
             zarr_version=zarr_version,
-            )
+    )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

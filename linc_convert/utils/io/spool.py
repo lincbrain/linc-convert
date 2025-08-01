@@ -36,7 +36,7 @@ class SpoolSetInterpreter:
     def __init__(
             self, spool_set_path: str | PathLike[str],
             info_file: str | PathLike[str] = None
-            ) -> None:
+    ) -> None:
         if (
                 os.path.isfile(spool_set_path)
                 and os.path.splitext(spool_set_path)[-1] == ".zip"
@@ -66,7 +66,7 @@ class SpoolSetInterpreter:
             self.numDepths,
             self.spool_shape[2],
             self.spool_shape[0] * len(self.spool_files),
-            )
+        )
 
     def _load_info_file(self, info_file: str | PathLike[str]) -> None:
         loaded_info = loadmat(info_file)
@@ -81,7 +81,7 @@ class SpoolSetInterpreter:
         except (KeyError, IndexError, ValueError) as e:
             warnings.warn(
                     f"ERROR: Unable to extract frame information from info file. {e}"
-                    )
+            )
             return None
         num_frames_per_spool = int(self.config["multiimage"]["ImagesPerFile"])
         num_frames_to_load = num_total_frames - num_bg_frames
@@ -90,7 +90,7 @@ class SpoolSetInterpreter:
 
     def _make_filename_from_spool_set(
             self, spool_entry: str | PathLike[str]
-            ) -> PathLike[str]:
+    ) -> PathLike[str]:
         return os.path.join(self.parent, spool_entry)
 
     @property
@@ -126,7 +126,7 @@ class SpoolSetInterpreter:
             "height": self.config.getint("data", "AOIHeight"),
             "width": self.config.getint("data", "AOIWidth"),
             "stride": self.config.getint("data", "AOIStride"),
-            }
+        }
         # ini info
         dtype = self.config.get("data", "PixelEncoding")
 
@@ -143,7 +143,7 @@ class SpoolSetInterpreter:
 
         self.acquisition_metadata["images"] = self.config.getint(
                 "multiimage", "ImagesPerFile"
-                )
+        )
 
         numDepths = self.acquisition_metadata["height"]
         numColumns = self.acquisition_metadata["stride"] // 2
@@ -254,7 +254,7 @@ class SpoolSetInterpreter:
         axis_0_shape = self.spool_shape[0]
         canvas = np.zeros(
                 (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
-                )
+        )
         for idx, spool_file in enumerate(self):
             start = idx * axis_0_shape
             stop = start + axis_0_shape

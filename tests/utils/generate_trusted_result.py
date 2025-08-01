@@ -19,7 +19,7 @@ if __name__ == "__main__":
         initials = wkw_dir.split("/")[-2][:2]
         output_zarr = os.path.join(
                 tmp_dir, basename + "_dsec_" + initials + ".ome.zarr"
-                )
+        )
 
         webknossos_annotation.convert(wkw_dir, ome_dir, tmp_dir, "{}")
         zarr.copy_all(zarr.open(output_zarr), zarr.open("data/wk.zarr.zip", "w"))

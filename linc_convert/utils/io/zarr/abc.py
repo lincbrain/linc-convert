@@ -15,7 +15,7 @@ from typing import (
     TypedDict,
     Union,
     Unpack,
-    )
+)
 
 import niizarr
 import numpy as np
@@ -168,7 +168,7 @@ class ZarrGroup(ZarrNode):
             *,
             zarr_config: ZarrConfig = None,
             **kwargs: Unpack[ZarrArrayConfig],
-            ) -> ZarrArray:
+    ) -> ZarrArray:
         """Create a new array within this group."""
         ...
 
@@ -179,7 +179,7 @@ class ZarrGroup(ZarrNode):
             shape: Sequence[int],
             data: ArrayLike = None,
             **kwargs: Unpack[ZarrArrayConfig],
-            ) -> ZarrArray:
+    ) -> ZarrArray:
         """Create a new array using metadata of an existing base-level array."""
         ...
 
@@ -189,7 +189,7 @@ class ZarrGroup(ZarrNode):
             ndim: int = 3,
             mode: Literal["mean", "median"] = "median",
             no_pyramid_axis: Optional[int] = None,
-            ) -> list[list[int]]:
+    ) -> list[list[int]]:
         """
         Generate the levels of a pyramid in an existing Zarr.
 
@@ -246,7 +246,7 @@ class ZarrGroup(ZarrNode):
             no_pool: Optional[int] = None,
             multiscales_type: str = "",
             ome_version: Literal["0.4", "0.5"] = "0.4",
-            ) -> None:
+    ) -> None:
         """
         Write OME-compatible metadata into this group.
 
@@ -297,7 +297,7 @@ class ZarrGroup(ZarrNode):
                 no_pool=no_pool,
                 multiscales_type=multiscales_type,
                 ome_version=ome_version,
-                )
+        )
 
     def write_nifti_header(self, header: NiftiHeaderLike) -> None:
         """Write a NIfTI header to the Zarr group."""

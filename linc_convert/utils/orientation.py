@@ -21,7 +21,7 @@ def orientation_ensure_3d(orientation: str) -> str:
         "coronal": "LI",
         "axial": "LP",
         "sagittal": "PI",
-        }.get(orientation.lower(), orientation).upper()
+    }.get(orientation.lower(), orientation).upper()
     if len(orientation) == 2:
         if "L" not in orientation and "R" not in orientation:
             orientation += "R"
@@ -34,7 +34,7 @@ def orientation_ensure_3d(orientation: str) -> str:
 
 def orientation_to_affine(
         orientation: str, vxw: float = 1, vxh: float = 1, vxd: float = 1
-        ) -> np.ndarray:
+) -> np.ndarray:
     """
     Build an affine matrix from an orientation string and voxel size.
 
