@@ -18,8 +18,6 @@ from typing import (
 )
 from urllib.parse import urlparse
 
-import numcodecs
-import numcodecs.abc
 import numpy as np
 import tensorstore as ts
 import zarr
