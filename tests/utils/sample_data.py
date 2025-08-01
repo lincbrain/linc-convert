@@ -7,7 +7,7 @@ import skimage
 def sample_data_variation(
         param: float,
         image: Optional[np.ndarray] = None,
-        output_dtype: Optional[np.dtype] = None
+        output_dtype: Optional[np.dtype] = None,
 ) -> np.ndarray:
     """
     Scale global intensity by (1+param), then wrap values modulo the output dtype range.
@@ -53,7 +53,7 @@ def generate_sample_data_variation(
         n: int,
         param_range: Tuple[float, float] = (-0.95, 0.95),
         image: Optional[np.ndarray] = None,
-        output_dtype: Optional[np.dtype] = None
+        output_dtype: Optional[np.dtype] = None,
 ) -> List[np.ndarray]:
     """
     Generate `n` deterministic, wrapped‐intensity variations.
@@ -78,6 +78,5 @@ def generate_sample_data_variation(
         image = skimage.data.brain()
     params = np.linspace(param_range[0], param_range[1], n)
     return [
-        sample_data_variation(p, image=image, output_dtype=output_dtype)
-        for p in params
+        sample_data_variation(p, image=image, output_dtype=output_dtype) for p in params
     ]

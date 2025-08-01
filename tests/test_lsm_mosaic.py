@@ -36,15 +36,9 @@ def test_lsm_mosaic(tmp_path, mosaic_tiff, zarr_version, driver):
     expected_zarr = f"data/lsm_mosaic_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "mosaic.nii.zarr"
     mosaic.convert(
-            str(mosaic_tiff),
-            out=str(output),
-            zarr_version=zarr_version,
-            driver=driver
+            str(mosaic_tiff), out=str(output), zarr_version=zarr_version, driver=driver
     )
-    assert_zarr_equal(
-            str(output),
-            zarr.storage.ZipStore(expected_zarr, mode="r")
-    )
+    assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
 
 @pytest.mark.golden

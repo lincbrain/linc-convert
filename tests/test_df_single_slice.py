@@ -25,15 +25,10 @@ def test_df_single_slice(tmp_path, single_slice_jp2, zarr_version, driver):
     expected_zarr = f"data/df_single_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "single_slice.zarr"
     single_slice.convert(
-            str(single_slice_jp2),
-            out=str(output),
-            zarr_version=zarr_version,
+            str(single_slice_jp2), out=str(output), zarr_version=zarr_version,
             driver=driver
     )
-    assert_zarr_equal(
-            str(output),
-            zarr.storage.ZipStore(expected_zarr, mode="r")
-    )
+    assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
 
 @pytest.mark.golden

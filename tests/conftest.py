@@ -3,15 +3,16 @@ from pathlib import Path
 
 import pytest
 
-DOWNLOAD_CMD = ["dandi",
-                "download",
-                "https://lincbrain.org/dandiset/000051/draft",
-                "-i",
-                "linc",
-                "-e",
-                "refresh",
-                "--preserve-tree"
-                ]
+DOWNLOAD_CMD = [
+    "dandi",
+    "download",
+    "https://lincbrain.org/dandiset/000051/draft",
+    "-i",
+    "linc",
+    "-e",
+    "refresh",
+    "--preserve-tree",
+]
 
 
 @pytest.fixture(scope="session")

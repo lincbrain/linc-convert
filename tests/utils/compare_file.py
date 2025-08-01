@@ -16,7 +16,7 @@ def load_file(path):
     """
     ext = os.path.splitext(path)[1].lower()
     # Handle .nii and .nii.gz
-    if ext in ['.nii', '.gz'] and (path.endswith('.nii') or path.endswith('.nii.gz')):
+    if ext in [".nii", ".gz"] and (path.endswith(".nii") or path.endswith(".nii.gz")):
         try:
             import nibabel as nib
         except ImportError:
@@ -27,7 +27,7 @@ def load_file(path):
         return data
 
     # Handle .mat
-    if ext == '.mat':
+    if ext == ".mat":
         try:
             from scipy.io import loadmat
         except ImportError:
@@ -35,22 +35,23 @@ def load_file(path):
             sys.exit(1)
         mat = loadmat(path)
         # Extract variable array from mat dict (ignoring metadata keys)
-        keys = [k for k in mat.keys() if not k.startswith('__')]
+        keys = [k for k in mat.keys() if not k.startswith("__")]
         if len(keys) != 1:
             print(
                     f"Error: Expected one variable in the MAT file, found "
-                    f"{len(keys)}: {keys}")
+                    f"{len(keys)}: {keys}"
+            )
             sys.exit(1)
         return mat[keys[0]]
 
     # Handle .zarr
-    if ext == '.zarr' or '.zarr' in path:
+    if ext == ".zarr" or ".zarr" in path:
         try:
             import zarr
         except ImportError:
             print("Error: zarr is not installed.")
             sys.exit(1)
-        arr = zarr.open(path, mode='r')
+        arr = zarr.open(path, mode="r")
         return arr[:]  # load full array into memory
 
     print(f"Unsupported file extension: {ext}")
@@ -99,7 +100,7 @@ def _cmp_zarr_archives(path1: str, path2: str) -> bool:
 def assert_zarr_equal(
         store1: Union[str, zarr.storage.StoreLike],
         store2: Union[str, zarr.storage.StoreLike],
-        ignore_nii: bool = False
+        ignore_nii: bool = False,
 ) -> None:
     """
     Assert that two Zarr groups—opened from either a path or a store—have identical
@@ -123,15 +124,17 @@ def assert_zarr_equal(
     if dict(zarr1.attrs) != dict(zarr2.attrs):
         diffs.append(
                 f"Group attrs differ:\n ‣ {json.dumps(dict(zarr1.attrs))}\n ‣ "
-                f"{json.dumps(dict(zarr2.attrs))}")
+                f"{json.dumps(dict(zarr2.attrs))}"
+        )
     if set(zarr1.keys()) != set(zarr2.keys()):
         diffs.append(
                 f"Group keys differ:\n ‣ {set(zarr1.keys())} in {zarr1.store_path}\n "
-                f"‣ {set(zarr2.keys())} in {zarr2.store_path}")
+                f"‣ {set(zarr2.keys())} in {zarr2.store_path}"
+        )
 
     keys = set(zarr1.keys()).intersection(set(zarr2.keys()))
     for key in keys:
-        if ignore_nii and key == 'nifti':
+        if ignore_nii and key == "nifti":
             continue
         obj1 = zarr1[key]
         obj2 = zarr2[key]
@@ -142,7 +145,8 @@ def assert_zarr_equal(
                 diffs.append(
                         f"Attributes for key '{key}' differ:\n"
                         f" ‣ {dict(obj1.attrs)}\n"
-                        f" ‣ {dict(obj2.attrs)}")
+                        f" ‣ {dict(obj2.attrs)}"
+                )
             try:
                 np.testing.assert_array_equal(obj1[:], obj2[:])
             except AssertionError as e:
@@ -160,9 +164,9 @@ def assert_zarr_equal(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Compare arrays in two files.')
-    parser.add_argument('file1', help='First file (.nii, .nii.gz, .mat, .zarr)')
-    parser.add_argument('file2', help='Second file (.nii, .nii.gz, .mat, .zarr)')
+    parser = argparse.ArgumentParser(description="Compare arrays in two files.")
+    parser.add_argument("file1", help="First file (.nii, .nii.gz, .mat, .zarr)")
+    parser.add_argument("file2", help="Second file (.nii, .nii.gz, .mat, .zarr)")
     args = parser.parse_args()
 
     a = load_file(args.file1)
@@ -175,5 +179,5 @@ def main():
         print(e)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

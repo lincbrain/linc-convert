@@ -29,7 +29,7 @@ def write_zyla_spool_set(
         image: np.ndarray,
         spool_set_path: str,
         *,
-        pixel_encoding: str = 'Mono16',
+        pixel_encoding: str = "Mono16",
         images_per_file: int = None,
 ):
     """
@@ -53,9 +53,9 @@ def write_zyla_spool_set(
     numDepths, numColumns, numFrames = image.shape
     if images_per_file is None:
         images_per_file = numFrames
-    if pixel_encoding == 'Mono16':
+    if pixel_encoding == "Mono16":
         dtype = np.uint16
-    elif pixel_encoding == 'Mono8':
+    elif pixel_encoding == "Mono8":
         dtype = np.uint8
     else:
         raise ValueError("pixel_encoding must be 'Mono16' or 'Mono8'")
@@ -77,7 +77,7 @@ def write_zyla_spool_set(
     os.makedirs(spool_set_path, exist_ok=True)
 
     # marker for format detection
-    open(os.path.join(spool_set_path, 'Spooled files.sifx'), 'wb').close()
+    open(os.path.join(spool_set_path, "Spooled files.sifx"), "wb").close()
 
     # write acquisitionmetadata.ini
     ini = f"""
@@ -91,8 +91,10 @@ ImageSizeBytes = {frame_bytes}
 [multiimage]
 ImagesPerFile = {images_per_file}
 """
-    with open(os.path.join(spool_set_path, 'acquisitionmetadata.ini'), 'w',
-              encoding='utf-8') as f:
+    with open(
+            os.path.join(spool_set_path, "acquisitionmetadata.ini"), "w",
+            encoding="utf-8"
+    ) as f:
         f.write(ini)
 
     # split into as many spool files as needed
@@ -113,7 +115,7 @@ ImagesPerFile = {images_per_file}
         # name = reversed zero‑padded index + "spool.dat"
         rev = str(file_idx).zfill(10)[::-1]
         fn = f"{rev}spool.dat"
-        with open(os.path.join(spool_set_path, fn), 'wb') as f:
+        with open(os.path.join(spool_set_path, fn), "wb") as f:
             f.write(buf.tobytes())
 
 
@@ -123,10 +125,7 @@ def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
     spool.convert(inp=spool_dat, out=str(output), overlap=0)
 
     # assert_zarr_equal is assumed available from your test utils
-    assert_zarr_equal(
-            str(output),
-            zarr.storage.ZipStore(expected_zarr, mode="r")
-    )
+    assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
 
 @pytest.mark.golden

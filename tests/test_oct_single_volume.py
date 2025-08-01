@@ -29,8 +29,7 @@ def single_volume_mat(tmp_path):
         ],
 )
 def test_oct_single_volume(
-        tmp_path, single_volume_mat, zarr_version, expected_zarr,
-        driver
+        tmp_path, single_volume_mat, zarr_version, expected_zarr, driver
 ):
     output = tmp_path / "single_volume.nii.zarr"
 
@@ -59,8 +58,7 @@ def test_oct_single_volume(
         ],
 )
 def test_oct_single_volume_regen_golden(
-        tmp_path, single_volume_mat, zarr_version,
-        expected_zarr
+        tmp_path, single_volume_mat, zarr_version, expected_zarr
 ):
     """
     Rebuild single-volume golden archives. Only run with --regenerate-golden.
