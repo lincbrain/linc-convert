@@ -92,11 +92,11 @@ class ZarrTSArray(ZarrArray):
 
     @classmethod
     def open(
-            cls,
-            path: Union[str, PathLike],
-            *,
-            zarr_version: Literal[2, 3] = 3,
-            mode: Literal["r", "r+", "a", "w", "w-"] = "a",
+        cls,
+        path: Union[str, PathLike],
+        *,
+        zarr_version: Literal[2, 3] = 3,
+        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
     ) -> "ZarrTSArray":
         """
         Open an existing TensorStore-based Zarr array.
@@ -160,16 +160,16 @@ class ZarrTSGroup(ZarrGroup):
         ZarrTSGroup
         """
         return cls.open(
-                zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
+            zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
         )
 
     @classmethod
     def open(
-            cls,
-            path: Union[str, PathLike],
-            mode: Literal["r", "r+", "a", "w", "w-"] = "a",
-            *,
-            zarr_version: Literal[2, 3] = 3,
+        cls,
+        path: Union[str, PathLike],
+        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
+        *,
+        zarr_version: Literal[2, 3] = 3,
     ) -> "ZarrTSGroup":
         """
         Open or create a Zarr group backed by TensorStore.
@@ -217,18 +217,24 @@ class ZarrTSGroup(ZarrGroup):
         """Get the Zarr format version."""
         return self._zarr_version
 
-    def __getitem__(self, name: str) -> Union[ZarrTSArray, "ZarrTSGroup"]:
+    def __getitem__(self, key: str) -> Union[ZarrTSArray, "ZarrTSGroup"]:
         """Get a subgroup or array by name within this group."""
-        meta = _detect_metadata(self._path / name)
+        meta = _detect_metadata(self._path / key)
         if not meta:
-            raise KeyError(f"Key '{name}' not found")
+            raise KeyError(f"Key '{key}' not found")
         if meta[0] == "group":
-            return ZarrTSGroup(self._path / name)
-        return ZarrTSArray.open(self._path / name, zarr_version=meta[1])
+            return ZarrTSGroup(self._path / key)
+        return ZarrTSArray.open(self._path / key, zarr_version=meta[1])
 
-    def __delitem__(self, name: str) -> None:
+    def __setitem__(self, key: str, value: Union[ZarrTSArray, "ZarrTSGroup"]) -> None:
+        """Set a subgroup or array by name within this group."""
+        raise NotImplementedError(
+            "Assign to zarr group is not supported with tensorstore."
+        )
+
+    def __delitem__(self, key: str) -> None:
         """Delete a subgroup or array by name within this group."""
-        target = self._path / name
+        target = self._path / key
         if target.exists():
             target.rmdir(recursive=True)
 
@@ -265,14 +271,14 @@ class ZarrTSGroup(ZarrGroup):
         return self.open(self._path / name, mode=mode, zarr_version=self._zarr_version)
 
     def create_array(
-            self,
-            name: str,
-            shape: Sequence[int],
-            dtype: DTypeLike = np.int32,
-            *,
-            zarr_config: Optional[ZarrConfig] = None,
-            data: Optional[ArrayLike] = None,
-            **kwargs: Unpack[ZarrArrayConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        dtype: DTypeLike = np.int32,
+        *,
+        zarr_config: Optional[ZarrConfig] = None,
+        data: Optional[ArrayLike] = None,
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrTSArray:
         """
         Create a new array within this group.
@@ -291,19 +297,19 @@ class ZarrTSGroup(ZarrGroup):
         """
         if zarr_config is None:
             conf = default_write_config(
-                    self._path / name, shape=shape, dtype=dtype, **kwargs
+                self._path / name, shape=shape, dtype=dtype, **kwargs
             )
         else:
             conf = default_write_config(
-                    self._path / name,
-                    shape=shape,
-                    dtype=dtype,
-                    chunk=zarr_config.chunk,
-                    shard=zarr_config.shard,
-                    compressor=zarr_config.compressor,
-                    # TODO: implement this
-                    # compressor_opt=ast.literal_eval(zarr_config.compressor_opt),
-                    version=zarr_config.zarr_version,
+                self._path / name,
+                shape=shape,
+                dtype=dtype,
+                chunk=zarr_config.chunk,
+                shard=zarr_config.shard,
+                compressor=zarr_config.compressor,
+                # TODO: implement this
+                # compressor_opt=ast.literal_eval(zarr_config.compressor_opt),
+                version=zarr_config.zarr_version,
             )
         conf.update(delete_existing=True, create=True)
         arr = ts.open(conf).result()
@@ -312,11 +318,11 @@ class ZarrTSGroup(ZarrGroup):
         return ZarrTSArray(arr)
 
     def create_array_from_base(
-            self,
-            name: str,
-            shape: Sequence[int],
-            data: Optional[ArrayLike] = None,
-            **kwargs: Unpack[ZarrArrayConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        data: Optional[ArrayLike] = None,
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrTSArray:
         """
         Create a new array using metadata of an existing base-level array.
@@ -385,10 +391,10 @@ def make_kvstore(path: str | os.PathLike) -> dict:
 
 
 def auto_shard_size(
-        max_shape: list[int],
-        itemsize: int | np.dtype | str,
-        max_file_size: int = 2 * 1024 ** 4,
-        compression_ratio: float = 2,
+    max_shape: list[int],
+    itemsize: int | np.dtype | str,
+    max_file_size: int = 2 * 1024 ** 4,
+    compression_ratio: float = 2,
 ) -> list[int]:
     """
     Find maximal shard size that ensures file size below cap.
@@ -439,9 +445,9 @@ def auto_shard_size(
 
 
 def fix_shard_chunk(
-        shard: list[int],
-        chunk: list[int],
-        shape: list[int],
+    shard: list[int],
+    chunk: list[int],
+    shape: list[int],
 ) -> tuple[list[int], list[int]]:
     """
     Fix incompatibilities between chunk and shard size.
@@ -562,14 +568,14 @@ def _detect_metadata(path: PathLike) -> Optional[Tuple[str, int]]:
 
 
 def default_write_config(
-        path: os.PathLike | str,
-        shape: list[int],
-        dtype: np.dtype | str,
-        chunk: list[int] = [32],
-        shard: list[int] | Literal["auto"] | None = None,
-        compressor: str = "blosc",
-        compressor_opt: dict | None = None,
-        version: int = 3,
+    path: os.PathLike | str,
+    shape: list[int],
+    dtype: np.dtype | str,
+    chunk: list[int] = [32],
+    shard: list[int] | Literal["auto"] | None = None,
+    compressor: str = "blosc",
+    compressor_opt: dict | None = None,
+    version: int = 3,
 ) -> dict:
     """
     Generate a default TensorStore configuration.
@@ -714,7 +720,7 @@ def _init_group(group_path: PathLike, version: int) -> None:
     group_path.mkdir(parents=True, exist_ok=True)
     if version == 3:
         (group_path / "zarr.json").write_text(
-                json.dumps({"zarr_format": 3, "node_type": "group"})
+            json.dumps({"zarr_format": 3, "node_type": "group"})
         )
     else:
         (group_path / ".zgroup").write_text(json.dumps({"zarr_format": 2}))

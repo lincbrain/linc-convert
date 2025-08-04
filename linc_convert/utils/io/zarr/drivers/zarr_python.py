@@ -90,7 +90,7 @@ class ZarrPythonArray(ZarrArray):
         if hasattr(self._array, name):
             return getattr(self._array, name)
         raise AttributeError(
-                f"'{self.__class__.__name__}' object has no attribute '{name}'"
+            f"'{self.__class__.__name__}' object has no attribute '{name}'"
         )
 
 
@@ -115,12 +115,12 @@ class ZarrPythonGroup(ZarrGroup):
         """Create a Zarr group from a configuration object."""
         store = zarr.storage.LocalStore(zarr_config.out)
         return cls(
-                zarr.group(
-                        store=store,
-                        # TODO: figure out overwrite
-                        # overwrite=overwrite,
-                        zarr_format=zarr_config.zarr_version,
-                )
+            zarr.group(
+                store=store,
+                # TODO: figure out overwrite
+                # overwrite=overwrite,
+                zarr_format=zarr_config.zarr_version,
+            )
         )
 
     @property
@@ -137,11 +137,11 @@ class ZarrPythonGroup(ZarrGroup):
         """Get the names of all subgroups and arrays in this group."""
         yield from self._zgroup.keys()
 
-    def __getitem__(self, name: str) -> Union[ZarrPythonArray, "ZarrPythonGroup"]:
+    def __getitem__(self, key: str) -> Union[ZarrPythonArray, "ZarrPythonGroup"]:
         """Get a subgroup or array by name within this group."""
-        if name not in self._zgroup:
-            raise KeyError(f"Key '{name}' not found in group '{self.store_path}'")
-        item = self._zgroup[name]
+        if key not in self._zgroup:
+            raise KeyError(f"Key '{key}' not found in group '{self.store_path}'")
+        item = self._zgroup[key]
         if isinstance(item, zarr.Group):
             return ZarrPythonGroup(item)
         elif isinstance(item, zarr.Array):
@@ -149,9 +149,20 @@ class ZarrPythonGroup(ZarrGroup):
         else:
             raise TypeError(f"Unsupported item type: {type(item)}")
 
-    def __delitem__(self, name: str) -> None:
+    def __setitem__(
+        self, key: str, value: Union[ZarrPythonArray, "ZarrPythonGroup"]
+    ) -> None:
+        """Set a subgroup or array by name within this group."""
+        if isinstance(value, ZarrPythonGroup):
+            self._zgroup[key] = value._zgroup
+        elif isinstance(value, ZarrPythonArray):
+            self._zgroup[key] = value._array
+        else:
+            raise TypeError(f"Unsupported item type: {type(value)}")
+
+    def __delitem__(self, key: str) -> None:
         """Delete a subgroup or array by name within this group."""
-        del self._zgroup[name]
+        del self._zgroup[key]
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over the names of all subgroups and arrays in this group."""
@@ -171,14 +182,14 @@ class ZarrPythonGroup(ZarrGroup):
         return ZarrPythonGroup(subgroup)
 
     def create_array(
-            self,
-            name: str,
-            shape: Sequence[int],
-            dtype: DTypeLike,
-            *,
-            zarr_config: ZarrConfig = None,
-            data: Optional[ArrayLike] = None,
-            **kwargs: Unpack[ZarrArrayConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        dtype: DTypeLike,
+        *,
+        zarr_config: ZarrConfig = None,
+        data: Optional[ArrayLike] = None,
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
@@ -201,12 +212,12 @@ class ZarrPythonGroup(ZarrGroup):
             "dtype": np.dtype(dtype).str,
             "fill_value": None,
             "compressors": _make_compressor(
-                    compressor, zarr_config.zarr_version, **compressor_opt
+                compressor, zarr_config.zarr_version, **compressor_opt
             ),
         }
 
         chunk_key_encoding = _dimension_separator_to_chunk_key_encoding(
-                zarr_config.dimension_separator, zarr_config.zarr_version
+            zarr_config.dimension_separator, zarr_config.zarr_version
         )
         if chunk_key_encoding:
             opt["chunk_key_encoding"] = chunk_key_encoding
@@ -216,33 +227,33 @@ class ZarrPythonGroup(ZarrGroup):
         return ZarrPythonArray(arr)
 
     def create_array_from_base(
-            self,
-            name: str,
-            shape: Sequence[int],
-            data: ArrayLike = None,
-            **kwargs: Unpack[ZarrConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        data: ArrayLike = None,
+        **kwargs: Unpack[ZarrConfig],
     ) -> ZarrPythonArray:
         """Create a new array using the properties from a base_level object."""
         base_level = self["0"]
         opts = dict(
-                dtype=base_level.dtype,
-                chunks=base_level.chunks,
-                shards=getattr(base_level, "shards", None),
-                filters=getattr(base_level._array, "filters", None),
-                compressors=getattr(base_level._array, "compressors", None),
-                fill_value=getattr(base_level._array, "fill_value", None),
-                order=getattr(base_level._array, "order", None),
-                attributes=getattr(
-                        getattr(base_level._array, "metadata", None), "attributes", None
-                ),
-                overwrite=True,
+            dtype=base_level.dtype,
+            chunks=base_level.chunks,
+            shards=getattr(base_level, "shards", None),
+            filters=getattr(base_level._array, "filters", None),
+            compressors=getattr(base_level._array, "compressors", None),
+            fill_value=getattr(base_level._array, "fill_value", None),
+            order=getattr(base_level._array, "order", None),
+            attributes=getattr(
+                getattr(base_level._array, "metadata", None), "attributes", None
+            ),
+            overwrite=True,
         )
         # Handle extra options based on metadata type
         meta = getattr(base_level, "metadata", None)
         if meta is not None:
             if hasattr(meta, "dimension_separator"):
                 opts["chunk_key_encoding"] = _dimension_separator_to_chunk_key_encoding(
-                        meta.dimension_separator, 2
+                    meta.dimension_separator, 2
                 )
             if hasattr(meta, "chunk_key_encoding"):
                 opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
@@ -260,7 +271,7 @@ class ZarrPythonGroup(ZarrGroup):
 
 
 def _make_compressor(
-        name: str | None, zarr_version: Literal[2, 3], **prm: dict
+    name: str | None, zarr_version: Literal[2, 3], **prm: dict
 ) -> CompressorsLike:
     """Build compressor object from name and options."""
     if not isinstance(name, str):
@@ -292,7 +303,7 @@ def _make_compressor(
 
 
 def _dimension_separator_to_chunk_key_encoding(
-        dimension_separator: Literal[".", "/"], zarr_version: Literal[2, 3]
+    dimension_separator: Literal[".", "/"], zarr_version: Literal[2, 3]
 ) -> ChunkKeyEncodingLike:
     dimension_separator = dimension_separator
     if dimension_separator == "." and zarr_version == 2:
@@ -301,21 +312,20 @@ def _dimension_separator_to_chunk_key_encoding(
         pass
     else:
         dimension_separator = ChunkKeyEncodingParams(
-                name="default" if zarr_version == 3 else "v2",
-                separator=dimension_separator
+            name="default" if zarr_version == 3 else "v2", separator=dimension_separator
         )
         return dimension_separator
 
 
 SHARD_FILE_SIZE_LIMIT = (
-        2  # compression ratio
-        * 2  # GB
-        * 2 ** 30  # GB->Bytes
+    2  # compression ratio
+    * 2  # GB
+    * 2 ** 30  # GB->Bytes
 )
 
 
 def _compute_zarr_layout(
-        shape: tuple, dtype: DTypeLike, zarr_config: ZarrConfig
+    shape: tuple, dtype: DTypeLike, zarr_config: ZarrConfig
 ) -> tuple[tuple, tuple | None]:
     ndim = len(shape)
     if ndim == 5:
@@ -398,7 +408,7 @@ def _compute_zarr_layout(
                 if candidate * chunk_spatial[i] >= shape_spatial[i]:
                     candidate = L[i]
                 new_product = np.prod(
-                        [candidate if j == i else M[j] for j in range(dims)]
+                    [candidate if j == i else M[j] for j in range(dims)]
                 )
                 if new_product <= B_multiplier and candidate > M[i]:
                     M[i] = candidate

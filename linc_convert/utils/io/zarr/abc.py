@@ -136,12 +136,16 @@ class ZarrGroup(ZarrNode):
         ...
 
     @abstractmethod
-    def __getitem__(self, name: str) -> ZarrNode:
+    def __getitem__(self, key: str) -> ZarrNode:
         """Get a subgroup or array by name within this group."""
         ...
 
     @abstractmethod
-    def __delitem__(self, name: str) -> None:
+    def __setitem__(self, key: str, value: ZarrNode) -> None:
+        """Set a subgroup or array by name within this group."""
+
+    @abstractmethod
+    def __delitem__(self, key: str) -> None:
         """Delete a subgroup or array by name within this group."""
         ...
 
