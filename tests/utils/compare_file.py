@@ -112,7 +112,8 @@ def assert_zarr_equal(
         A filesystem path (str) or a Zarr store/mapping pointing to the first group.
     store2 : StoreLike
         A filesystem path (str) or a Zarr store/mapping pointing to the second group.
-
+    ignore_nii: Bool
+        Ignore Nifti header in the zarr group
     Returns
     -------
     None
