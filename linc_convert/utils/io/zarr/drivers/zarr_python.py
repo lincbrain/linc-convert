@@ -113,7 +113,11 @@ class ZarrPythonGroup(ZarrGroup):
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
-        store = zarr.storage.LocalStore(zarr_config.out)
+
+        if zarr_config.out.startswith("/") or zarr_config.out.startswith("\\"):
+            store = zarr.storage.LocalStore(zarr_config.out)
+        else:
+            store = zarr.storage.FsspecStore(zarr_config.out)
         return cls(
             zarr.group(
                 store=store,
