@@ -6,6 +6,7 @@ from numbers import Number
 from os import PathLike
 from typing import (
     Any,
+    Callable,
     List,
     Literal,
     Mapping,
@@ -191,7 +192,7 @@ class ZarrGroup(ZarrNode):
         self,
         levels: int = -1,
         ndim: int = 3,
-        mode: Literal["mean", "median"] = "median",
+        mode: Literal["mean", "median"] | Callable = "mean",
         no_pyramid_axis: Optional[int] = None,
     ) -> list[list[int]]:
         """
@@ -205,7 +206,7 @@ class ZarrGroup(ZarrNode):
         ndim : int
             Number of spatial dimensions.
         mode : {"mean", "median"}
-            Use mean or median downsampling.
+            Function to be used for down-sampling, either a callable or mean or median.
         no_pyramid_axis : int | None
             Axis to leave unsampled.
 
@@ -219,7 +220,13 @@ class ZarrGroup(ZarrNode):
         batch_shape, spatial_shape = base.shape[:-ndim], base.shape[-ndim:]
         all_shapes = [spatial_shape]
         chunk_size = base.chunks[-ndim:]
-        window = {"median": da.median, "mean": da.mean}[mode]
+        if isinstance(mode, Callable):
+            window = mode
+        else:
+            window_func = {"median": da.median, "mean": da.mean}
+            if mode not in window_func:
+                raise ValueError(f"Unsupported mode: {mode}")
+            window = [mode]
 
         if levels == -1:
             levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
