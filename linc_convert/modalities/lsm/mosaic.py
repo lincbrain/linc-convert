@@ -211,7 +211,7 @@ def convert(
             f = TiffFile(fname)
             arr[slicer] = f.asarray()
     print("")
-    omz.generate_pyramid(mode="median")
+    omz.generate_pyramid(mode="mean")
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")

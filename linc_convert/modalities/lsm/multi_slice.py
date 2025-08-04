@@ -198,7 +198,7 @@ def convert(
         )
         array[slicer] = dat
     print("")
-    omz.generate_pyramid(mode="median")
+    omz.generate_pyramid(mode="mean")
     print("")
 
     # Write OME-Zarr multiscale metadata
