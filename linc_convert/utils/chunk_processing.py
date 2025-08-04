@@ -8,7 +8,7 @@ from linc_convert.utils.math import ceildiv
 
 
 def chunk_slice_generator(
-        arr_shape: Sequence[int], chunk_shape: Sequence[int]
+    arr_shape: Sequence[int], chunk_shape: Sequence[int]
 ) -> Generator:
     """
     Generate slice indices for chunking an array based on the chunk size.
@@ -42,8 +42,8 @@ def chunk_slice_generator(
         # Create slice objects for each dimension,
         # ensuring we don't go beyond the array's bounds
         slices = tuple(
-                slice(i * c, min((i + 1) * c, dim))
-                for i, c, dim in zip(index, chunk_shape, shape)
+            slice(i * c, min((i + 1) * c, dim))
+            for i, c, dim in zip(index, chunk_shape, shape)
         )
         # Prepend an Ellipsis to preserve any preceding (non-chunked) dimensions
         full_slice = (...,) + slices

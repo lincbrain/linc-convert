@@ -26,11 +26,11 @@ def spool_dat(tmp_path):
 
 
 def write_zyla_spool_set(
-        image: np.ndarray,
-        spool_set_path: str,
-        *,
-        pixel_encoding: str = "Mono16",
-        images_per_file: int = None,
+    image: np.ndarray,
+    spool_set_path: str,
+    *,
+    pixel_encoding: str = "Mono16",
+    images_per_file: int = None,
 ):
     """
     Given `image` of shape (numDepths, numColumns, numFrames),
@@ -92,8 +92,7 @@ ImageSizeBytes = {frame_bytes}
 ImagesPerFile = {images_per_file}
 """
     with open(
-            os.path.join(spool_set_path, "acquisitionmetadata.ini"), "w",
-            encoding="utf-8"
+        os.path.join(spool_set_path, "acquisitionmetadata.ini"), "w", encoding="utf-8"
     ) as f:
         f.write(ini)
 

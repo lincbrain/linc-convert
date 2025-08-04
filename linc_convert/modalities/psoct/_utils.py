@@ -31,7 +31,7 @@ def make_json(oct_meta: str) -> dict:
     """
 
     def _parse_value_unit(
-            string: str, n: int = None
+        string: str, n: int = None
     ) -> tuple[float | list[float], str | Any]:
         number = r"-?(\d+\.?\d*|\d*\.?\d+)(E-?\d+)?"
         value = "x".join([number] * (n or 1))

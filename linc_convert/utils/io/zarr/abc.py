@@ -161,34 +161,34 @@ class ZarrGroup(ZarrNode):
 
     @abstractmethod
     def create_array(
-            self,
-            name: str,
-            shape: Sequence[int],
-            dtype: DTypeLike,
-            *,
-            zarr_config: ZarrConfig = None,
-            **kwargs: Unpack[ZarrArrayConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        dtype: DTypeLike,
+        *,
+        zarr_config: ZarrConfig = None,
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrArray:
         """Create a new array within this group."""
         ...
 
     @abstractmethod
     def create_array_from_base(
-            self,
-            name: str,
-            shape: Sequence[int],
-            data: ArrayLike = None,
-            **kwargs: Unpack[ZarrArrayConfig],
+        self,
+        name: str,
+        shape: Sequence[int],
+        data: ArrayLike = None,
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrArray:
         """Create a new array using metadata of an existing base-level array."""
         ...
 
     def generate_pyramid(
-            self,
-            levels: int = -1,
-            ndim: int = 3,
-            mode: Literal["mean", "median"] = "median",
-            no_pyramid_axis: Optional[int] = None,
+        self,
+        levels: int = -1,
+        ndim: int = 3,
+        mode: Literal["mean", "median"] = "median",
+        no_pyramid_axis: Optional[int] = None,
     ) -> list[list[int]]:
         """
         Generate the levels of a pyramid in an existing Zarr.
@@ -234,18 +234,18 @@ class ZarrGroup(ZarrNode):
         return all_shapes
 
     def write_ome_metadata(
-            self,
-            axes: List[str],
-            space_scale: Union[float, List[float]] = 1.0,
-            time_scale: float = 1.0,
-            space_unit: str = "micrometer",
-            time_unit: str = "second",
-            name: str = "",
-            pyramid_aligns: Union[str, int, List[str], List[int]] = 2,
-            levels: Optional[int] = None,
-            no_pool: Optional[int] = None,
-            multiscales_type: str = "",
-            ome_version: Literal["0.4", "0.5"] = "0.4",
+        self,
+        axes: List[str],
+        space_scale: Union[float, List[float]] = 1.0,
+        time_scale: float = 1.0,
+        space_unit: str = "micrometer",
+        time_unit: str = "second",
+        name: str = "",
+        pyramid_aligns: Union[str, int, List[str], List[int]] = 2,
+        levels: Optional[int] = None,
+        no_pool: Optional[int] = None,
+        multiscales_type: str = "",
+        ome_version: Literal["0.4", "0.5"] = "0.4",
     ) -> None:
         """
         Write OME-compatible metadata into this group.
@@ -285,18 +285,18 @@ class ZarrGroup(ZarrNode):
         None.
         """
         niizarr.write_ome_metadata(
-                self._get_zarr_python_group(),
-                space_scale=space_scale,
-                time_scale=time_scale,
-                space_unit=space_unit,
-                time_unit=time_unit,
-                axes=axes,
-                name=name,
-                pyramid_aligns=pyramid_aligns,
-                levels=levels,
-                no_pool=no_pool,
-                multiscales_type=multiscales_type,
-                ome_version=ome_version,
+            self._get_zarr_python_group(),
+            space_scale=space_scale,
+            time_scale=time_scale,
+            space_unit=space_unit,
+            time_unit=time_unit,
+            axes=axes,
+            name=name,
+            pyramid_aligns=pyramid_aligns,
+            levels=levels,
+            no_pool=no_pool,
+            multiscales_type=multiscales_type,
+            ome_version=ome_version,
         )
 
     def write_nifti_header(self, header: NiftiHeaderLike) -> None:

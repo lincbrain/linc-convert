@@ -32,18 +32,18 @@ def test_oct_multi_slice(tmp_path, multi_slice_mats, zarr_version, driver):
     expected_zarr = f"data/oct_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
-            multi_slice_mats,
-            out=str(output),
-            key="Psi_ObsLSQ",
-            zarr_version=zarr_version,
-            overwrite=True,
-            chunk=(64,),
-            driver=driver,
+        multi_slice_mats,
+        out=str(output),
+        key="Psi_ObsLSQ",
+        zarr_version=zarr_version,
+        overwrite=True,
+        chunk=(64,),
+        driver=driver,
     )
 
     assert_zarr_equal(
-            str(output),
-            zarr.storage.ZipStore(expected_zarr, mode="r"),
+        str(output),
+        zarr.storage.ZipStore(expected_zarr, mode="r"),
     )
 
 
@@ -52,13 +52,13 @@ def test_oct_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version):
     expected_zarr = f"data/oct_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
     multi_slice.convert(
-            multi_slice_mats,
-            out=str(output),
-            key="Psi_ObsLSQ",
-            zarr_version=zarr_version,
-            overwrite=True,
-            chunk=(64,),
-            driver="zarr-python",
+        multi_slice_mats,
+        out=str(output),
+        key="Psi_ObsLSQ",
+        zarr_version=zarr_version,
+        overwrite=True,
+        chunk=(64,),
+        driver="zarr-python",
     )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
@@ -72,16 +72,16 @@ def test_oct_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, driv
     files.sort()
     output_zarr = tmp_path / "output.zarr"
     multi_slice.convert(
-            files,
-            out=str(output_zarr),
-            key="Psi_ObsLSQ",
-            zarr_version=2,
-            overwrite=True,
-            driver=driver,
+        files,
+        out=str(output_zarr),
+        key="Psi_ObsLSQ",
+        zarr_version=2,
+        overwrite=True,
+        driver=driver,
     )
     assert_zarr_equal(
-            str(output_zarr),
-            zarr.storage.ZipStore(expected_zarr, mode="r"),
+        str(output_zarr),
+        zarr.storage.ZipStore(expected_zarr, mode="r"),
     )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output_zarr))
@@ -90,7 +90,7 @@ def test_oct_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, driv
 @pytest.mark.golden
 @pytest.mark.heavy
 def test_oct_multi_slice_heavy_regen_golden(
-        test_data_heavy_dir, tmp_path, zarr_version
+    test_data_heavy_dir, tmp_path, zarr_version
 ):
     multi_slice_heavy_data_dir = test_data_heavy_dir / "sub-test_oct_multi_slice"
     expected_zarr = multi_slice_heavy_data_dir / f"zarr{zarr_version}.nii.zarr.zip"
@@ -98,11 +98,11 @@ def test_oct_multi_slice_heavy_regen_golden(
     files.sort()
     output_zarr = tmp_path / "output.zarr"
     multi_slice.convert(
-            files,
-            out=str(output_zarr),
-            key="Psi_ObsLSQ",
-            zarr_version=zarr_version,
-            overwrite=True,
+        files,
+        out=str(output_zarr),
+        key="Psi_ObsLSQ",
+        zarr_version=zarr_version,
+        overwrite=True,
     )
     base = expected_zarr.with_suffix("")
     shutil.make_archive(str(base), "zip", str(output_zarr))
