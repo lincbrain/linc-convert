@@ -309,7 +309,7 @@ def _dimension_separator_to_chunk_key_encoding(
 
 SHARD_FILE_SIZE_LIMIT = (
         2  # compression ratio
-        * 2  # TB
+        * 2  # GB
         * 2 ** 30  # GB->Bytes
 )
 
