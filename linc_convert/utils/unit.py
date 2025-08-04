@@ -138,17 +138,17 @@ unit_space_short2long = {
     short + "m": long + "meter" for short, long in si_prefix_short2long.items()
 }
 unit_space_short2long.update(
-        {
-            "m": "meter",
-            "mi": "mile",
-            "yd": "yard",
-            "ft": "foot",
-            "in": "inch",
-            "'": "foot",
-            '"': "inch",
-            "Å": "angstrom",
-            "pc": "parsec",
-        }
+    {
+        "m": "meter",
+        "mi": "mile",
+        "yd": "yard",
+        "ft": "foot",
+        "in": "inch",
+        "'": "foot",
+        '"': "inch",
+        "Å": "angstrom",
+        "pc": "parsec",
+    }
 )
 unit_space_long2short = {long: short for short, long in unit_space_short2long.items()}
 unit_space_long2short["micron"] = "u"
@@ -157,13 +157,13 @@ unit_time_short2long = {
     short + "s": long + "second" for short, long in si_prefix_short2long.items()
 }
 unit_time_short2long.update(
-        {
-            "y": "year",
-            "d": "day",
-            "h": "hour",
-            "m": "minute",
-            "s": "second",
-        }
+    {
+        "y": "year",
+        "d": "day",
+        "h": "hour",
+        "m": "minute",
+        "s": "second",
+    }
 )
 unit_time_long2short = {long: short for short, long in unit_time_short2long.items()}
 
@@ -171,28 +171,28 @@ unit_space_scale = {
     prefix + "m": 10 ** exponent for prefix, exponent in si_prefix_exponent.items()
 }
 unit_space_scale.update(
-        {
-            "mi": 1609.344,
-            "yd": 0.9144,
-            "ft": 0.3048,
-            "'": 0.3048,
-            "in": 25.4e-3,
-            '"': 25.4e-3,
-            "Å": 1e-10,
-            "pc": 3.0857e16,
-        }
+    {
+        "mi": 1609.344,
+        "yd": 0.9144,
+        "ft": 0.3048,
+        "'": 0.3048,
+        "in": 25.4e-3,
+        '"': 25.4e-3,
+        "Å": 1e-10,
+        "pc": 3.0857e16,
+    }
 )
 
 unit_time_scale = {
     prefix + "s": 10 ** exponent for prefix, exponent in si_prefix_exponent.items()
 }
 unit_time_scale.update(
-        {
-            "y": 365.25 * 24 * 60 * 60,
-            "d": 24 * 60 * 60,
-            "h": 60 * 60,
-            "m": 60,
-        }
+    {
+        "y": 365.25 * 24 * 60 * 60,
+        "d": 24 * 60 * 60,
+        "h": 60 * 60,
+        "m": 60,
+    }
 )
 
 

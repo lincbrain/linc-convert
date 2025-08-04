@@ -141,18 +141,17 @@ class ZarrConfig:
         self.out += ".nii.zarr" if self.nii else ".ome.zarr"
         if os.path.exists(self.out) and not self.overwrite:
             answer = input(
-                    f"The output path '{self.out}' already exists. Do you want to "
-                    f"overwrite it? (y/n): "
+                f"The output path '{self.out}' already exists. Do you want to "
+                f"overwrite it? (y/n): "
             )
             if answer.lower() not in ("y", "yes"):
                 raise FileExistsError(
-                        f"Output path '{self.out}' exists and overwrite was not "
-                        f"confirmed."
+                    f"Output path '{self.out}' exists and overwrite was not confirmed."
                 )
 
 
 def update_default_config(
-        zarr_config: ZarrConfig | None, **kwargs: Unpack[ZarrConfig]
+    zarr_config: ZarrConfig | None, **kwargs: Unpack[ZarrConfig]
 ) -> ZarrConfig:
     """
     Merge user overrides into an existing ZarrConfig or create a new one.

@@ -65,14 +65,14 @@ def _mapmat(fname: str, key: Optional[str] = None) -> _ArrayWrapper:
 @single_volume.default
 @_automap
 def convert(
-        inp: str,
-        *,
-        key: Optional[str] = None,
-        meta: str = None,
-        orientation: str = "RAS",
-        center: bool = True,
-        zarr_config: ZarrConfig = None,
-        **kwargs: Unpack[ZarrConfig],
+    inp: str,
+    *,
+    key: Optional[str] = None,
+    meta: str = None,
+    orientation: str = "RAS",
+    center: bool = True,
+    zarr_config: ZarrConfig = None,
+    **kwargs: Unpack[ZarrConfig],
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -136,12 +136,12 @@ def convert(
     inp_chunk = [min(x, zarr_config.max_load) for x in inp.shape]
 
     dataset = zgroup.create_array(
-            "0", shape=inp.shape, zarr_config=zarr_config, dtype=np.dtype(inp.dtype)
+        "0", shape=inp.shape, zarr_config=zarr_config, dtype=np.dtype(inp.dtype)
     )
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(
-                f"Processing chunk {idx} of "  # [{nx:03d}, {ny:03d}, {nz:03d}]
+            f"Processing chunk {idx} of "  # [{nx:03d}, {ny:03d}, {nz:03d}]
         )
         loaded_chunk = inp[slc]
         dataset[slc] = loaded_chunk
@@ -157,7 +157,7 @@ def convert(
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
     header = default_nifti_header(
-            arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
+        arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
     )
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])

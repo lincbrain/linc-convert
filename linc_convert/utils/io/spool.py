@@ -34,12 +34,11 @@ class SpoolSetInterpreter:
     """
 
     def __init__(
-            self, spool_set_path: str | PathLike[str],
-            info_file: str | PathLike[str] = None
+        self, spool_set_path: str | PathLike[str], info_file: str | PathLike[str] = None
     ) -> None:
         if (
-                os.path.isfile(spool_set_path)
-                and os.path.splitext(spool_set_path)[-1] == ".zip"
+            os.path.isfile(spool_set_path)
+            and os.path.splitext(spool_set_path)[-1] == ".zip"
         ):
             raise NotImplementedError("Zip storage is not supported.")
             pass
@@ -80,7 +79,7 @@ class SpoolSetInterpreter:
 
         except (KeyError, IndexError, ValueError) as e:
             warnings.warn(
-                    f"ERROR: Unable to extract frame information from info file. {e}"
+                f"ERROR: Unable to extract frame information from info file. {e}"
             )
             return None
         num_frames_per_spool = int(self.config["multiimage"]["ImagesPerFile"])
@@ -89,7 +88,7 @@ class SpoolSetInterpreter:
         self.spool_files = self.spool_files[:num_spool_files_to_load]
 
     def _make_filename_from_spool_set(
-            self, spool_entry: str | PathLike[str]
+        self, spool_entry: str | PathLike[str]
     ) -> PathLike[str]:
         return os.path.join(self.parent, spool_entry)
 
@@ -142,7 +141,7 @@ class SpoolSetInterpreter:
         self.acquisition_metadata["nbytes"] = self.spool_nbytes
 
         self.acquisition_metadata["images"] = self.config.getint(
-                "multiimage", "ImagesPerFile"
+            "multiimage", "ImagesPerFile"
         )
 
         numDepths = self.acquisition_metadata["height"]
@@ -151,7 +150,7 @@ class SpoolSetInterpreter:
         numFramesPerSpool = self.acquisition_metadata["images"]
 
         if (
-                numDepths % 2
+            numDepths % 2
         ):  # if there is an odd number of rows ->  KPEDIT - odd rows means 1 less
             # column for some reason
             numRows = numDepths + 1
@@ -253,7 +252,7 @@ class SpoolSetInterpreter:
         """
         axis_0_shape = self.spool_shape[0]
         canvas = np.zeros(
-                (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
+            (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
         )
         for idx, spool_file in enumerate(self):
             start = idx * axis_0_shape

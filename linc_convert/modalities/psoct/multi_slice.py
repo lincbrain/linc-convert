@@ -64,15 +64,15 @@ def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]
 @multi_slice.default
 @_automap
 def convert(
-        inp: list[str],
-        *,
-        key: Optional[str] = None,
-        meta: str = None,
-        orientation: str = "RAS",
-        center: bool = True,
-        dtype: Optional[str] = None,
-        zarr_config: ZarrConfig = None,
-        **kwargs: Unpack[ZarrConfig],
+    inp: list[str],
+    *,
+    key: Optional[str] = None,
+    meta: str = None,
+    orientation: str = "RAS",
+    center: bool = True,
+    dtype: Optional[str] = None,
+    zarr_config: ZarrConfig = None,
+    **kwargs: Unpack[ZarrConfig],
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -135,7 +135,7 @@ def convert(
     nslices = len(inp)
 
     dataset = zgroup.create_array(
-            "0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype)
+        "0", shape=volume_shape, zarr_config=zarr_config, dtype=np.dtype(dtype)
     )
 
     # Process and store data in chunks
@@ -147,9 +147,9 @@ def convert(
                            j * chunk_size[1]: (j + 1) * chunk_size[1],
                            ]
             logger.info(
-                    f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: "
-                    f"{k + 1:03d}] "
-                    f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
+                f"Processing slice {i + 1:03d} chunk [y: {j + 1:03d}, z: "
+                f"{k + 1:03d}] "
+                f"of [{nslices:03d}, {ny:03d}, {nz:03d}]"
             )
             z_start = k * chunk_size[0]
             z_end = z_start + loaded_chunk.shape[-2]
@@ -174,7 +174,7 @@ def convert(
     # Write NIfTI-Zarr header
     arr = zgroup["0"]
     header = default_nifti_header(
-            arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
+        arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
     )
     reversed_shape = list(reversed(arr.shape))
     affine = orientation_to_affine(orientation, *vx[::-1])

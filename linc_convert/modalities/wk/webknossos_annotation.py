@@ -24,12 +24,12 @@ wk.command(webknossos)
 
 @webknossos.default
 def convert(
-        wkw_dir: str = None,
-        ome_dir: str = None,
-        dic: str = None,
-        *,
-        zarr_config: ZarrConfig = None,
-        **kwargs: Unpack[ZarrConfig],
+    wkw_dir: str = None,
+    ome_dir: str = None,
+    dic: str = None,
+    *,
+    zarr_config: ZarrConfig = None,
+    **kwargs: Unpack[ZarrConfig],
 ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
@@ -82,7 +82,7 @@ def convert(
     for idx in range(n):
         offset_x, offset_y = 0, 0
         data = wkw_dataset.read(
-                off=(offset_y, offset_x, idx), shape=[size[1], size[0], 1]
+            off=(offset_y, offset_x, idx), shape=[size[1], size[0], 1]
         )
         data = data[0, :, :, 0]
         data = np.transpose(data, (1, 0))
@@ -107,7 +107,7 @@ def convert(
         wkw_dataset = wkw.Dataset.open(wkw_dataset_path)
 
         omz.create_array(
-                f"{level}", shape=shape, dtype="uint8", zarr_config=zarr_config
+            f"{level}", shape=shape, dtype="uint8", zarr_config=zarr_config
         )
         array = omz[f"{level}"]
 
@@ -127,25 +127,25 @@ def convert(
             data = np.transpose(data, (1, 0))
             if dic:
                 data = np.array(
-                        [
-                            [dic[data[i][j]] for j in range(data.shape[1])]
-                            for i in range(data.shape[0])
-                        ]
+                    [
+                        [dic[data[i][j]] for j in range(data.shape[1])]
+                        for i in range(data.shape[0])
+                    ]
                 )
             subdat_size = data.shape
 
             print(
-                    "Convert level",
-                    level,
-                    "with shape",
-                    shape,
-                    "and slice",
-                    idx,
-                    "with size",
-                    subdat_size,
+                "Convert level",
+                level,
+                "with shape",
+                shape,
+                "and slice",
+                idx,
+                "with size",
+                subdat_size,
             )
             if max_load is None or (
-                    subdat_size[-2] < max_load and subdat_size[-1] < max_load
+                subdat_size[-2] < max_load and subdat_size[-1] < max_load
             ):
                 array[
                 0, idx, top: top + subdat_size[-2], left: left + subdat_size[-1]

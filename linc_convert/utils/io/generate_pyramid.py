@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def default_levels(
-        spatial_shape: tuple, spatial_chunk: tuple, no_pyramid_axis: Optional[int]
+    spatial_shape: tuple, spatial_chunk: tuple, no_pyramid_axis: Optional[int]
 ) -> int:
     """
     Compute the default number of downsampling levels for a spatial pyramid.
@@ -37,16 +37,16 @@ def default_levels(
         axes by repeated factors of two.
     """
     default_levels = max(
-            int(math.ceil(math.log2(s / spatial_chunk[i])))
-            for i, s in enumerate(spatial_shape)
-            if no_pyramid_axis is None or i != no_pyramid_axis
+        int(math.ceil(math.log2(s / spatial_chunk[i])))
+        for i, s in enumerate(spatial_shape)
+        if no_pyramid_axis is None or i != no_pyramid_axis
     )
     levels = max(default_levels, 0)
     return levels
 
 
 def next_level_shape(
-        prev_shape: Sequence[int], no_pyramid_axis: Optional[int]
+    prev_shape: Sequence[int], no_pyramid_axis: Optional[int]
 ) -> list[int]:
     """
     Compute the shape of the next coarser level by halving each dimension.
@@ -79,10 +79,10 @@ def next_level_shape(
 
 
 def compute_next_level(
-        arr: da.Array,
-        ndim: int,
-        no_pyramid_axis: int | None = None,
-        window_func: Callable = da.mean,
+    arr: da.Array,
+    ndim: int,
+    no_pyramid_axis: int | None = None,
+    window_func: Callable = da.mean,
 ) -> da.Array:
     """
     Compute the next level of a dask array pyramid.

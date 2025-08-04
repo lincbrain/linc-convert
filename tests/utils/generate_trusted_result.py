@@ -2,9 +2,9 @@ import os
 import tempfile
 from pathlib import Path
 
+import test_wk
 import zarr
 
-import test_wk
 from linc_convert.modalities.wk import webknossos_annotation
 
 if __name__ == "__main__":

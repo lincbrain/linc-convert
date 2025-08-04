@@ -25,10 +25,10 @@ except ImportError as e:
 
 
 def open(
-        path: str | PathLike[str],
-        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
-        zarr_version: Literal[2, 3] = 3,
-        driver: DriverLike = "zarr-python",
+    path: str | PathLike[str],
+    mode: Literal["r", "r+", "a", "w", "w-"] = "a",
+    zarr_version: Literal[2, 3] = 3,
+    driver: DriverLike = "zarr-python",
 ) -> ZarrNode:
     """
     Open a Zarr Node (Array or Group) based on the specified driver.
@@ -53,10 +53,10 @@ def open(
 
 
 def open_group(
-        path: str | PathLike[str],
-        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
-        zarr_version: Literal[2, 3] = 3,
-        driver: DriverLike = "zarr-python",
+    path: str | PathLike[str],
+    mode: Literal["r", "r+", "a", "w", "w-"] = "a",
+    zarr_version: Literal[2, 3] = 3,
+    driver: DriverLike = "zarr-python",
 ) -> ZarrGroup:
     """
     Open a Zarr Group based on the specified driver.
