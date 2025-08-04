@@ -40,7 +40,7 @@ def test_wkw(tmp_path, wk_annotation, zarr_version, driver):
     webknossos_annotation.convert(
         str(wk_annotation / "wkw"),
         str(wk_annotation / "image.nii.zarr"),
-        out=output,
+        out=str(output),
         dic="{}",
     )
     assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
@@ -53,7 +53,7 @@ def test_wkw_regen_golden(tmp_path, wk_annotation, zarr_version):
     webknossos_annotation.convert(
         str(wk_annotation / "wkw"),
         str(wk_annotation / "image.nii.zarr"),
-        out=output,
+        out=str(output),
         dic="{}",
     )
     base = Path(expected_zarr).with_suffix("")
