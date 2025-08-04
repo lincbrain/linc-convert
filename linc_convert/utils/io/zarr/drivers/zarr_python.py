@@ -117,8 +117,7 @@ class ZarrPythonGroup(ZarrGroup):
         return cls(
             zarr.group(
                 store=store,
-                # TODO: figure out overwrite
-                # overwrite=overwrite,
+                overwrite=zarr_config.overwrite,
                 zarr_format=zarr_config.zarr_version,
             )
         )
