@@ -36,8 +36,3 @@ def driver(request):
 @pytest.fixture(scope="module", params=[2, 3])
 def zarr_version(request):
     return request.param
-
-
-@pytest.mark.heavy
-def test_heavy(test_data_heavy_dir):
-    assert True
