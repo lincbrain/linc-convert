@@ -226,7 +226,8 @@ class ZarrGroup(ZarrNode):
             window_func = {"median": da.median, "mean": da.mean}
             if mode not in window_func:
                 raise ValueError(f"Unsupported mode: {mode}")
-            window = [mode]
+            window = window_func[mode]
+
 
         if levels == -1:
             levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
@@ -263,8 +264,6 @@ class ZarrGroup(ZarrNode):
 
         Parameters
         ----------
-        omz : zarr.Group
-            Zarr group to write metadata
         axes : list[str]
             Name of each dimension, in Zarr order (t, c, z, y, x)
         space_scale : float | list[float]
@@ -274,7 +273,7 @@ class ZarrGroup(ZarrNode):
         space_unit : str
             Unit of spatial scale (assumed identical across dimensions)
         time_unit : str
-            Unit of time scale
+            Unit of timescale
         name : str
             Name attribute
         pyramid_aligns : float | list[float] | {"center", "edge"}
@@ -284,7 +283,7 @@ class ZarrGroup(ZarrNode):
         levels : int
             Number of existing levels. Default: find out automatically.
         no_pool: int
-            Index of the spatial dimension that was not downsampled
+            Index of the spatial dimension that was not down-sampled
             when generating pyramid levels.
         multiscales_type: str
             Override the type field in multiscale attribute.
