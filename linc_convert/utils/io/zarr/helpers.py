@@ -1,3 +1,5 @@
+"""Helper functions for Zarr I/O."""
+
 import math
 
 import numpy as np
