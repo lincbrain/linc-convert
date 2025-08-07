@@ -7,8 +7,6 @@ from typing import Unpack
 
 import cyclopts
 import numpy as np
-
-# externals
 import wkw
 import zarr
 

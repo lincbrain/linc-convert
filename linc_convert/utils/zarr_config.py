@@ -1,7 +1,6 @@
 """Configuration related to output Zarr Archive."""
 
 import logging
-import os
 from dataclasses import dataclass, replace
 from typing import Annotated, Literal
 
@@ -139,6 +138,7 @@ class ZarrConfig:
             return
         self.out = name
         self.out += ".nii.zarr" if self.nii else ".ome.zarr"
+
 
 def update_default_config(
     zarr_config: ZarrConfig | None, **kwargs: Unpack[ZarrConfig]
