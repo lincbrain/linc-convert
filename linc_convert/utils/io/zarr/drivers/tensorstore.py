@@ -7,7 +7,6 @@ from numbers import Number
 from os import PathLike
 from typing import (
     Any,
-    Iterator,
     Literal,
     Mapping,
     Optional,
@@ -24,7 +23,8 @@ import zarr
 from numpy.typing import ArrayLike, DTypeLike
 from upath import UPath
 
-from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
+from linc_convert.utils.io.zarr import ZarrPythonArray, ZarrPythonGroup
+from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig
 from linc_convert.utils.zarr_config import ZarrConfig
 
 
@@ -42,6 +42,11 @@ class ZarrTSArray(ZarrArray):
         """
         super().__init__(str(ts_array.kvstore.path))
         self._ts = ts_array
+
+    @classmethod
+    def from_zarr_python_array(cls, zarray: ZarrPythonArray) -> "ZarrTSArray":
+        """Convert a ZarrPythonArray into a ZarrTSArray."""
+        return cls.open(zarray.store_path, zarr_version=zarray.zarr_version)
 
     @property
     def ndim(self) -> int:
@@ -95,11 +100,11 @@ class ZarrTSArray(ZarrArray):
         cls,
         path: Union[str, PathLike],
         *,
-        zarr_version: Literal[2, 3] = 3,
+        zarr_version: Literal[2, 3] | int = 3,
         mode: Literal["r", "r+", "a", "w", "w-"] = "a",
     ) -> "ZarrTSArray":
         """
-        Open an existing TensorStore-based Zarr array.
+        Open an existing Zarr array.
 
         Parameters
         ----------
@@ -125,150 +130,48 @@ class ZarrTSArray(ZarrArray):
         return cls(ts_array)
 
 
-class ZarrTSGroup(ZarrGroup):
+class ZarrTSGroup(ZarrPythonGroup):
     """Zarr Group implementation using TensorStore as backend."""
 
-    def __init__(self, store_path: Union[str, PathLike]) -> None:
+    def __init__(self, zarr_group: zarr.Group) -> None:
         """
         Initialize the ZarrTSGroup.
 
         Parameters
         ----------
-        store_path : Union[str, PathLike]
-            Path to the group’s directory.
+        zarr_group : zarr.Group
+            Underlying Zarr Python group.
         """
-        super().__init__(store_path)
-        from upath import UPath
+        super().__init__(zarr_group)
 
-        self._path = UPath(store_path)
-        meta = _detect_metadata(self._path)
-        assert meta and meta[0] == "group"
-        self._zarr_version = meta[1]
+    @classmethod
+    def from_zarr_python_group(cls, zarr_group: ZarrPythonGroup) -> "ZarrTSGroup":
+        """Convert a ZarrPythonGroup into a ZarrTSGroup."""
+        assert isinstance(zarr_group, ZarrPythonGroup)
+        return cls(zarr_group._get_zarr_python_group())
 
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> "ZarrTSGroup":
-        """
-        Create a ZarrTSGroup from a configuration object.
-
-        Parameters
-        ----------
-        zarr_config : ZarrConfig
-            Configuration with .out and .zarr_version.
-
-        Returns
-        -------
-        ZarrTSGroup
-        """
-        return cls.open(
-            zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
-        )
-
-    @classmethod
-    def open(
-        cls,
-        path: Union[str, PathLike],
-        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
-        *,
-        zarr_version: Literal[2, 3] = 3,
-    ) -> "ZarrTSGroup":
-        """
-        Open or create a Zarr group backed by TensorStore.
-
-        Parameters
-        ----------
-        path : Union[str, PathLike]
-            Path to the Zarr group.
-        mode : {'r','r+','a','w','w-'}
-            Persistence mode; see TensorStore docs.
-        zarr_version : {2,3}
-            Zarr format version.
-
-        Returns
-        -------
-        ZarrTSGroup
-        """
-        from upath import UPath
-
-        p = UPath(path)
-        if mode in ("r", "r+"):
-            if not p.exists() or not p.is_dir():
-                raise FileNotFoundError(f"Group path '{p}' does not exist")
-        elif mode == "w-":
-            if p.exists():
-                raise FileExistsError(f"Group path '{p}' already exists")
-        elif mode == "a":
-            if not p.exists():
-                _init_group(p, zarr_version)
-        elif mode == "w":
-            if p.exists():
-                p.rmdir(recursive=True)
-            _init_group(p, zarr_version)
-        else:
-            raise ValueError(f"Invalid mode '{mode}'")
-        return cls(p)
-
-    @property
-    def attrs(self) -> Mapping[str, Any]:
-        """Access metadata/attributes for this node."""
-        return {}
-
-    @property
-    def zarr_version(self) -> Literal[2, 3]:
-        """Get the Zarr format version."""
-        return self._zarr_version
+        """Create a Zarr group from a configuration object."""
+        return cls.from_zarr_python_group(ZarrPythonGroup.from_config(zarr_config))
 
     def __getitem__(self, key: str) -> Union[ZarrTSArray, "ZarrTSGroup"]:
         """Get a subgroup or array by name within this group."""
-        meta = _detect_metadata(self._path / key)
-        if not meta:
-            raise KeyError(f"Key '{key}' not found")
-        if meta[0] == "group":
-            return ZarrTSGroup(self._path / key)
-        return ZarrTSArray.open(self._path / key, zarr_version=meta[1])
+        node = super().__getitem__(key)
+        if isinstance(node, ZarrPythonGroup):
+            return self.from_zarr_python_group(node)
+        elif isinstance(node, ZarrPythonArray):
+            return ZarrTSArray.from_zarr_python_array(node)
+        else:
+            raise ValueError(
+                "Unsupported node type in Zarr group: {}".format(type(node))
+            )
 
     def __setitem__(self, key: str, value: Union[ZarrTSArray, "ZarrTSGroup"]) -> None:
         """Set a subgroup or array by name within this group."""
         raise NotImplementedError(
-            "Assign to zarr group is not supported with tensorstore."
+            "Assigning to zarr group is not supported with tensorstore."
         )
-
-    def __delitem__(self, key: str) -> None:
-        """Delete a subgroup or array by name within this group."""
-        target = self._path / key
-        if target.exists():
-            target.rmdir(recursive=True)
-
-    def keys(self) -> Iterator[str]:
-        """Get the names of all subgroups and arrays in this group."""
-        return (
-            p.name for p in self._path.iterdir() if p.is_dir() and _detect_metadata(p)
-        )
-
-    def __contains__(self, name: str) -> bool:
-        """Check whether a subgroup or array exists in this group."""
-        p = self._path / name
-        return p.exists() and bool(_detect_metadata(p))
-
-    def _get_zarr_python_group(self) -> "zarr.Group":
-        """Get the underlying Zarr Python group object."""
-        return zarr.open_group(self._path, mode="a")
-
-    def create_group(self, name: str, overwrite: bool = False) -> "ZarrTSGroup":
-        """
-        Create or open a subgroup within this group.
-
-        Parameters
-        ----------
-        name : str
-        overwrite : bool
-            If True, delete existing before creating.
-
-        Returns
-        -------
-        ZarrTSGroup
-        """
-        mode = "w" if overwrite else "w-"
-        return self.open(self._path / name, mode=mode, zarr_version=self._zarr_version)
 
     def create_array(
         self,
@@ -295,27 +198,18 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSArray
         """
-        if zarr_config is None:
-            conf = default_write_config(
-                self._path / name, shape=shape, dtype=dtype, **kwargs
-            )
-        else:
-            conf = default_write_config(
-                self._path / name,
-                shape=shape,
-                dtype=dtype,
-                chunk=zarr_config.chunk,
-                shard=zarr_config.shard,
-                compressor=zarr_config.compressor,
-                # TODO: implement this
-                # compressor_opt=ast.literal_eval(zarr_config.compressor_opt),
-                version=zarr_config.zarr_version,
-            )
-        conf.update(delete_existing=True, create=True)
-        arr = ts.open(conf).result()
+        arr = super().create_array(
+            name=name,
+            shape=shape,
+            dtype=dtype,
+            zarr_config=zarr_config,
+            data=data,
+            **kwargs,
+        )
+        arr = ZarrTSArray.from_zarr_python_array(arr)
         if data is not None:
             arr[:] = data
-        return ZarrTSArray(arr)
+        return arr
 
     def create_array_from_base(
         self,
@@ -337,14 +231,11 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSArray
         """
-        base = self["0"]._ts.spec().to_json()
-        base["metadata"]["shape"] = shape
-        base["kvstore"] = make_kvstore(self._path / name)
-        base.update(delete_existing=True, create=True)
-        arr = ts.open(base).result()
+        arr = super().create_array_from_base(name=name, shape=shape, **kwargs)
+        arr = ZarrTSArray.from_zarr_python_array(arr)
         if data is not None:
             arr[:] = data
-        return ZarrTSArray(arr)
+        return arr
 
 
 def make_compressor_v2(name: str | None, **prm: dict) -> dict:
