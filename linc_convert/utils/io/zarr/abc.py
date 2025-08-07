@@ -155,10 +155,6 @@ class ZarrGroup(ZarrNode):
         """Get the underlying Zarr Python group object."""
         ...
 
-    # @abstractmethod
-    # def _create_array(self, **kwargs: Unpack[ZarrArrayConfig]) -> ArrayLike:
-    #     ...
-
     @abstractmethod
     def create_group(self, name: str, overwrite: bool = False) -> "ZarrGroup":
         """Create or open a subgroup within this group."""
