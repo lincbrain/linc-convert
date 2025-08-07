@@ -1,12 +1,11 @@
-import itertools
 import re
-from typing import Any, Literal
+from os import PathLike
+from typing import Any, Generator
 
-import nibabel as nib
 import numpy as np
-import zarr
+from numpy.typing import ArrayLike
+from scipy import io as sio
 
-from linc_convert.utils.math import ceildiv
 from linc_convert.utils.unit import convert_unit
 
 
@@ -109,392 +108,96 @@ def make_json(oct_meta: str) -> dict:
     return meta
 
 
-def generate_pyramid(
-    omz: zarr.Group,
-    levels: int | None = None,
-    ndim: int = 3,
-    max_load: int = 512,
-    mode: Literal["mean", "median"] = "median",
-    no_pyramid_axis: int | str | None = None,
-) -> list[list[int]]:
+def struct_arr_to_dict(arr: np.void) -> dict:
     """
-    Generate the levels of a pyramid in an existing Zarr.
+    Convert a NumPy structured array (single record) to a dictionary.
 
     Parameters
     ----------
-    path : PathLike | str
-        Path to parent Zarr
-    levels : int
-        Number of additional levels to generate.
-        By default, stop when all dimensions are smaller than their
-        corresponding chunk size.
-    shard : list[int] | bool | {"auto"} | None
-        Shard size.
-        * If `None`, use same shard size as the input array;
-        * If `False`, no dot use sharding;
-        * If `True` or `"auto"`, automatically find shard size;
-        * Otherwise, use provided shard size.
-    ndim : int
-        Number of spatial dimensions.
-    max_load : int
-        Maximum number of voxels to load along each dimension.
-    mode : {"mean", "median"}
-        Whether to use a mean or median moving window.
+        arr (np.void): A structured array element.
 
     Returns
     -------
-    shapes : list[list[int]]
-        Shapes of all levels, from finest to coarsest, including the
-        existing top level.
+        dict: Dictionary mapping field names to their values.
     """
-    # Read properties from base level
-    shape = list(omz["0"].shape)
-    chunk_size = omz["0"].chunks
-    opt = {
-        "dimension_separator": omz["0"]._dimension_separator,
-        "order": omz["0"]._order,
-        "dtype": omz["0"]._dtype,
-        "fill_value": omz["0"]._fill_value,
-        "compressor": omz["0"]._compressor,
-        "chunks": omz["0"].chunks,
-    }
-
-    # Select windowing function
-    if mode == "median":
-        func = np.median
-    else:
-        assert mode == "mean"
-        func = np.mean
-
-    level = 0
-    batch, shape = shape[:-ndim], shape[-ndim:]
-    allshapes = [shape]
-
-    while True:
-        level += 1
-
-        # Compute downsampled shape
-        prev_shape, shape = shape, []
-        for i, length in enumerate(prev_shape):
-            if i == no_pyramid_axis:
-                shape.append(length)
-            else:
-                shape.append(max(1, length // 2))
-
-        # Stop if seen enough levels or level shape smaller than chunk size
-        if levels is None:
-            if all(x <= c for x, c in zip(shape, chunk_size[-ndim:])):
-                break
-        elif level > levels:
-            break
-
-        print("Compute level", level, "with shape", shape)
-
-        allshapes.append(shape)
-        omz.create_dataset(str(level), shape=batch + shape, **opt)
-
-        # Iterate across `max_load` chunks
-        # (note that these are unrelared to underlying zarr chunks)
-        grid_shape = [ceildiv(n, max_load) for n in prev_shape]
-        for chunk_index in itertools.product(*[range(x) for x in grid_shape]):
-            print(f"chunk {chunk_index} / {tuple(grid_shape)})", end="\r")
-
-            # Read one chunk of data at the previous resolution
-            slicer = [Ellipsis] + [
-                slice(i * max_load, min((i + 1) * max_load, n))
-                for i, n in zip(chunk_index, prev_shape)
-            ]
-            fullshape = omz[str(level - 1)].shape
-            dat = omz[str(level - 1)][tuple(slicer)]
-
-            # Discard the last voxel along odd dimensions
-            crop = [
-                0 if y == 1 else x % 2 for x, y in zip(dat.shape[-ndim:], fullshape)
-            ]
-            # Don't crop the axis not down-sampling
-            # cannot do if not no_pyramid_axis since it could be 0
-            if no_pyramid_axis is not None:
-                crop[no_pyramid_axis] = 0
-            slcr = [slice(-1) if x else slice(None) for x in crop]
-            dat = dat[tuple([Ellipsis, *slcr])]
-
-            if any(n == 0 for n in dat.shape):
-                # last strip had a single voxel, nothing to do
-                continue
-
-            patch_shape = dat.shape[-ndim:]
-
-            # Reshape into patches of shape 2x2x2
-            windowed_shape = [
-                x for n in patch_shape for x in (max(n // 2, 1), min(n, 2))
-            ]
-            if no_pyramid_axis is not None:
-                windowed_shape[2 * no_pyramid_axis] = patch_shape[no_pyramid_axis]
-                windowed_shape[2 * no_pyramid_axis + 1] = 1
-
-            dat = dat.reshape(batch + windowed_shape)
-            # -> last `ndim`` dimensions have shape 2x2x2
-            dat = dat.transpose(
-                list(range(len(batch)))
-                + list(range(len(batch), len(batch) + 2 * ndim, 2))
-                + list(range(len(batch) + 1, len(batch) + 2 * ndim, 2))
-            )
-            # -> flatten patches
-            smaller_shape = [max(n // 2, 1) for n in patch_shape]
-            if no_pyramid_axis is not None:
-                smaller_shape[no_pyramid_axis] = patch_shape[no_pyramid_axis]
-
-            dat = dat.reshape(batch + smaller_shape + [-1])
-
-            # Compute the median/mean of each patch
-            dtype = dat.dtype
-            dat = func(dat, axis=-1)
-            dat = dat.astype(dtype)
-
-            # Write output
-            slicer = [Ellipsis] + [
-                slice(i * max_load // 2, min((i + 1) * max_load // 2, n))
-                if axis_index != no_pyramid_axis
-                else slice(i * max_load, min((i + 1) * max_load, n))
-                for i, axis_index, n in zip(chunk_index, range(ndim), shape)
-            ]
-
-            omz[str(level)][tuple(slicer)] = dat
-
-    print("")
-
-    return allshapes
-
-    pass
+    return {name: arr[name].item() for name in arr.dtype.names}
 
 
-def write_ome_metadata(
-    omz: zarr.Group,
-    axes: list[str],
-    space_scale: float | list[float] = 1,
-    time_scale: float = 1,
-    space_unit: str = "micrometer",
-    time_unit: str = "second",
-    name: str = "",
-    pyramid_aligns: str | int | list[str | int] = 2,
-    levels: int | None = None,
-    no_pool: int | None = None,
-    multiscales_type: str = "",
-) -> None:
+def find_experiment_params(exp_file: str) -> tuple[dict, bool]:
     """
-    Write OME metadata into Zarr.
+    Load experiment parameters from a .mat file, detecting if it's a Fiji experiment.
 
     Parameters
     ----------
-    path : str | PathLike
-        Path to parent Zarr.
-    axes : list[str]
-        Name of each dimension, in Zarr order (t, c, z, y, x)
-    space_scale : float | list[float]
-        Finest-level voxel size, in Zarr order (z, y, x)
-    time_scale : float
-        Time scale
-    space_unit : str
-        Unit of spatial scale (assumed identical across dimensions)
-    space_time : str
-        Unit of time scale
-    name : str
-        Name attribute
-    pyramid_aligns : float | list[float] | {"center", "edge"}
-        Whether the pyramid construction aligns the edges or the centers
-        of the corner voxels. If a (list of) number, assume that a moving
-        window of that size was used.
-    levels : int
-        Number of existing levels. Default: find out automatically.
-    zarr_version : {2, 3} | None
-        Zarr version. If `None`, guess from existing zarr array.
+        exp_file (str): Path to the .mat file.
 
+    Returns
+    -------
+        tuple:
+            - dict: Experiment parameters.
+            - bool: True if it's a Fiji experiment, False otherwise.
+
+    Raises
+    ------
+        ValueError: If no experiment key is found in the file.
     """
-    # Read shape at each pyramid level
-    shapes = []
-    level = 0
-    while True:
-        if levels is not None and level > levels:
+    is_fiji = False
+    exp_key = None
+
+    for key in mat_vars(exp_file):
+        if "Experiment_Fiji" in key:
+            exp_key = key
+            is_fiji = True
             break
+        if "Experiment" in key:
+            exp_key = key
 
-        if str(level) not in omz.keys():
-            levels = level
-            break
-        shapes += [
-            omz[str(level)].shape,
-        ]
-        level += 1
+    if not exp_key:
+        raise ValueError("No Experiment found in .mat file")
 
-    axis_to_type = {
-        "x": "space",
-        "y": "space",
-        "z": "space",
-        "t": "time",
-        "c": "channel",
-    }
-
-    # Number of spatial (s), batch (b) and total (n) dimensions
-    ndim = len(axes)
-    sdim = sum(axis_to_type[axis] == "space" for axis in axes)
-    bdim = ndim - sdim
-
-    if isinstance(pyramid_aligns, (int, str)):
-        pyramid_aligns = [pyramid_aligns]
-    pyramid_aligns = list(pyramid_aligns)
-    if len(pyramid_aligns) < sdim:
-        repeat = pyramid_aligns[:1] * (sdim - len(pyramid_aligns))
-        pyramid_aligns = repeat + pyramid_aligns
-    pyramid_aligns = pyramid_aligns[-sdim:]
-
-    if isinstance(space_scale, (int, float)):
-        space_scale = [space_scale]
-    space_scale = list(space_scale)
-    if len(space_scale) < sdim:
-        repeat = space_scale[:1] * (sdim - len(space_scale))
-        space_scale = repeat + space_scale
-    space_scale = space_scale[-sdim:]
-
-    multiscales = [
-        {
-            "version": "0.4",
-            "axes": [
-                {
-                    "name": axis,
-                    "type": axis_to_type[axis],
-                }
-                if axis_to_type[axis] == "channel"
-                else {
-                    "name": axis,
-                    "type": axis_to_type[axis],
-                    "unit": (
-                        space_unit
-                        if axis_to_type[axis] == "space"
-                        else time_unit
-                        if axis_to_type[axis] == "time"
-                        else None
-                    ),
-                }
-                for axis in axes
-            ],
-            "datasets": [],
-            "type": "median window " + "x".join(["2"] * sdim)
-            if not multiscales_type
-            else multiscales_type,
-            "name": name,
-        }
-    ]
-
-    shape0 = shapes[0]
-    for n in range(len(shapes)):
-        shape = shapes[n]
-        multiscales[0]["datasets"].append({})
-        level = multiscales[0]["datasets"][-1]
-        level["path"] = str(n)
-
-        scale = [1] * bdim + [
-            (
-                pyramid_aligns[i] ** n
-                if not isinstance(pyramid_aligns[i], str)
-                else (shape0[bdim + i] / shape[bdim + i])
-                if pyramid_aligns[i][0].lower() == "e"
-                else ((shape0[bdim + i] - 1) / (shape[bdim + i] - 1))
-            )
-            * space_scale[i]
-            if i != no_pool
-            else space_scale[i]
-            for i in range(sdim)
-        ]
-        translation = [0] * bdim + [
-            (
-                pyramid_aligns[i] ** n - 1
-                if not isinstance(pyramid_aligns[i], str)
-                else (shape0[bdim + i] / shape[bdim + i]) - 1
-                if pyramid_aligns[i][0].lower() == "e"
-                else 0
-            )
-            * 0.5
-            * space_scale[i]
-            if i != no_pool
-            else 0
-            for i in range(sdim)
-        ]
-
-        level["coordinateTransformations"] = [
-            {
-                "type": "scale",
-                "scale": scale,
-            },
-            {
-                "type": "translation",
-                "translation": translation,
-            },
-        ]
-
-    scale = [1.0] * ndim
-    if "t" in axes:
-        scale[axes.index("t")] = time_scale
-    multiscales[0]["coordinateTransformations"] = [{"scale": scale, "type": "scale"}]
-
-    multiscales[0]["version"] = "0.4"
-    omz.attrs["multiscales"] = multiscales
+    exp_data = sio.loadmat(exp_file, squeeze_me=True)[exp_key]
+    return struct_arr_to_dict(exp_data), is_fiji
 
 
-def niftizarr_write_header(
-    omz: zarr.Group,
-    shape: list[int],
-    affine: np.ndarray,
-    dtype: np.dtype | str,
-    unit: Literal["micron", "mm"] | None = None,
-    header: nib.Nifti1Header | nib.Nifti2Header | None = None,
-    nifti_version: Literal[1, 2] = 1,
-) -> None:
+def mat_vars(mat_file: str) -> Generator[str, None, None]:
     """
-    Write NIfTI header in a NIfTI-Zarr file.
+    Yield variable names from a .mat file, excluding internal variables.
 
     Parameters
     ----------
-    path : PathLike | str
-        Path to parent Zarr.
-    affine : (4, 4) matrix
-        Orientation matrix.
-    shape : list[int]
-        Array shape, in NIfTI order (x, y, z, t, c).
-    dtype : np.dtype | str
-        Data type.
-    unit : {"micron", "mm"}, optional
-        World unit.
-    header : nib.Nifti1Header | nib.Nifti2Header, optional
-        Pre-instantiated header.
-    zarr_version : int, default=3
-        Zarr version.
+        mat_file (str): Path to the .mat file.
+
+    Yields
+    ------
+        str: Variable names not starting with '__'.
     """
-    # TODO: we do not write the json zattrs, but it should be added in
-    #       once the nifti-zarr package is released
+    yield from (name for name, *_ in sio.whosmat(mat_file) if not name.startswith("__"))
 
-    # If dimensions do not fit in a short (which is often the case), we
-    # use NIfTI 2.
-    if all(x < 32768 for x in shape) or nifti_version == 1:
-        NiftiHeader = nib.Nifti1Header
-    else:
-        NiftiHeader = nib.Nifti2Header
 
-    header = header or NiftiHeader()
-    header.set_data_shape(shape)
-    header.set_data_dtype(dtype)
-    header.set_qform(affine)
-    header.set_sform(affine)
-    if unit:
-        header.set_xyzt_units(nib.nifti1.unit_codes.code[unit])
-    header = np.frombuffer(header.structarr.tobytes(), dtype="u1")
+def atleast_2d_trailing(arr: ArrayLike) -> np.ndarray:
+    """
+    Ensure the input is at least 2D by adding a new axis at the end if needed.
 
-    metadata = {
-        "chunks": [len(header)],
-        "order": "F",
-        "dtype": "|u1",
-        "fill_value": None,
-        "compressor": None,  # TODO: Subject to change compression
-    }
+    If the input is 1D, it becomes shape (N, 1).
+    If the input is 0D (scalar), it becomes shape (1, 1).
+    If it's already 2D or more, it's returned unchanged.
 
-    omz.create_dataset("nifti", data=header, shape=len(header), **metadata)
+    Parameters
+    ----------
+        arr (ArrayLike): Input array-like object.
 
-    print("done.")
+    Returns
+    -------
+        np.ndarray: A 2D or higher NumPy array with at least two dimensions.
+    """
+    arr = np.asarray(arr)
+    if arr.ndim == 0:
+        return arr.reshape(1, 1)
+    elif arr.ndim == 1:
+        return arr[:, np.newaxis]
+    return arr
+
+
+def load_mat(mat_path: str | PathLike[str], varname: str) -> np.ndarray:
+    data = sio.loadmat(mat_path, squeeze_me=True)
+    return data[varname]
