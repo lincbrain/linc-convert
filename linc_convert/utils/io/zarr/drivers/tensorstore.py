@@ -101,7 +101,8 @@ class ZarrTSArray(ZarrArray):
         path: Union[str, PathLike],
         *,
         zarr_version: Literal[2, 3] | int = 3,
-        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
+        create: bool = False,
+        delete_exsisting: bool = False,
     ) -> "ZarrTSArray":
         """
         Open an existing Zarr array.
@@ -123,8 +124,8 @@ class ZarrTSArray(ZarrArray):
             "kvstore": make_kvstore(path),
             "driver": "zarr3" if zarr_version == 3 else "zarr",
             "open": True,
-            "create": False,
-            "delete_existing": False,
+            "create": create,
+            "delete_existing": delete_exsisting,
         }
         ts_array = ts.open(spec).result()
         return cls(ts_array)
@@ -393,71 +394,6 @@ def default_read_config(path: os.PathLike | str) -> dict:
     }
 
 
-def _is_array(path: PathLike) -> bool:
-    zarr2_array_file = path / ".zarray"
-    if zarr2_array_file.is_file():
-        content = zarr2_array_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 2
-        return True
-    zarr3_array_file = path / "zarr.json"
-    if zarr3_array_file.is_file():
-        content = zarr3_array_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 3
-        if content.get("node_type", None) == "array":
-            return True
-    return False
-
-
-def _is_group(path: PathLike) -> bool:
-    zarr2_group_file = path / ".zgroup"
-    if zarr2_group_file.is_file():
-        content = zarr2_group_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 2
-        return True
-    zarr3_group_file = path / "zarr.json"
-    if zarr3_group_file.is_file():
-        content = zarr3_group_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 3
-        if content.get("node_type", None) == "group":
-            return True
-    return False
-
-
-def _detect_metadata(path: PathLike) -> Optional[Tuple[str, int]]:
-    """
-    Look for Zarr metadata files in `path` and return (node_type, version).
-
-    Checks zarr.json (v3), then .zarray/.zgroup (v2).
-    """
-    # Zarr v3
-    z3 = path / "zarr.json"
-    if z3.is_file():
-        try:
-            meta = json.loads(z3.read_text())
-            fmt = meta.get("zarr_format")
-            if fmt == 3:
-                node = meta.get("node_type", "array")
-                if node in ("array", "group"):
-                    return node, 3
-        except json.JSONDecodeError:
-            pass
-    # Zarr v2
-    for fname, ntype in ((".zarray", "array"), (".zgroup", "group")):
-        f = path / fname
-        if f.is_file():
-            try:
-                meta = json.loads(f.read_text())
-                if meta.get("zarr_format") == 2:
-                    return ntype, 2
-            except json.JSONDecodeError:
-                pass
-    return None
-
-
 def default_write_config(
     path: os.PathLike | str,
     shape: list[int],
@@ -605,13 +541,3 @@ def default_write_config(
     config["kvstore"] = make_kvstore(path)
 
     return config
-
-
-def _init_group(group_path: PathLike, version: int) -> None:
-    group_path.mkdir(parents=True, exist_ok=True)
-    if version == 3:
-        (group_path / "zarr.json").write_text(
-            json.dumps({"zarr_format": 3, "node_type": "group"})
-        )
-    else:
-        (group_path / ".zgroup").write_text(json.dumps({"zarr_format": 2}))
