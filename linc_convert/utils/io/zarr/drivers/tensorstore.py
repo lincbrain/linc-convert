@@ -1,7 +1,5 @@
 """TensorStore driver for Zarr arrays and groups."""
 
-import json
-import math
 import os
 from numbers import Number
 from os import PathLike
@@ -25,6 +23,7 @@ from upath import UPath
 
 from linc_convert.utils.io.zarr import ZarrPythonArray, ZarrPythonGroup
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig
+from linc_convert.utils.io.zarr.helpers import auto_shard_size, fix_shard_chunk
 from linc_convert.utils.zarr_config import ZarrConfig
 
 
@@ -280,91 +279,6 @@ def make_kvstore(path: str | os.PathLike) -> dict:
         path = {"path": url.path} if url.path else {}
         return {"driver": "s3", "bucket": url.netloc, **path}
     raise ValueError("Unsupported protocol:", path.protocol)
-
-
-def auto_shard_size(
-    max_shape: list[int],
-    itemsize: int | np.dtype | str,
-    max_file_size: int = 2 * 1024 ** 4,
-    compression_ratio: float = 2,
-) -> list[int]:
-    """
-    Find maximal shard size that ensures file size below cap.
-
-    Parameters
-    ----------
-    max_shape : list[int]
-        Maximum shape along each dimension.
-    itemsize : np.dtype or int
-        Data type, or data type size
-    max_file_size : int
-        Maximum file size (default: 2TB).
-        S3 has a 5TB/file limit, but given that we use an estimated
-        compression factor, we aim for 2TB to leave some leeway.
-    compression_ratio : float
-        Estimated compression factor.
-        I roughly found 2 for bosc-compressed LSM data, when compressing
-        only across space and channels (5 channels).
-
-    Returns
-    -------
-    shard : list[int]
-        Estimated shard size along each dimension.
-        Returned shards are either max_shape or powers of two.
-    """
-    if not isinstance(itemsize, int):
-        itemsize = np.dtype(itemsize).itemsize
-
-    # Maximum number of elements in the shard
-    max_numel = max_file_size * compression_ratio / itemsize
-
-    shard = [1] * len(max_shape)
-    while True:
-        # If shard larger than volume, we can stop
-        if all(x >= s for x, s in zip(shard, max_shape)):
-            break
-        # Make shard one level larger
-        new_shard = [min(2 * x, s) for x, s in zip(shard, max_shape)]
-        # If shard is too large, stop and keep previous shard
-        if np.prod(new_shard) > max_numel:
-            break
-        # Otherwise, use larger shard and recurse
-        shard = new_shard
-
-    # replace max size with larger power of two
-    shard = [2 ** math.ceil(math.log2(x)) for x in shard]
-    return shard
-
-
-def fix_shard_chunk(
-    shard: list[int],
-    chunk: list[int],
-    shape: list[int],
-) -> tuple[list[int], list[int]]:
-    """
-    Fix incompatibilities between chunk and shard size.
-
-    Parameters
-    ----------
-    shard : list[int]
-    chunk : list[int]
-    shape : list[int]
-
-    Returns
-    -------
-    shard : list[int]
-    chunk : list[int]
-    """
-    shard = list(shard)
-    chunk = list(chunk)
-    for i in range(len(chunk)):
-        # if chunk spans the entire volume, match chunk and shard
-        if chunk[i] == shape[i] and chunk[i] != shard[i]:
-            chunk[i] = shard[i]
-        # ensure that shard is a multiple of chunk
-        if shard[i] % chunk[i]:
-            shard[i] = chunk[i] * int(math.ceil(shard[i] / chunk[i]))
-    return shard, chunk
 
 
 def default_read_config(path: os.PathLike | str) -> dict:

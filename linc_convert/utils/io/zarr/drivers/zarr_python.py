@@ -22,6 +22,7 @@ from zarr.core.array import CompressorsLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingLike, ChunkKeyEncodingParams
 
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
+from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
 from linc_convert.utils.zarr_config import ZarrConfig
 
 
@@ -113,7 +114,6 @@ class ZarrPythonGroup(ZarrGroup):
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
-
         if zarr_config.out.startswith("/") or zarr_config.out.startswith("\\"):
             store = zarr.storage.LocalStore(zarr_config.out)
         else:
@@ -234,10 +234,11 @@ class ZarrPythonGroup(ZarrGroup):
         name: str,
         shape: Sequence[int],
         data: ArrayLike = None,
-        **kwargs: Unpack[ZarrConfig],
+        **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrPythonArray:
         """Create a new array using the properties from a base_level object."""
-        base_level = self["0"]
+        # this is very hacky, otherwise the inherited class will use their override
+        base_level = ZarrPythonGroup.__getitem__(self, "0")
         opts = dict(
             dtype=base_level.dtype,
             chunks=base_level.chunks,
@@ -318,109 +319,3 @@ def _dimension_separator_to_chunk_key_encoding(
             name="default" if zarr_version == 3 else "v2", separator=dimension_separator
         )
         return dimension_separator
-
-
-SHARD_FILE_SIZE_LIMIT = (
-    2  # compression ratio
-    * 2  # GB
-    * 2 ** 30  # GB->Bytes
-)
-
-
-def _compute_zarr_layout(
-    shape: tuple, dtype: DTypeLike, zarr_config: ZarrConfig
-) -> tuple[tuple, tuple | None]:
-    ndim = len(shape)
-    if ndim == 5:
-        if zarr_config.no_time:
-            raise ValueError("no_time is not supported for 5D data")
-        chunk_tc = (
-            1 if zarr_config.chunk_time else shape[0],
-            1 if zarr_config.chunk_channels else shape[1],
-        )
-        shard_tc = (
-            chunk_tc[0] if zarr_config.shard_time else shape[0],
-            chunk_tc[1] if zarr_config.shard_channels else shape[1],
-        )
-
-    elif ndim == 4:
-        if zarr_config.no_time:
-            chunk_tc = (1 if zarr_config.chunk_channels else shape[0],)
-            shard_tc = (chunk_tc[0] if zarr_config.shard_channels else shape[0],)
-        else:
-            chunk_tc = (1 if zarr_config.chunk_time else shape[0],)
-            shard_tc = (chunk_tc[0] if zarr_config.shard_time else shape[0],)
-    elif ndim == 3:
-        chunk_tc = tuple()
-        shard_tc = tuple()
-    else:
-        raise ValueError("Zarr layout only supports 3+ dimensions.")
-
-    chunk = zarr_config.chunk
-    if len(chunk) > ndim:
-        raise ValueError("Provided chunk size has more dimension than data")
-    if len(zarr_config.chunk) != ndim:
-        chunk = chunk_tc + chunk + chunk[-1:] * max(0, 3 - len(chunk))
-
-    shard = zarr_config.shard
-
-    if isinstance(shard, tuple) and len(shard) > ndim:
-        raise ValueError("Provided shard size has more dimension than data")
-    # If shard is not used or is fully specified, return early.
-    if shard is None or (isinstance(shard, tuple) and len(shard) == ndim):
-        return chunk, shard
-
-    chunk_spatial = chunk[-3:]
-    if shard == "auto":
-        # Compute auto shard sizes based on the file size limit.
-        itemsize = dtype.itemsize
-        chunk_size = np.prod(chunk_spatial) * itemsize
-        shard_size = np.prod(shard_tc) * chunk_size
-        B_multiplier = SHARD_FILE_SIZE_LIMIT / shard_size
-        multiplier = int(B_multiplier ** (1 / 3))
-        if multiplier < 1:
-            multiplier = 1
-
-        shape_spatial = shape[-3:]
-        # For each spatial dimension, the minimal multiplier needed to cover the data:
-        L = [int(np.ceil(s / c)) for s, c in zip(shape_spatial, chunk_spatial)]
-        dims = len(chunk_spatial)
-
-        shard = tuple(int(c * multiplier) for c in chunk_spatial)
-        m_uniform = int(B_multiplier ** (1 / dims))
-        M = []
-        free_dims = []
-        for i in range(dims):
-            # If the uniform guess already overshoots the data, clamp to the minimal
-            # covering multiplier.
-            if m_uniform * chunk_spatial[i] >= shape_spatial[i]:
-                M.append(L[i])
-            else:
-                M.append(m_uniform)
-                free_dims.append(i)
-
-        # Iteratively try to increase free dimensions while keeping the overall
-        # product ≤ B_multiplier.
-        improved = True
-        while improved and free_dims:
-            improved = False
-            for i in free_dims:
-                candidate = M[i] + 1
-                # If increasing would exceed the data size in this dimension,
-                # clamp to the minimal covering multiplier.
-                if candidate * chunk_spatial[i] >= shape_spatial[i]:
-                    candidate = L[i]
-                new_product = np.prod(
-                    [candidate if j == i else M[j] for j in range(dims)]
-                )
-                if new_product <= B_multiplier and candidate > M[i]:
-                    M[i] = candidate
-                    improved = True
-            # Remove dimensions that have reached or exceeded the data size.
-            free_dims = [
-                i for i in free_dims if M[i] * chunk_spatial[i] < shape_spatial[i]
-            ]
-        shard = tuple(M[i] * chunk_spatial[i] for i in range(dims))
-
-    shard = shard_tc + shard + shard[-1:] * max(0, 3 - len(shard))
-    return chunk, shard

@@ -27,7 +27,7 @@ from dask.diagnostics import ProgressBar
 from nibabel import Nifti1Header, Nifti2Header
 from numpy.typing import ArrayLike, DTypeLike
 
-from linc_convert.utils.io.generate_pyramid import (
+from linc_convert.utils.io.zarr.generate_pyramid import (
     compute_next_level,
     default_levels,
     next_level_shape,
@@ -151,7 +151,7 @@ class ZarrGroup(ZarrNode):
         ...
 
     @abstractmethod
-    def _get_zarr_python_group(self) -> "zarr.ZarrGroup":
+    def _get_zarr_python_group(self) -> zarr.Group:
         """Get the underlying Zarr Python group object."""
         ...
 
@@ -227,7 +227,6 @@ class ZarrGroup(ZarrNode):
             if mode not in window_func:
                 raise ValueError(f"Unsupported mode: {mode}")
             window = window_func[mode]
-
 
         if levels == -1:
             levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
