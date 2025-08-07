@@ -1,5 +1,5 @@
 """TensorStore driver for Zarr arrays and groups."""
-
+import json
 import os
 from numbers import Number
 from os import PathLike
@@ -77,7 +77,17 @@ class ZarrTSArray(ZarrArray):
     @property
     def attrs(self) -> Mapping[str, Any]:
         """Access metadata/attributes for this node."""
-        # TODO: TensorStore currently doesn’t expose arbitrary attrs, so return empty.
+        store = UPath(self.store_path)
+        if self.zarr_version == 2:
+            if not (store / ".zattrs").exists():
+                return {}
+            with open(store / ".zattrs") as f:
+                zarr_json = json.load(f)
+                return zarr_json
+        elif self.zarr_version == 3:
+            with open(store / "zarr.json") as f:
+                zarr_json = json.load(f)
+                return zarr_json.get("attributes", {})
         return {}
 
     @property
