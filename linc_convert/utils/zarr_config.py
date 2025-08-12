@@ -2,14 +2,14 @@
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 from cyclopts import Parameter
 from typing_extensions import Unpack
 
 logger = logging.getLogger(__name__)
 
-DriverLike = Literal["zarr-python", "tensorstore", "zarrita"]
+DriverLike: TypeAlias = Literal["zarr-python", "tensorstore", "zarrita"]
 
 
 @Parameter(name="*")

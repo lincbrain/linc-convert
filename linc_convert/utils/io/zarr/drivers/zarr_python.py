@@ -174,10 +174,6 @@ class ZarrPythonGroup(ZarrGroup):
         """Delegate attribute access to the underlying Zarr group."""
         return getattr(self._zgroup, name)
 
-    def _get_zarr_python_group(self) -> zarr.Group:
-        """Get the underlying Zarr Python group object."""
-        return self._zgroup
-
     def create_group(self, name: str, overwrite: bool = False) -> "ZarrPythonGroup":
         """Create or open a subgroup within this group."""
         subgroup = self._zgroup.create_group(name, overwrite=overwrite)

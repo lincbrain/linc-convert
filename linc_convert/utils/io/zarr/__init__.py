@@ -3,19 +3,25 @@
 import warnings
 
 from .abc import ZarrArray, ZarrGroup, ZarrNode
-from .drivers.zarr_python import ZarrPythonArray, ZarrPythonGroup
-from .factory import from_config, open, open_group
+from .factory import from_config, open_array, open_group
 
 __all__ = [
     ZarrArray,
     ZarrGroup,
     ZarrNode,
-    ZarrPythonArray,
-    ZarrPythonGroup,
     from_config,
-    open,
+    open_array,
     open_group,
 ]
+
+try:
+    import zarr  # noqa: F401
+
+    from .drivers.zarr_python import ZarrPythonArray, ZarrPythonGroup
+
+    __all__ += ['ZarrPythonArray', 'ZarrPythonGroup']
+except ImportError:
+    warnings.warn("zarr-python is not installed, driver disabled")
 
 try:
     import tensorstore as TS  # noqa: F401

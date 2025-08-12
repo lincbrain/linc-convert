@@ -22,7 +22,6 @@ from typing import (
 import niizarr
 import numpy as np
 import tqdm
-import zarr
 from dask import array as da
 from dask.diagnostics import ProgressBar
 from nibabel import Nifti1Header, Nifti2Header
@@ -149,11 +148,6 @@ class ZarrGroup(ZarrNode):
     @abstractmethod
     def __delitem__(self, key: str) -> None:
         """Delete a subgroup or array by name within this group."""
-        ...
-
-    @abstractmethod
-    def _get_zarr_python_group(self) -> zarr.Group:
-        """Get the underlying Zarr Python group object."""
         ...
 
     @abstractmethod

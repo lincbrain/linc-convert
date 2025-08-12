@@ -170,7 +170,7 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    omz._get_zarr_python_group().attrs["multiscales"] = omz_data.attrs["multiscales"]
+    omz.attrs["multiscales"] = omz_data.attrs["multiscales"]
 
 
 def get_mask_name(level: int) -> str:
