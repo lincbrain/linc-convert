@@ -24,6 +24,7 @@ from upath import UPath
 
 from linc_convert.utils.io.zarr import ZarrPythonArray
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
+from linc_convert.utils.io.zarr.attributes import Attributes
 from linc_convert.utils.io.zarr.helpers import auto_shard_size, fix_shard_chunk
 from linc_convert.utils.zarr_config import ZarrConfig
 
@@ -42,6 +43,7 @@ class ZarrTSArray(ZarrArray):
         """
         super().__init__(str(ts_array.kvstore.path))
         self._ts = ts_array
+        self._attrs: Optional[Attributes] = None
 
     @classmethod
     def from_zarr_python_array(cls, zarray: ZarrPythonArray) -> "ZarrTSArray":
@@ -76,20 +78,11 @@ class ZarrTSArray(ZarrArray):
         return None if read_shape == write_shape else write_shape
 
     @property
-    def attrs(self) -> Mapping[str, Any]:
+    def attrs(self) -> Attributes:
         """Access metadata/attributes for this node."""
-        store = UPath(self.store_path)
-        if self.zarr_version == 2:
-            if not (store / ".zattrs").exists():
-                return {}
-            with open(store / ".zattrs") as f:
-                zarr_json = json.load(f)
-                return zarr_json
-        elif self.zarr_version == 3:
-            with open(store / "zarr.json") as f:
-                zarr_json = json.load(f)
-                return zarr_json.get("attributes", {})
-        return {}
+        if self._attrs is None:
+            self._attrs = Attributes(self, write_through=True)
+        return self._attrs
 
     @property
     def zarr_version(self) -> Literal[2, 3]:
@@ -154,12 +147,11 @@ class ZarrTSGroup(ZarrGroup):
             Path to the group’s directory.
         """
         super().__init__(store_path)
-        from upath import UPath
-
         self._path = UPath(store_path)
         meta = _detect_metadata(self._path)
         assert meta and meta[0] == "group"
         self._zarr_version = meta[1]
+        self._attrs: Optional[Attributes] = None
 
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> "ZarrTSGroup":
@@ -195,7 +187,10 @@ class ZarrTSGroup(ZarrGroup):
         path : Union[str, PathLike]
             Path to the Zarr group.
         mode : {'r','r+','a','w','w-'}
-            Persistence mode; see TensorStore docs.
+            Persistence mode: 'r' means read only (must exist); 'r+' means
+            read/write (must exist); 'a' means read/write (create if doesn't
+            exist); 'w' means create (overwrite if exists); 'w-' means create
+            (fail if exists).
         zarr_version : {2,3}
             Zarr format version.
 
@@ -203,8 +198,6 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSGroup
         """
-        from upath import UPath
-
         p = UPath(path)
         if mode in ("r", "r+"):
             if not p.exists() or not p.is_dir():
@@ -224,9 +217,11 @@ class ZarrTSGroup(ZarrGroup):
         return cls(p)
 
     @property
-    def attrs(self) -> Mapping[str, Any]:
+    def attrs(self) -> Attributes:
         """Access metadata/attributes for this node."""
-        return {}
+        if self._attrs is None:
+            self._attrs = Attributes(self, write_through=True)
+        return self._attrs
 
     @property
     def zarr_version(self) -> Literal[2, 3]:
@@ -362,6 +357,12 @@ class ZarrTSGroup(ZarrGroup):
             arr[:] = data
         return ZarrTSArray(arr)
 
+    def load_metadata(self):
+        pass
+
+    def save_metadata(self):
+        pass
+
 
 def make_compressor_v2(name: str | None, **prm: dict) -> dict:
     """Build compressor dictionary for Zarr v2."""
@@ -431,40 +432,6 @@ def default_read_config(path: os.PathLike | str) -> dict:
         "create": False,
         "delete_existing": False,
     }
-
-
-def _is_array(path: PathLike) -> bool:
-    zarr2_array_file = path / ".zarray"
-    if zarr2_array_file.is_file():
-        content = zarr2_array_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 2
-        return True
-    zarr3_array_file = path / "zarr.json"
-    if zarr3_array_file.is_file():
-        content = zarr3_array_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 3
-        if content.get("node_type", None) == "array":
-            return True
-    return False
-
-
-def _is_group(path: PathLike) -> bool:
-    zarr2_group_file = path / ".zgroup"
-    if zarr2_group_file.is_file():
-        content = zarr2_group_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 2
-        return True
-    zarr3_group_file = path / "zarr.json"
-    if zarr3_group_file.is_file():
-        content = zarr3_group_file.read_text()
-        content = json.loads(content)
-        assert content["zarr_format"] == 3
-        if content.get("node_type", None) == "group":
-            return True
-    return False
 
 
 def _detect_metadata(path: PathLike) -> Optional[Tuple[str, int]]:

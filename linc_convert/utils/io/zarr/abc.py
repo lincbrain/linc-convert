@@ -290,7 +290,7 @@ class ZarrGroup(ZarrNode):
         None.
         """
         niizarr.write_ome_metadata(
-            self._get_zarr_python_group(),
+            self,
             space_scale=space_scale,
             time_scale=time_scale,
             space_unit=space_unit,
