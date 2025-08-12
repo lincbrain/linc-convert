@@ -1,7 +1,7 @@
 """Configuration related to output Zarr Archive."""
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Literal
 
 from cyclopts import Parameter
@@ -91,7 +91,7 @@ class ZarrConfig:
     dimension_separator: Literal[".", "/"] = "/"
     order: Literal["C", "F"] = "C"
     compressor: Literal["blosc", "zlib", None] = "blosc"
-    compressor_opt: str = "{}"
+    compressor_opt: dict[str, float | str] = field(default_factory=dict)
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z", None] = None
     levels: int = -1

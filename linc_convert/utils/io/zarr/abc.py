@@ -13,6 +13,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TypeAlias,
     TypedDict,
     Union,
     Unpack,
@@ -34,15 +35,15 @@ from linc_convert.utils.io.zarr.generate_pyramid import (
 )
 from linc_convert.utils.zarr_config import ZarrConfig
 
-NiftiHeaderLike = Union[Nifti1Header, Nifti2Header]
+NiftiHeaderLike: TypeAlias = Nifti1Header | Nifti2Header
 
 
 class ZarrArrayConfig(TypedDict):
     """Configuration for creating a Zarr Array."""
 
-    chunks: tuple[int, ...]
-    shards: Optional[tuple[int, ...]]
-    compressors: Literal["blosc", "zlib", None]
+    chunk: tuple[int, ...]
+    shard: Optional[tuple[int, ...]]
+    compressor: Literal["blosc", "zlib", None]
     compressor_options: dict[str, Any]
     dimension_separator: Literal[".", "/"]
     order: Literal["C", "F"]
@@ -306,4 +307,4 @@ class ZarrGroup(ZarrNode):
 
     def write_nifti_header(self, header: NiftiHeaderLike) -> None:
         """Write a NIfTI header to the Zarr group."""
-        niizarr.write_nifti_header(self._get_zarr_python_group(), header)
+        niizarr.write_nifti_header(self, header)

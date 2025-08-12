@@ -204,10 +204,7 @@ class ZarrPythonGroup(ZarrGroup):
         compressor = zarr_config.compressor
         compressor_opt = zarr_config.compressor_opt
         chunk, shard = _compute_zarr_layout(shape, dtype, zarr_config)
-
-        if isinstance(compressor_opt, str):
-            compressor_opt = ast.literal_eval(compressor_opt)
-
+        # TODO: implement fill_value
         opt = {
             "chunks": chunk,
             "shards": shard,

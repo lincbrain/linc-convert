@@ -26,6 +26,7 @@ from linc_convert.utils.io.zarr import ZarrPythonArray
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
 from linc_convert.utils.io.zarr.attributes import Attributes
 from linc_convert.utils.io.zarr.helpers import auto_shard_size, fix_shard_chunk
+from linc_convert.utils.io.zarr.metadata import GroupMetadata
 from linc_convert.utils.zarr_config import ZarrConfig
 
 
@@ -152,6 +153,7 @@ class ZarrTSGroup(ZarrGroup):
         assert meta and meta[0] == "group"
         self._zarr_version = meta[1]
         self._attrs: Optional[Attributes] = None
+        self._metadata: Optional[GroupMetadata] = None
 
     @classmethod
     def from_config(cls, zarr_config: ZarrConfig) -> "ZarrTSGroup":
@@ -224,6 +226,12 @@ class ZarrTSGroup(ZarrGroup):
         return self._attrs
 
     @property
+    def metadata(self) -> GroupMetadata:
+        if self._metadata is None:
+            self._metadata = GroupMetadata.from_files(self._path)
+        return self._metadata
+
+    @property
     def zarr_version(self) -> Literal[2, 3]:
         """Get the Zarr format version."""
         return self._zarr_version
@@ -287,8 +295,9 @@ class ZarrTSGroup(ZarrGroup):
         shape: Sequence[int],
         dtype: DTypeLike = np.int32,
         *,
-        zarr_config: Optional[ZarrConfig] = None,
+        overwrite: bool = True,
         data: Optional[ArrayLike] = None,
+        zarr_config: Optional[ZarrConfig] = None,
         **kwargs: Unpack[ZarrArrayConfig],
     ) -> ZarrTSArray:
         """
@@ -299,6 +308,7 @@ class ZarrTSGroup(ZarrGroup):
         name : str
         shape : Sequence[int]
         dtype : DTypeLike
+        overwrite: bool
         zarr_config : ZarrConfig | None
         data : ArrayLike | None
 
@@ -306,9 +316,26 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSArray
         """
+        # TODO: implement kwargs replacement
+
+        if "chunks" in kwargs:
+            kwargs["chunk"] = kwargs["chunks"]
+            del kwargs["chunks"]
+        if "shards" in kwargs:
+            kwargs["shard"] = kwargs["shards"]
+            del kwargs["shards"]
+        if "compressors" in kwargs:
+            kwargs["compressor"] = kwargs["compressors"]
+            del kwargs["compressors"]
+        if "chunk_key_encoding" in kwargs:
+            del kwargs["chunk_key_encoding"]
+        if "fill_value" in kwargs:
+            del kwargs["fill_value"]
         if zarr_config is None:
             conf = default_write_config(
-                self._path / name, shape=shape, dtype=dtype, **kwargs
+                self._path / name, shape=shape, dtype=dtype,
+                version=self.zarr_version,
+                **kwargs
             )
         else:
             conf = default_write_config(
@@ -318,11 +345,12 @@ class ZarrTSGroup(ZarrGroup):
                 chunk=zarr_config.chunk,
                 shard=zarr_config.shard,
                 compressor=zarr_config.compressor,
-                # TODO: implement this
-                # compressor_opt=ast.literal_eval(zarr_config.compressor_opt),
-                version=zarr_config.zarr_version,
+                compressor_opt=zarr_config.compressor_opt,
+                version=self.zarr_version,
             )
-        conf.update(delete_existing=True, create=True)
+        if overwrite:
+            conf.update(delete_existing=True)
+        conf.update(create=True)
         arr = ts.open(conf).result()
         if data is not None:
             arr[:] = data
@@ -357,11 +385,6 @@ class ZarrTSGroup(ZarrGroup):
             arr[:] = data
         return ZarrTSArray(arr)
 
-    def load_metadata(self):
-        pass
-
-    def save_metadata(self):
-        pass
 
 
 def make_compressor_v2(name: str | None, **prm: dict) -> dict:
@@ -473,6 +496,7 @@ def default_write_config(
     shard: list[int] | Literal["auto"] | None = None,
     compressor: str = "blosc",
     compressor_opt: dict | None = None,
+    fill_value: Number | None = 0,
     version: int = 3,
 ) -> dict:
     """
@@ -486,6 +510,7 @@ def default_write_config(
         Shard size. No sharding if `None`.
     compressor : str
         Compressor name
+    fill_value:
     version : int
         Zarr version
 
@@ -494,8 +519,6 @@ def default_write_config(
     config : dict
         Configuration
     """
-    from upath import UPath
-
     path = UPath(path)
     if not path.protocol:
         path = "file://" / path
@@ -572,7 +595,7 @@ def default_write_config(
             "chunk_grid": chunk_grid,
             "codecs": codecs,
             "data_type": np.dtype(dtype).name,
-            "fill_value": 0,
+            "fill_value": fill_value,
             "chunk_key_encoding": {
                 "name": "default",
                 "configuration": {"separator": r"/"},
@@ -596,9 +619,9 @@ def default_write_config(
                 chunk[i] = shape[i]
         metadata = {
             "chunks": chunk,
-            "order": "F",
+            "order": "F" if len(shape) >= 2 else "C",
             "dtype": np.dtype(dtype).str,
-            "fill_value": 0,
+            "fill_value": fill_value,
             "compressor": compressor,
         }
         config = {
