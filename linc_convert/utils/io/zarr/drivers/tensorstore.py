@@ -16,11 +16,9 @@ from urllib.parse import urlparse
 
 import numpy as np
 import tensorstore as ts
-import zarr
 from numpy.typing import ArrayLike, DTypeLike
 from upath import UPath
 
-from linc_convert.utils.io.zarr import ZarrPythonArray
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
 from linc_convert.utils.io.zarr.attributes import Attributes
 from linc_convert.utils.io.zarr.helpers import auto_shard_size, fix_shard_chunk
@@ -43,11 +41,6 @@ class ZarrTSArray(ZarrArray):
         super().__init__(str(ts_array.kvstore.path))
         self._ts = ts_array
         self._attrs: Optional[Attributes] = None
-
-    @classmethod
-    def from_zarr_python_array(cls, zarray: ZarrPythonArray) -> "ZarrTSArray":
-        """Convert a ZarrPythonArray into a ZarrTSArray."""
-        return cls.open(zarray.store_path, zarr_version=zarray.zarr_version)
 
     @property
     def ndim(self) -> int:
@@ -266,10 +259,6 @@ class ZarrTSGroup(ZarrGroup):
         """Check whether a subgroup or array exists in this group."""
         p = self._path / name
         return p.exists() and bool(_detect_metadata(p))
-
-    def _get_zarr_python_group(self) -> "zarr.Group":
-        """Get the underlying Zarr Python group object."""
-        return zarr.open_group(self._path, mode="a")
 
     def create_group(self, name: str, overwrite: bool = False) -> "ZarrTSGroup":
         """
