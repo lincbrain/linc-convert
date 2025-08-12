@@ -4,10 +4,8 @@ import os
 from numbers import Number
 from os import PathLike
 from typing import (
-    Any,
     Iterator,
     Literal,
-    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -220,13 +218,14 @@ class ZarrTSGroup(ZarrGroup):
 
     @property
     def attrs(self) -> Attributes:
-        """Access metadata/attributes for this node."""
+        """Access attributes for this node."""
         if self._attrs is None:
             self._attrs = Attributes(self, write_through=True)
         return self._attrs
 
     @property
     def metadata(self) -> GroupMetadata:
+        """Access metadata for this node."""
         if self._metadata is None:
             self._metadata = GroupMetadata.from_files(self._path)
         return self._metadata
@@ -316,38 +315,47 @@ class ZarrTSGroup(ZarrGroup):
         -------
         ZarrTSArray
         """
-        # TODO: implement kwargs replacement
 
-        if "chunks" in kwargs:
-            kwargs["chunk"] = kwargs["chunks"]
-            del kwargs["chunks"]
-        if "shards" in kwargs:
-            kwargs["shard"] = kwargs["shards"]
-            del kwargs["shards"]
-        if "compressors" in kwargs:
-            kwargs["compressor"] = kwargs["compressors"]
-            del kwargs["compressors"]
-        if "chunk_key_encoding" in kwargs:
-            del kwargs["chunk_key_encoding"]
-        if "fill_value" in kwargs:
-            del kwargs["fill_value"]
-        if zarr_config is None:
-            conf = default_write_config(
-                self._path / name, shape=shape, dtype=dtype,
-                version=self.zarr_version,
-                **kwargs
-            )
-        else:
-            conf = default_write_config(
-                self._path / name,
-                shape=shape,
-                dtype=dtype,
-                chunk=zarr_config.chunk,
-                shard=zarr_config.shard,
-                compressor=zarr_config.compressor,
-                compressor_opt=zarr_config.compressor_opt,
-                version=self.zarr_version,
-            )
+        def _normalize_keys(d: dict) -> dict:
+            # map plural/common variants -> canonical keys
+            mapping = {
+                "chunks": "chunk",
+                "shards": "shard",
+                "compressors": "compressor",
+                "compressor_opts": "compressor_opt",
+            }
+            out = {}
+            for k, v in d.items():
+                if k in ("chunk_key_encoding", "fill_value"):
+                    # explicitly unsupported/ignored
+                    continue
+                out[mapping.get(k, k)] = v
+            # drop Nones so we don't pass them through
+            return {k: v for k, v in out.items() if v is not None}
+
+        # Start with defaults from zarr_config (if provided)
+        base: dict = {}
+        if zarr_config is not None:
+            base = _normalize_keys({
+                "chunk": getattr(zarr_config, "chunk", None),
+                "shard": getattr(zarr_config, "shard", None),
+                "compressor": getattr(zarr_config, "compressor", None),
+                "compressor_opt": getattr(zarr_config, "compressor_opt", None),
+            })
+
+        # Normalize kwargs and make them override zarr_config-provided defaults
+        kw = _normalize_keys(kwargs)
+        merged = {**base, **kw}  # kwargs win
+
+        # Build the write config
+        conf = default_write_config(
+            self._path / name,
+            shape=shape,
+            dtype=dtype,
+            version=self.zarr_version,
+            **merged,
+        )
+
         if overwrite:
             conf.update(delete_existing=True)
         conf.update(create=True)

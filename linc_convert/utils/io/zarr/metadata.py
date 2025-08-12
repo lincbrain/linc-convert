@@ -1,18 +1,27 @@
-from dataclasses import dataclass, field, fields, replace, asdict
-from typing import (Any, Iterable, Iterator, Sequence, Literal, Self, Tuple, Optional,
-                    Mapping)
+"""
+Metadata handling for Zarr.
+
+This file contains code from the Zarr project
+https://github.com/zarr-developers/zarr-python
+"""
+
 import json
 import os
 import tempfile
+from dataclasses import dataclass, field, fields, replace
+from typing import Any, Literal, Self, Sequence
+
+from upath import UPath
 
 JSON = Any
 
 
 @dataclass(frozen=True)
 class Metadata:
-    """Frozen, recursive, JSON-serializable base (like your Metadata)."""
+    """Frozen, recursive, JSON-serializable metadata class."""
 
     def to_dict(self) -> dict[str, JSON]:
+        """Convert this metadata to a JSON-serializable dict."""
         out: dict[str, JSON] = {}
         for f in fields(self):
             k = f.name
@@ -27,22 +36,27 @@ class Metadata:
 
     @classmethod
     def from_dict(cls, data: dict[str, JSON]) -> Self:
+        """Create an instance from a JSON-serializable dict."""
         return cls(**data)  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True)
 class GroupMetadata(Metadata):
+    """Metadata for a Zarr group, including attributes and format version."""
+
     attributes: dict[str, Any] = field(default_factory=dict)
     zarr_format: Literal[2, 3] = 3
     node_type: Literal["group"] = field(default="group", init=False)
 
     # Convenience updaters (immutably return new metadata)
     def update_attributes(self, attributes: dict[str, JSON]) -> Self:
+        """Return a new GroupMetadata with updated attributes."""
         return replace(self, attributes=dict(attributes))
 
     # ---- I/O helpers for disk persistence ----
     @staticmethod
-    def _atomic_write(path, data: dict[str, Any]) -> None:
+    def _atomic_write(path: "UPath", data: dict[str, Any]) -> None:
+        """Write data to path atomically."""
         parent = path.parent
         parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".meta_tmp_", dir=str(parent))
@@ -61,6 +75,7 @@ class GroupMetadata(Metadata):
 
     @classmethod
     def from_files(cls, root: "UPath") -> "GroupMetadata":
+        """Load metadata from the specified root directory."""
         # Prefer zarr.json if present; otherwise v2 split files
         zarr_json = root / "zarr.json"
         if zarr_json.exists():
@@ -83,6 +98,7 @@ class GroupMetadata(Metadata):
         return cls(attributes=attrs, zarr_format=zf)
 
     def to_files(self, root: "UPath") -> None:
+        """Write this metadata to the specified root directory."""
         if self.zarr_format == 3:
             path = root / "zarr.json"
             data = {}

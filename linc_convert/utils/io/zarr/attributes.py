@@ -1,13 +1,16 @@
 """
+Attributes Handling for Zarr.
 
+This file contains code from the Zarr project
+https://github.com/zarr-developers/zarr-python
 """
 
-from collections.abc import MutableMapping, Iterator
-from typing import Any, Optional
 import json
 import os
 import tempfile
 import threading
+from collections.abc import Iterator, MutableMapping
+from typing import Any
 
 from upath import UPath
 
@@ -25,7 +28,7 @@ class Attributes(MutableMapping[str, Any]):
       - .zarr_version (2 or 3)
     """
 
-    def __init__(self, obj: Any, *, write_through: bool = True) -> None:
+    def __init__(self, obj: Any, *, write_through: bool = True) -> None:  # noqa: ANN401
         self._obj = obj
         self._write_through = write_through
         self._lock = threading.RLock()
@@ -46,13 +49,13 @@ class Attributes(MutableMapping[str, Any]):
 
     # ---------- public helpers ----------
     def asdict(self) -> dict[str, Any]:
+        """Return a snapshot of attributes as a dict."""
         with self._lock:
             self._ensure_loaded()
             return dict(self._attrs)
 
     def put(self, d: dict[str, Any]) -> None:
-        """Overwrite all attributes with d (in-memory), then flush (respecting
-        write_through)."""
+        """Overwrite all attributes with d (in-memory), then flush."""
         with self._lock:
             self._ensure_loaded()
             self._attrs = dict(d)
@@ -74,12 +77,14 @@ class Attributes(MutableMapping[str, Any]):
             self._ensure_loaded()
 
     # ---------- MutableMapping interface ----------
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> Any:  # noqa: ANN401
+        """Get an attribute by key."""
         with self._lock:
             self._ensure_loaded()
             return self._attrs[key]
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:  # noqa: ANN401
+        """Set or update an attribute."""
         with self._lock:
             self._ensure_loaded()
             self._attrs[key] = value
@@ -87,6 +92,7 @@ class Attributes(MutableMapping[str, Any]):
                 self._flush_locked()
 
     def __delitem__(self, key: str) -> None:
+        """Delete an attribute."""
         with self._lock:
             self._ensure_loaded()
             del self._attrs[key]
@@ -94,11 +100,13 @@ class Attributes(MutableMapping[str, Any]):
                 self._flush_locked()
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over a snapshot of keys."""
         with self._lock:
             self._ensure_loaded()
             return iter(dict(self._attrs))  # iterate over a snapshot
 
     def __len__(self) -> int:
+        """Return number of attributes."""
         with self._lock:
             self._ensure_loaded()
             return len(self._attrs)
@@ -140,6 +148,7 @@ class Attributes(MutableMapping[str, Any]):
 def _atomic_json_write(path: UPath, data: dict[str, Any]) -> None:
     """
     Atomically write JSON to 'path' via a temp file + rename.
+
     Works with local and fsspec-backed paths that expose .open / .parent.
     """
     parent = path.parent

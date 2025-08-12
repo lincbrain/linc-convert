@@ -1,6 +1,5 @@
 """ZarrIO Implementation using the zarr-python library."""
 
-import ast
 from numbers import Number
 from typing import (
     Any,
