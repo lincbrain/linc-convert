@@ -19,16 +19,16 @@ from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.io._array_wrapper import (
-    _ArrayWrapper,
-    _H5ArrayWrapper,
-    _MatArrayWrapper,
+from linc_convert.utils.io.matlab_array_wrapper import (
+    ArrayWrapper,
+    H5arraywrapper,
+    Matarraywrapper,
 )
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.zarr_config import ZarrConfig
 
 logger = logging.getLogger(__name__)
 multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
@@ -46,17 +46,17 @@ def _automap(func: Callable) -> Callable:
     return wrapper
 
 
-def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[_ArrayWrapper]:
+def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[ArrayWrapper]:
     """Load or memory-map an array stored in a .mat file."""
 
-    def make_wrapper(fname: str) -> _ArrayWrapper:
+    def make_wrapper(fname: str) -> ArrayWrapper:
         try:
             # "New" .mat file
             f = h5py.File(fname, "r")
-            return _H5ArrayWrapper(f, key)
+            return H5arraywrapper(f, key)
         except Exception:
             # "Old" .mat file
-            return _MatArrayWrapper(fname, key)
+            return Matarraywrapper(fname, key)
 
     return [make_wrapper(fname) for fname in fnames]
 

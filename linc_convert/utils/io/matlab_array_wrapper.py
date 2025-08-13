@@ -1,4 +1,5 @@
 from _warnings import warn
+from abc import abstractmethod
 from typing import Mapping, Optional
 
 import h5py
@@ -6,7 +7,7 @@ import numpy as np
 from scipy.io import loadmat
 
 
-class _ArrayWrapper:
+class ArrayWrapper:
     def _get_key(self, f: Mapping) -> str:
         key = self.key
         if key is None:
@@ -27,7 +28,7 @@ class _ArrayWrapper:
         return key
 
 
-class _H5ArrayWrapper(_ArrayWrapper):
+class H5arraywrapper(ArrayWrapper):
     def __init__(self, file: h5py.File, key: Optional[str]) -> None:
         self.file = file
         self.key = key
@@ -59,7 +60,7 @@ class _H5ArrayWrapper(_ArrayWrapper):
         return self.array[index]
 
 
-class _MatArrayWrapper(_ArrayWrapper):
+class Matarraywrapper(ArrayWrapper):
     def __init__(self, file: str, key: Optional[str]) -> None:
         self.file = file
         self.key = key
