@@ -31,6 +31,7 @@ zarr = "^2.0.0"
 nifti-zarr = "*"
 # optionals
 glymur = { version = "*", optional = true }
+dandi = { version = ">=0.68.1", optional = true }
 tifffile = { version = "*", optional = true }
 h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
@@ -38,10 +39,10 @@ wkw = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile"]
+lsm = ["dandi", "tifffile"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
-all = ["glymur", "tifffile", "h5py", "scipy", "wkw"]
+all = ["glymur", "dandi", "tifffile", "h5py", "scipy", "wkw"]
 
 [tool.poetry.group.dev]
 optional = true
