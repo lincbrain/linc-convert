@@ -5,9 +5,9 @@ try:
     import scipy as _scipy  # noqa: F401
 
     __all__ = ["cli", "multi_slice", "single_volume", "mosaic3d", "mosaic2d", "pyramid",
-               "z_stitching"]
+               "z_stitching", "single_tile"]
 
     from . import (cli, multi_slice, single_volume, mosaic3d, mosaic2d, pyramid,
-                   z_stitching)
+                   z_stitching, single_tile)
 except ImportError:
     pass

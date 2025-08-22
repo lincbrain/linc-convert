@@ -49,6 +49,8 @@ def mosaic2d_telesto(
         Paths
 
     """
+    # TODO: more logs needed
+    # TODO: separate slices
     logger.info(f"--Modality is {modality}--")
     tilt_postfix = '_tilt' if tilted_illumination else ''
 

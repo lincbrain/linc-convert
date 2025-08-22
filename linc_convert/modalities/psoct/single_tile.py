@@ -34,25 +34,26 @@ from linc_convert.utils.io.zarr.drivers.zarr_python import _compute_zarr_layout
 from linc_convert.utils.zarr_config import ZarrConfig
 
 logger = logging.getLogger(__name__)
-mosaic3d = cyclopts.App(name="mosaic3d", help_format="markdown")
-psoct.command(mosaic3d)
+single_tile = cyclopts.App(name="single_tile", help_format="markdown")
+psoct.command(single_tile)
 
 # 3d data has pixdim incorrectly set and cause nibabel keep logging warning
 nib.imageglobals.logger.setLevel(40)
 
 
-@mosaic3d.default
-def mosaic3d_telesto(
-        parameter_file: str,
-        *,
-        slice_index: int,
-        dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
-        o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
-        r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
-        tilted_illumination: bool = False,
-        downsample: bool = False,
-        zarr_config: ZarrConfig = None,
-        ) -> None:
+@single_tile.default
+def single_tile(
+    parameter_file: str,
+    *,
+    tile_idx: int,
+    slice_index: int,
+    dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
+    o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
+    r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
+    tilted_illumination: bool = False,
+    downsample: bool = False,
+    zarr_config: ZarrConfig = None,
+) -> None:
     """
     Parameters
     ----------
@@ -129,7 +130,7 @@ def mosaic3d_telesto(
     chunk, shard = _compute_zarr_layout((depth, full_height, full_width), np.float32,
                                         zarr_config)
 
-    dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx,
+    dBI_result, R3D_result, O3D_result = build_slice(mosaic_idx, tile_idx,
                                                      input_file_template,
                                                      blend_ramp, clip_x, clip_y,
                                                      full_width, full_height, depth,
@@ -142,46 +143,13 @@ def mosaic3d_telesto(
                                                      chunk=chunk if not shard else
                                                      shard)
 
-    dBI_result = dBI_result.transpose(2, 1, 0)
-    R3D_result = R3D_result.transpose(2, 1, 0)
-    O3D_result = O3D_result.transpose(2, 1, 0)
-
     writers = []
     results = []
     zgroups = []
     for out, res in zip([dbi_output, r3d_output, o3d_output],
                         [dBI_result, R3D_result, O3D_result]):
-
-        if shard:
-            res = da.rechunk(res, chunks=shard)
-        else:
-            res = da.rechunk(res, chunks=chunk)
-        zarr_config.out = out
-        zgroup = from_config(zarr_config)
-        zgroups.append(zgroup)
-        writer = zgroup.create_array("0", shape=res.shape,
-                                     dtype=np.float32, zarr_config=zarr_config)
-        writers.append(writer)
-        results.append(res)
-    task = da.store(results, writers, compute=False)
-
-    with ProgressBar():
-        task.compute()
-
-    scan_resolution = scan_resolution[:3][::-1].tolist()
-    logger.info("finished")
-    for zgroup in zgroups:
-        zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=scan_resolution,
-                                  space_unit="millimeter")
-        if not zarr_config.nii:
-            continue
-        nii_header = default_nifti_header(zgroup["0"],
-                                          zgroup._get_zarr_python_group().attrs[
-                                              "multiscales"])
-        nii_header.set_xyzt_units("mm")
-        zgroup.write_nifti_header(nii_header)
-    logger.info("finished generating pyramid")
+        img = nib.Nifti1Image(res, np.eye(4))
+        nib.save(img, out)
 
 
 # For I80 slab1 use only
@@ -218,16 +186,20 @@ def temporary_compensation(dBI, R3D, O3D, depth, focus, scan_info):
     return da.stack([dBI, R3D, O3D], 3)
 
 
-def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, full_width,
-                full_height, depth, flip_z, map_indices, scan_info, tile_width,
-                tile_height, x_coords, y_coords, raw_tile_width, focus, temp_compensate,
-                chunk):
+def build_slice(
+    mosaic_idx, want_tile_idx, input_file_template, blend_ramp, clip_x, clip_y,
+    full_width,
+    full_height, depth, flip_z, map_indices, scan_info, tile_width,
+    tile_height, x_coords, y_coords, raw_tile_width, focus, temp_compensate,
+    chunk
+    ):
     coords = []
     tiles = []
     for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices), "Loading Tiles"):
         if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
-                y_coords[i, j]):
-            # TODO: throw warnings here
+            y_coords[i, j]):
+            continue
+        if tile_idx != want_tile_idx:
             continue
         x0, y0 = int(x_coords[i, j]), int(y_coords[i, j])
 
@@ -236,21 +208,21 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
         complex3d = _load_tile(input_file_path)
         if complex3d.shape[0] > 4 * raw_tile_width:
             warnings.warn(
-                    f"Complex3D shape {complex3d.shape} is larger than expected "
-                    f"{4 * raw_tile_width}. "
-                    "Trimming to 4*raw_tile_width."
-                    )
+                f"Complex3D shape {complex3d.shape} is larger than expected "
+                f"{4 * raw_tile_width}. "
+                "Trimming to 4*raw_tile_width."
+            )
             complex3d = complex3d[:4 * raw_tile_width, :, :]
         elif complex3d.shape[0] < 4 * raw_tile_width:
             raise ValueError(
-                    f"Complex3D shape {complex3d.shape} is smaller than expected "
-                    f"{4 * raw_tile_width}. "
-                    "Check the input file."
-                    )
+                f"Complex3D shape {complex3d.shape} is smaller than expected "
+                f"{4 * raw_tile_width}. "
+                "Check the input file."
+            )
 
         dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
 
-        if temp_compensate:
+        if False and temp_compensate:
             results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
                                                       scan_info)
             results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
@@ -267,19 +239,15 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
 
         tiles.append(results)
         coords.append((x0, y0))
-
-    return stitch_tiles(
-            coords, tiles,
-            full_width=full_width, full_height=full_height,
-            depth=depth, blend_ramp=blend_ramp,
-            tile_size=(tile_width, tile_height),
-            chunk=chunk
-            )
+    tiles[0] = tiles[0].astype("float32")
+    return tiles[0][..., 0], tiles[0][..., 1], tiles[0][..., 2]
 
 
-def stitch_whole_canvas_padding(coords, tiles,
-                                full_width, full_height, depth,
-                                blend_ramp, tile_size, **_):
+def stitch_whole_canvas_padding(
+    coords, tiles,
+    full_width, full_height, depth,
+    blend_ramp, tile_size, **_
+    ):
     """
     Build a full‐size zero‐canvas per tile and slice‐assign into it,
     then stack & sum (build_slice_whole_canvas_padding).
@@ -312,85 +280,10 @@ def stitch_whole_canvas_padding(coords, tiles,
     return [canvas[..., i] for i in range(3)]
 
 
-def _combine_block(_, block_tiles, block_weights, *args, block_info=None, **kwargs):
-    chunk_id = tuple(block_info[None]['chunk-location'][:2])
-    paints = block_tiles[chunk_id]
-    weights = block_weights[chunk_id]
-    shape = block_info[None]['chunk-shape']
-
-    if not paints:
-        return np.broadcast_to(np.zeros((), dtype=np.float32), shape)
-
-    total_paint = da.sum(da.stack(paints, axis=0), axis=0)
-    total_weight = da.sum(da.stack(weights, axis=0), axis=0)
-    return total_paint / total_weight[..., None, None]
-
-
-def stitch_tiles(coords, tiles,
-                 full_width, full_height, depth,
-                 blend_ramp, tile_size, **_):
-    """
-    Chunk‐aligned padding + per‐block summation (build_slice_chunked_padding).
-    """
-    pw, ph = tile_size
-
-    # canvas = da.zeros((full_width, full_height, depth, 3),
-    #                   chunks=(pw, ph, depth, 3),
-    #                   dtype=np.float32)
-    canvas = da.broadcast_to(da.zeros((), dtype=np.float32),
-                             (full_width, full_height, depth, 3),
-                             chunks=(pw, ph, depth, 3))
-
-    # collect per‐chunk pieces
-    block_tiles = defaultdict(list)
-    block_weights = defaultdict(list)
-
-    for (x0, y0), t in zip(coords, tiles):
-        # which tile‐chunks this falls into?
-        x0c = x0 // pw
-        y0c = y0 // ph
-        x1c = (x0 + pw - 1) // pw
-        y1c = (y0 + ph - 1) // ph
-
-        # pad region covering those chunks
-        x_start = x0c * pw
-        y_start = y0c * ph
-        x_end = (x1c + 1) * pw
-        y_end = (y1c + 1) * ph
-
-        block_canvas = da.zeros((x_end - x_start, y_end - y_start, depth, 3),
-                                chunks=(pw, ph, depth, 3),
-                                dtype=np.float32)
-        block_weight = da.zeros((x_end - x_start, y_end - y_start),
-                                chunks=(pw, ph),
-                                dtype=np.float32)
-
-        # place tile into that big block
-        xs = slice(x0 - x_start, x0 - x_start + pw)
-        ys = slice(y0 - y_start, y0 - y_start + ph)
-        block_canvas[xs, ys, ...] = t
-        block_weight[xs, ys] = blend_ramp
-
-        # chop into per‐chunk pieces
-        for cx in range(x0c, x1c + 1):
-            for cy in range(y0c, y1c + 1):
-                bid = (cx, cy)
-                sub_x = slice((cx - x0c) * pw, (cx - x0c + 1) * pw)
-                sub_y = slice((cy - y0c) * ph, (cy - y0c + 1) * ph)
-                block_tiles[bid].append(block_canvas[sub_x, sub_y, ...])
-                block_weights[bid].append(block_weight[sub_x, sub_y])
-
-    canvas = da.map_blocks(_combine_block, canvas, block_tiles, block_weights,
-                           dtype=canvas.dtype,
-                           chunks=(pw, ph, depth, 3))
-
-    return [canvas[..., i] for i in range(3)]
-
-
 def process_complex3d(complex3d, raw_tile_width):
     complex3d = complex3d.rechunk({0: raw_tile_width})
     comp = complex3d.reshape(
-            (4, raw_tile_width, complex3d.shape[1], complex3d.shape[2]))
+        (4, raw_tile_width, complex3d.shape[1], complex3d.shape[2]))
     j1r, j1i, j2r, j2i = comp[0], comp[1], comp[2], comp[3]
 
     j1 = j1r + 1j * j1i
@@ -400,9 +293,9 @@ def process_complex3d(complex3d, raw_tile_width):
 
     dBI3D = da.flip(10 * da.log10(mag1 ** 2 + mag2 ** 2), axis=2)
     R3D = da.flip(
-            da.arctan(mag1 / mag2) / da.pi * 180,
-            axis=2
-            )
+        da.arctan(mag1 / mag2) / da.pi * 180,
+        axis=2
+    )
     offset = 100 / 180 * da.pi
     phi = da.angle(j1) - da.angle(j2) + offset * 2
     # wrap into [-π, π]
@@ -411,9 +304,3 @@ def process_complex3d(complex3d, raw_tile_width):
     O3D = da.flip(phi / (2 * da.pi) * 180, axis=2)
 
     return dBI3D, R3D, O3D
-
-
-def do_downsample(volume: da.Array, factors: tuple) -> da.Array:
-    fx, fy, fz = factors
-    return da.coarsen(np.mean, volume, {0: fx, 1: fy, 2: fz}, trim_excess=True)
-
