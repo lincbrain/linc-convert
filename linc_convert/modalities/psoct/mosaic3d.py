@@ -49,6 +49,7 @@ def mosaic3d_telesto(
         dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
         o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
         r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
+    focus_plane: str = None,
         tilted_illumination: bool = False,
         downsample: bool = False,
         zarr_config: ZarrConfig = None,
@@ -90,6 +91,14 @@ def mosaic3d_telesto(
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
     depth = int(mosaic_info['MZL'])
+    if focus_plane is not None:
+        focus_plane = nib.load(focus_plane).get_fdata().astype(np.uint16)
+        min_focus = np.min(focus_plane)
+        max_focus = np.max(focus_plane)
+        depth_increase = max_focus - min_focus
+        focus_plane = focus_plane - min_focus
+        depth += depth_increase
+
 
     blend_ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
 
@@ -140,7 +149,8 @@ def mosaic3d_telesto(
                                                      focus,
                                                      temp_compensate,
                                                      chunk=chunk if not shard else
-                                                     shard)
+                                                     shard,
+                                                     focus_plane=focus_plane)
 
     dBI_result = dBI_result.transpose(2, 1, 0)
     R3D_result = R3D_result.transpose(2, 1, 0)
@@ -221,9 +231,11 @@ def temporary_compensation(dBI, R3D, O3D, depth, focus, scan_info):
 def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, full_width,
                 full_height, depth, flip_z, map_indices, scan_info, tile_width,
                 tile_height, x_coords, y_coords, raw_tile_width, focus, temp_compensate,
-                chunk):
+                chunk, focus_plane
+                ):
     coords = []
     tiles = []
+
     for (i, j), tile_idx in tqdm.tqdm(np.ndenumerate(map_indices), "Loading Tiles"):
         if tile_idx <= 0 or np.isnan(x_coords[i, j]) or np.isnan(
                 y_coords[i, j]):
@@ -249,8 +261,9 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
                     )
 
         dBI3D, R3D, O3D = process_complex3d(complex3d, raw_tile_width)
-
-        if temp_compensate:
+        if focus_plane is not None:
+            results = shift_focus_delayed(dBI3D, R3D, O3D, focus_plane)
+        elif temp_compensate:
             results = delayed(temporary_compensation)(dBI3D, R3D, O3D, depth, focus,
                                                       scan_info)
             results = da.from_delayed(results, shape=(*dBI3D.shape, 3),
@@ -275,6 +288,44 @@ def build_slice(mosaic_idx, input_file_template, blend_ramp, clip_x, clip_y, ful
             tile_size=(tile_width, tile_height),
             chunk=chunk
             )
+
+
+def shift_focus(tile, focus_plane, s_max):
+    # pad the sources at the END so indices up to Nz-1 are valid
+    pad_width = ((0, 0), (0, 0), (s_max, s_max))
+    tile = np.pad(tile, pad_width, mode='constant', constant_values=np.nan)
+
+    # build indices for the expanded depth
+    z = np.arange(tile.shape[-1] - s_max, dtype=np.int32)[None, None, :]
+    idx = z + focus_plane[..., None]
+
+    return np.take_along_axis(tile, idx, axis=2)
+
+
+def shift_focus_delayed(
+    dBI3D: da.Array,
+    R3D: da.Array,
+    O3D: da.Array,
+    focus_plane: np.ndarray
+) -> da.Array:
+    """
+    Wraps the NumPy function in `delayed` and returns a Dask array
+    with known shape and dtype so the caller can proceed lazily.
+
+    Returns: Dask array of shape (Ny, Nx, Nz0 + max_shift, 3)
+    """
+    Nx, Ny, Nz0 = map(int, dBI3D.shape)
+    s_max = np.max(focus_plane)
+    Nz_out = Nz0 + s_max
+    result_shape = (Nx, Ny, Nz_out)
+    dBI3d = dBI3D.map_blocks(shift_focus, focus_plane, s_max, dtype=dBI3D.dtype,
+                             chunks=result_shape)
+    R3d = R3D.map_blocks(shift_focus, focus_plane, s_max, dtype=dBI3D.dtype,
+                         chunks=result_shape)
+    O3D = O3D.map_blocks(shift_focus, focus_plane, s_max, dtype=dBI3D.dtype,
+                         chunks=result_shape)
+    return da.stack([dBI3d, R3d, O3D], axis=3)
+
 
 
 def stitch_whole_canvas_padding(coords, tiles,
