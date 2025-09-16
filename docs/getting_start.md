@@ -2,7 +2,9 @@
 
     ```bash
     git clone https://github.com/lincbrain/linc-convert.git
+
     cd linc-convert
+    
     git checkout zarr3
     ```
 
