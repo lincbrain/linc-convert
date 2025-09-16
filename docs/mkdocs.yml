@@ -56,8 +56,9 @@ plugins:
 
 nav:
   - Welcome: index.md
-  - Contribute: 'contribute.md'
-  - About: 'about.md'
+  - Getting Started: getting_start.md
+  - Contribute: contribute.md
+  - About: about.md
 
 extra:
   generator: false
