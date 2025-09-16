@@ -17,6 +17,8 @@ motor and psychiatric disorders.
 
 The `linc-convert` package converts dark-field microscopy, light-sheet microscopy, and polarization sensitive optical coherence tomography files to the OME-Zarr file format.
 
+![diagram](./docs/img/linc-convert.png)
+
 ## Quick Links
 
 - [LINC Homepage](https://connects.mgh.harvard.edu/)
