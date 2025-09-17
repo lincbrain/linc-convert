@@ -34,6 +34,7 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.critic
   - pymdownx.magiclink
+  - pymdownx.superfences
   - toc:
       permalink: True
 
