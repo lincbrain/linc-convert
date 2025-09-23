@@ -551,7 +551,7 @@ def default_write_config(
     #   Zarr 3
     # ------------------------------------------------------------------
     if version == 3:
-        if compressor and compressor != "raw":
+        if compressor and compressor != "raw" and compressor != "none":
             compressor = [make_compressor_v3(compressor, **compressor_opt)]
         else:
             compressor = []
@@ -607,7 +607,7 @@ def default_write_config(
     #   Zarr 2
     # ------------------------------------------------------------------
     else:
-        if compressor and compressor != "raw":
+        if compressor and compressor != "raw" and compressor != "none":
             compressor = make_compressor_v2(compressor, **compressor_opt)
         else:
             compressor = None

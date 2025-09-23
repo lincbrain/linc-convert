@@ -209,6 +209,7 @@ class ZarrPythonGroup(ZarrGroup):
             "compressors": _make_compressor(
                 compressor, zarr_config.zarr_version, **compressor_opt
             ),
+            "overwrite": zarr_config.overwrite
         }
 
         chunk_key_encoding = _dimension_separator_to_chunk_key_encoding(
@@ -272,13 +273,15 @@ def _make_compressor(
     """Build compressor object from name and options."""
     if not isinstance(name, str):
         return name
+    if name == 'none':
+        return None
 
     if zarr_version == 2:
         import numcodecs
 
         compressor_map = {
             "blosc": numcodecs.Blosc,
-            "zlib": numcodecs.Zstd,
+            "zlib": numcodecs.Zstd
         }
     elif zarr_version == 3:
         import zarr.codecs

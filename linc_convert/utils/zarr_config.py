@@ -90,15 +90,15 @@ class ZarrConfig:
     shard_time: bool = False
     dimension_separator: Literal[".", "/"] = "/"
     order: Literal["C", "F"] = "C"
-    compressor: Literal["blosc", "zlib", None] = "blosc"
+    compressor: Literal["blosc", "zlib", "none"] = "blosc"
     compressor_opt: dict[str, float | str] = field(default_factory=dict)
     no_time: bool = False
-    no_pyramid_axis: Literal["x", "y", "z", None] = None
+    no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
     ome_version: Literal["0.4", "0.5"] = "0.4"
     nii: bool = False
     max_load: int = 512
-    overwrite: bool = False
+    overwrite: bool = True
     driver: DriverLike = "zarr-python"
 
     def __post_init__(self) -> None:
