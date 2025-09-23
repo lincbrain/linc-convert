@@ -43,17 +43,17 @@ nib.imageglobals.logger.setLevel(40)
 
 @mosaic3d.default
 def mosaic3d_telesto(
-        parameter_file: str,
-        *,
-        slice_index: int,
-        dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
-        o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
-        r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
+    parameter_file: str,
+    *,
+    slice_index: int,
+    dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
+    o3d_output: Annotated[str, Parameter(name=["--O3D", "-o"])],
+    r3d_output: Annotated[str, Parameter(name=["--R3D", "-r"])],
     focus_plane: str = None,
-        tilted_illumination: bool = False,
-        downsample: bool = False,
-        zarr_config: ZarrConfig = None,
-        ) -> None:
+    tilted_illumination: bool = False,
+    downsample: bool = False,
+    zarr_config: ZarrConfig = None,
+) -> None:
     """
     Parameters
     ----------
@@ -131,7 +131,8 @@ def mosaic3d_telesto(
     input_file_template = op.join(raw_data_dir, input_file_template)
 
     if mosaic_idx > 8 and tilted_illumination:
-        temp_compensate = True
+        # temp_compensate = True
+        temp_compensate = False
     else:
         temp_compensate = False
 
