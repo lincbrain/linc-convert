@@ -1,8 +1,8 @@
-1. Create a new environment
+1. (Optional) Create a new environment
    ```bash
    conda create -n linc-convert python=3.11
    ```
-2. Activate the environment
+2. (Optional) Activate the environment
    ```bash
    conda activate linc-convert
    ```
