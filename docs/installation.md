@@ -1,18 +1,36 @@
-1. Clone the repository and switch to the `zarr3` branch.
+1. Create a new environment.
    ```bash
-   git clone https://github.com/lincbrain/linc-convert.git
-   cd linc-convert
-   git checkout zarr3
+   conda create -n linc-convert python=3.11
    ```
-2. Install the package in your environment.
+
+2. Activate the environment.
    ```bash
-   pip install ./
+   conda activate linc-convert
    ```
-3. Run the CLI based on your workflow. For a single-volume PS-OCT conversion:
+
+3. Install the `linc-convert` package in your environment.
    ```bash
-   linc-convert psoct single-volume <input> <output>
+   pip install "linc-convert[all] @ git+https://github.com/lincbrain/linc-convert.git@main"
    ```
-View the full list of options and flags by running:
+
+If you don't want to install all dependencies, you can install the dependencies for your specific use case. Replace `all` in the above command with:
+- `df` for Dark-field microscopy
+- `lsm` for Light-sheet microscopy
+- `psoct` for polarization-sensitive optical coherence tomography
+- `wk` for Webknossos annotations
+- `ts` for the TensorStore backend
+
+4. Run the command-line interface to ensure that installation was successful.
+   ```bash
+   linc-convert --help
+   ```
+
+5. View the list of arguments for a modality by running, for example:
+   ```bash
+   linc-convert psoct --help
+   ```
+
+And view the full list of parameters by running:
    ```bash
    linc-convert psoct single-volume --help
    ```
