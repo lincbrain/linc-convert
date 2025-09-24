@@ -24,7 +24,7 @@ If you don't want to install all dependencies, you can install the dependencies 
    ```bash
    linc-convert psoct --help
    ```
-And view the full list of parameters by running, for example:
+6. View the full list of parameters by running, for example:
    ```bash
    linc-convert psoct single-volume --help
    ```
