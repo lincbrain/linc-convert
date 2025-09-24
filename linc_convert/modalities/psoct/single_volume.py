@@ -35,9 +35,9 @@ def convert(
     *,
     key: Optional[str] = None,
     meta: str = None,
-    general_config: GeneralConfig,
-    zarr_config: ZarrConfig,
-    nii_config: NiiConfig,
+    general_config: GeneralConfig = None,
+    zarr_config: ZarrConfig = None,
+    nii_config: NiiConfig = None,
 ) -> None:
     """
     Matlab to OME-Zarr.
