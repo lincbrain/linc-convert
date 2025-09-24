@@ -92,6 +92,8 @@ def convert(
         Orientation of the volume
     center
         Set RAS[0, 0, 0] at FOV center
+    zarr_config
+        ZarrConfig instance contains zarr-related config
     """
     zarr_config = update_default_config(zarr_config, **kwargs)
     zarr_config.set_default_name(os.path.splitext(inp.file)[0])
