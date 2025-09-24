@@ -38,7 +38,7 @@ def _automap(func: Callable) -> Callable:
     """Automatically map the array in the mat file."""
 
     @wraps(func)
-    def wrapper(inp: str, zarr_config: ZarrConfig = None, **kwargs: dict) -> None:
+    def wrapper(inp: str, **kwargs: dict) -> None:
         # with _mapmat(inp, kwargs.get("key", None)) as dat:
         #     return func(dat, zarr_config=zarr_config, **kwargs)
         dat = _mapmat(inp, kwargs.get("key", None))
@@ -88,24 +88,12 @@ def convert(
         Key of the array to be extracted, default to first key found
     meta
         Path to the metadata file
-    chunk
-        Output chunk size
-    compressor : {blosc, zlib, raw}
-        Compression method
-    compressor_opt
-        Compression options
-    max_load
-        Maximum input chunk size
-    max_levels
-        Maximum number of pyramid levels
-    no_pool
-        Index of dimension to not pool when building pyramid
-    nii
-        Convert to nifti-zarr. True if path ends in ".nii.zarr"
     orientation
         Orientation of the volume
     center
         Set RAS[0, 0, 0] at FOV center
+    zarr_config
+        ZarrConfig instance contains zarr-related config
     """
     zarr_config = update_default_config(zarr_config, **kwargs)
     zarr_config.set_default_name(os.path.splitext(inp.file)[0])
