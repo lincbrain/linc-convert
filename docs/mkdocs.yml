@@ -57,7 +57,7 @@ plugins:
 
 nav:
   - Welcome: index.md
-  - Getting Started: getting_start.md
+  - Installation: installation.md
   - Contribute: contribute.md
   - About: about.md
 
