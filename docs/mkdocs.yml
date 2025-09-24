@@ -34,6 +34,7 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.critic
   - pymdownx.magiclink
+  - pymdownx.superfences
   - toc:
       permalink: True
 
@@ -42,11 +43,6 @@ plugins:
   - open-in-new-tab
   - section-index
   - same-dir
-  - gen-files:
-      scripts:
-      - scripts/gen_ref_pages.py 
-  - literate-nav:
-      nav_file: api.md
   - mkdocstrings:
       handlers:
         python:
@@ -58,6 +54,12 @@ plugins:
             separate_signature: true
             members_order: source
             show_root_heading: true
+
+nav:
+  - Welcome: index.md
+  - Installation: installation.md
+  - Contribute: contribute.md
+  - About: about.md
 
 extra:
   generator: false

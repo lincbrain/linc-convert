@@ -1,6 +1,8 @@
 linc
+lincbrain
 LINC
 DANDI
+CLI
 PIs
 Hillman
 Yendiki
@@ -10,4 +12,8 @@ OME
 Zarr
 txt
 http
+https
 webserver
+TensorStore
+backend
+Webknossos

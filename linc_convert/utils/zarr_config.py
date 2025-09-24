@@ -89,10 +89,10 @@ class ZarrConfig:
     shard_time: bool = False
     dimension_separator: Literal[".", "/"] = "/"
     order: Literal["C", "F"] = "C"
-    compressor: Literal["blosc", "zlib", None] = "blosc"
+    compressor: Literal["blosc", "zlib", "none"] = "blosc"
     compressor_opt: dict[str, float | str] = field(default_factory=dict)
     no_time: bool = False
-    no_pyramid_axis: Literal["x", "y", "z", None] = None
+    no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
     ome_version: Literal["0.4", "0.5"] = "0.4"
     overwrite: bool = False
@@ -115,7 +115,7 @@ class ZarrConfig:
 class GeneralConfig:
     """
     General configuration for the conversion process.
-    
+
     Parameters
     ----------
     out : str | None
