@@ -20,5 +20,4 @@ Webknossos
 psoct 
 ObsLSQ
 nii
-psoct
 zarr
