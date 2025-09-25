@@ -17,3 +17,7 @@ webserver
 TensorStore
 backend
 Webknossos
+psoct
+ObsLSQ
+nii
+zarr
