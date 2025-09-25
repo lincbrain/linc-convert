@@ -20,11 +20,3 @@ If you don't want to install all dependencies, you can install the dependencies 
    ```bash
    linc-convert --help
    ```
-5. View the list of arguments for a modality by running, for example:
-   ```bash
-   linc-convert psoct --help
-   ```
-6. View the full list of parameters by running, for example:
-   ```bash
-   linc-convert psoct single_volume --help
-   ```

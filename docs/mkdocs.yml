@@ -61,6 +61,7 @@ plugins:
 nav:
   - Welcome: index.md
   - Installation: installation.md
+  - Basic Usage Guide: basic-usage.md
   - PS-OCT Single Volume Demo: "notebooks/psoct_single_volume_demo.ipynb"
   - Contribute: contribute.md
   - About: about.md
