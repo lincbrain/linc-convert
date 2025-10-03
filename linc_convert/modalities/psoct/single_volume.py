@@ -55,6 +55,12 @@ def convert(
         Key of the array to be extracted, default to first key found
     meta
         Path to the metadata file
+    orientation
+        Orientation of the volume
+    center
+        Set RAS[0, 0, 0] at FOV center
+    zarr_config
+        ZarrConfig instance contains zarr-related config
     """
     inp = as_arraywrapper(inp, key)
     general_config.set_default_name(os.path.splitext(inp.file)[0])
