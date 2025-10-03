@@ -3,7 +3,6 @@
 # stdlib
 import json
 import os
-from typing import Unpack
 
 import cyclopts
 import numpy as np
@@ -14,20 +13,22 @@ import zarr
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
+                                            autoconfig)
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
 wk.command(webknossos)
 
 
 @webknossos.default
+@autoconfig
 def convert(
     wkw_dir: str = None,
     ome_dir: str = None,
     dic: str = None,
-    *,
+    general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
-    **kwargs: Unpack[ZarrConfig],
+    nii_config: NiiConfig = None,
 ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.
@@ -43,10 +44,6 @@ def convert(
         in .wkw format. For example: .../annotation_folder/data_Volume.
     ome_dir : str
         Path to the underlying ome.zarr dataset, following the BIDS naming standard.
-    out : str
-        Path to the output directory for saving the converted ome.zarr.
-        The ome.zarr file name is generated automatically based on ome_dir
-        and the initials of the annotator.
     dic : dict
         A dictionary mapping annotation values to the following standard values
         if annotation doesn't match the standard.
@@ -61,8 +58,13 @@ def convert(
         - 5: Moderate Terminal
         - 6: Dense Terminal
         - 7: Single Fiber
+    general_config
+        General configuration
+    zarr_config
+        Zarr related configuration
+    nii_config
+        NIfTI header related configuration
     """
-    zarr_config = update_default_config(zarr_config, **kwargs)
 
     dic = json.loads(dic)
     dic = {int(key): int(value) for key, value in dic.items()}
@@ -87,13 +89,10 @@ def convert(
         [t0, b0, l0, r0] = find_borders(data)
         low_res_offsets.append([t0, b0, l0, r0])
 
-    # setup save info
-    os.path.basename(ome_dir)[:-9]
-    wkw_dir.split("/")[-2][:2]
 
     # Prepare Zarr group
-    omz = from_config(zarr_config)
-    max_load = zarr_config.max_load
+    omz = from_config(general_config.out, zarr_config)
+    max_load = general_config.max_load
 
     # Write each level
     for level in range(nblevel):
