@@ -12,20 +12,16 @@ import re
 import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
-from typing import Unpack
 
 # externals
 import cyclopts
-import nibabel as nib
 import numpy as np
-from niizarr import default_nifti_header
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.spool import SpoolSetInterpreter
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
                                             autoconfig)
 
