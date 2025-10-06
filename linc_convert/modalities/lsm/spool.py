@@ -6,6 +6,7 @@ https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 %2Fmicr%2Fsample18_run10__y10_z01_HR&page=1
 """
 import logging
+
 # stdlib
 import os
 import re
@@ -22,8 +23,12 @@ from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.spool import SpoolSetInterpreter
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 logger = logging.getLogger(__name__)
 spool = cyclopts.App(name="spool", help_format="markdown")
@@ -82,7 +87,6 @@ def convert(
     nii_config
         NIfTI header related configuration
     """
-
     CHUNK_PATTERN = re.compile(
         r"^(?P<prefix>\w*)"
         r"_run(?P<run>[0-9]+)"

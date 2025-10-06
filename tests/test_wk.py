@@ -7,11 +7,11 @@ import pytest
 import wkw
 import zarr
 from nibabel import Nifti1Image
+from utils.compare_file import assert_zarr_equal
+from utils.sample_data import generate_sample_data_variation
 
 from linc_convert.modalities.wk import webknossos_annotation
 from linc_convert.modalities.wk.webknossos_annotation import get_mask_name
-from utils.compare_file import assert_zarr_equal
-from utils.sample_data import generate_sample_data_variation
 
 
 @pytest.fixture

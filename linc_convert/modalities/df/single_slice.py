@@ -5,6 +5,7 @@ It does not recompute the image pyramid but instead reuse the JPEG2000 levels
 (obtained by wavelet transform).
 """
 import logging
+
 # stdlib
 import os
 
@@ -18,8 +19,12 @@ from linc_convert.utils.io.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 logger = logging.getLogger(__name__)
 ss = App(name="singleslice", help_format="markdown")

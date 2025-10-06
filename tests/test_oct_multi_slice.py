@@ -6,9 +6,9 @@ import pytest
 import skimage
 import zarr.storage
 from scipy.io import savemat
+from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.psoct import multi_slice
-from utils.compare_file import assert_zarr_equal
 
 
 @pytest.fixture

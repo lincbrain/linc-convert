@@ -21,8 +21,12 @@ from linc_convert.utils.io.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 # Path to LincBrain dataset
 HOME = "/space/aspasia/2/users/linc/000003"

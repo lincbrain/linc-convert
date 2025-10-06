@@ -5,6 +5,7 @@ Example input files can be found at
 https://lincbrain.org/dandiset/000004/0.240319.1924/files?location=derivatives%2F
 """
 import logging
+
 # stdlib
 import os
 import re
@@ -18,8 +19,12 @@ from tifffile import TiffFile
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 logger = logging.getLogger(__name__)
 mosaic = cyclopts.App(name="mosaic", help_format="markdown")

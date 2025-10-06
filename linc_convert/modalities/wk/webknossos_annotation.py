@@ -13,8 +13,12 @@ import zarr
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 webknossos = cyclopts.App(name="webknossos", help_format="markdown")
 wk.command(webknossos)
@@ -65,7 +69,6 @@ def convert(
     nii_config
         NIfTI header related configuration
     """
-
     dic = json.loads(dic)
     dic = {int(key): int(value) for key, value in dic.items()}
 

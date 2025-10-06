@@ -6,6 +6,7 @@ from os import PathLike
 from typing import (
     Annotated,
     Any,
+    Callable,
     Dict,
     Literal,
     Type,
@@ -123,12 +124,19 @@ class GeneralConfig:
     max_load : int
         Maximum number of items to load into memory at once.
     """
+
     out: Annotated[str, Parameter(name=["--out", "-o"])] = None
     max_load: int = 1024
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False
 
     def __post_init__(self) -> None:
+        """
+        Perform post-initialization checks and adjustments.
+
+        - Ensure that max_load is a positive integer; otherwise raise ValueError.
+        - If verbose is True, set log_level to "debug".
+        """
         if self.max_load <= 0:
             raise ValueError("max_load must be a positive integer")
         if self.verbose:
@@ -146,6 +154,7 @@ class GeneralConfig:
             If True, the output will be in NIfTI format (with `.nii.zarr` extension).
             If False, the output will be in OME-Zarr format (with `.ome.zarr`
             extension).
+
         Returns
         -------
         None
@@ -210,14 +219,15 @@ class NiiConfig:
     nifti_header: PathLike[str] | str | None = None
 
     def __post_init__(self) -> None:
+        """Perform post-initialization checks and adjustments."""
         if self.nifti_header:
             self.nii = True
 
 
-def autoconfig(func):
+def autoconfig(func: Callable) -> Callable:
     """Use as @autoconfig only. Infers config params from dataclass annotations."""
 
-    def _unwrap_dataclass_type(tp):
+    def _unwrap_dataclass_type(tp: dataclass) -> dataclass:
         # Handle Annotated[T, ...]
         if get_origin(tp) is Annotated:
             tp = get_args(tp)[0]
@@ -264,7 +274,7 @@ def autoconfig(func):
         p.kind == inspect.Parameter.VAR_KEYWORD for p in func_params.values())
 
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs) -> Callable:  # noqa: ANN002, ANN003
         # Start from explicit instances (if provided)
         cfg_instances: Dict[str, Any] = {}
         for pname, cls in config_map.items():

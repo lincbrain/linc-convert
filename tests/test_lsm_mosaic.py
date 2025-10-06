@@ -5,10 +5,10 @@ import numpy as np
 import pytest
 import tifffile
 import zarr
-
-from linc_convert.modalities.lsm import mosaic
 from utils.compare_file import assert_zarr_equal
 from utils.sample_data import generate_sample_data_variation
+
+from linc_convert.modalities.lsm import mosaic
 
 
 @pytest.fixture

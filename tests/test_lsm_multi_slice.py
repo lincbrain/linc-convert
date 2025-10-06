@@ -5,9 +5,9 @@ import pytest
 import skimage
 import tifffile
 import zarr
+from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.lsm import multi_slice
-from utils.compare_file import assert_zarr_equal
 
 
 @pytest.fixture

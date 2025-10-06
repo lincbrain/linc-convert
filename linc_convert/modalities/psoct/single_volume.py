@@ -20,8 +20,12 @@ from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.unit import to_ome_unit
-from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
-                                            autoconfig)
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 logger = logging.getLogger(__name__)
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")

@@ -1,3 +1,4 @@
+"""Utilities for loading, creating, and manipulating NIfTI headers."""
 import io
 import warnings
 from pathlib import Path
@@ -15,7 +16,7 @@ from linc_convert.utils.unit import to_nifti_unit
 from linc_convert.utils.zarr_config import NiiConfig
 
 
-def _try_open_zarr_array(path: Path):
+def _try_open_zarr_array(path: Path) -> "ZarrArray":  # noqa: F821
     """
     Attempt to open a Zarr array at `path`.
 
@@ -141,7 +142,9 @@ def _recompute_affine_if_requested(
     voxel_size_xyz: Tuple[float, float, float],
 ) -> np.ndarray:
     """
-    Decide which affine to use. If we have an affine from a loaded header
+    Decide which affine to use. 
+    
+    If we have an affine from a loaded header
     AND the user hasn't asked for a specific orientation/centering,
     keep it. Otherwise, compute from orientation and (optionally) center.
     """
@@ -163,13 +166,13 @@ def _recompute_affine_if_requested(
 
 def build_nifti_header(
     *,
-    zgroup,
+    zgroup: 'ZarrGroup',  # noqa: F821
     voxel_size_zyx: Tuple[float, float, float],
     unit: str,
     nii_config: NiiConfig,
 ) -> NiftiHeader:
     """
-    Returns a header object ready to be written via `zgroup.write_nifti_header(header)`.
+    Build a NIfTI header for the data in `zgroup`.
 
     Behavior:
       - If `nii_config.nifti_header` is provided and loadable, use it as a template.
@@ -180,7 +183,8 @@ def build_nifti_header(
           orientation/centering
           * set units from project’s `to_nifti_unit(unit)`
 
-    Notes:
+    Notes
+    -----
       - The data array is taken as `zgroup["0"]`, and we follow your existing
         convention: NIfTI shape is reversed (X, Y, Z) compared to stored (Z, Y, X).
     """
