@@ -9,11 +9,9 @@ levels (obtained by wavelet transform).
 import json
 import logging
 import os
-from typing import Unpack
 
 # externals
 import glymur
-import nibabel as nib
 import numpy as np
 from cyclopts import App
 
@@ -23,7 +21,6 @@ from linc_convert.utils.io.j2k import WrappedJ2K, get_pixelsize
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv, floordiv
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.zarr_config import (GeneralConfig, NiiConfig, ZarrConfig,
                                             autoconfig)
 
@@ -182,7 +179,6 @@ def convert(
             nii_config=nii_config,
         )
         omz.write_nifti_header(header)
-
 
     # Write sidecar .json file
     json_name = os.path.splitext(general_config.out)[0]

@@ -89,7 +89,6 @@ def convert(
         [t0, b0, l0, r0] = find_borders(data)
         low_res_offsets.append([t0, b0, l0, r0])
 
-
     # Prepare Zarr group
     omz = from_config(general_config.out, zarr_config)
     max_load = general_config.max_load
