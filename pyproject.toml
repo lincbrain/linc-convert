@@ -44,14 +44,15 @@ h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
 tensorstore = { version = "*", optional = true }
+dask-image = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile"]
+lsm = ["tifffile", "dask-image"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 ts = ["tensorstore"]
-all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore"]
+all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore", "dask-image"]
 
 [tool.poetry.group.dev]
 optional = true
