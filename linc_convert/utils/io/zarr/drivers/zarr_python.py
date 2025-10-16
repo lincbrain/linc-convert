@@ -116,10 +116,7 @@ class ZarrPythonGroup(ZarrGroup):
         cls, out: str | PathLike[str], zarr_config: ZarrConfig
         ) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
-        if out.startswith("/") or out.startswith("\\"):
-            store = zarr.storage.LocalStore(out)
-        else:
-            store = zarr.storage.FsspecStore(out)
+        store = zarr.storage.LocalStore(out)
         return cls(
             zarr.group(
                 store=store,
