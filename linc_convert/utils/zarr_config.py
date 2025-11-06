@@ -123,6 +123,10 @@ class GeneralConfig:
         Output path for the converted data.
     max_load : int
         Maximum number of items to load into memory at once.
+    log_level : {"debug", "info", "warning", "error", "critical"}
+        Logging level for the conversion process.
+    verbose : bool
+        If True, set log_level to "debug".
     """
 
     out: Annotated[str, Parameter(name=["--out", "-o"])] = None
