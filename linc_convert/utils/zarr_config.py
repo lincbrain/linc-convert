@@ -137,7 +137,7 @@ class GeneralConfig:
         - Ensure that max_load is a positive integer; otherwise raise ValueError.
         - If verbose is True, set log_level to "debug".
         """
-        if self.max_load <= 0:
+        if not isinstance(self.max_load, int) or self.max_load <= 0:
             raise ValueError("max_load must be a positive integer")
         if self.verbose:
             self.log_level = "debug"
