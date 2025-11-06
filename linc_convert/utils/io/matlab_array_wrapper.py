@@ -101,7 +101,7 @@ class Matarraywrapper(ArrayWrapper):
 
     @property
     def dtype(self) -> np.dtype:
-        """Get dtype of the array, loading the array if necessary."""
+        """Get data type of the array, loading the array if necessary."""
         if self.array is None:
             self.load()
         return self.array.dtype
