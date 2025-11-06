@@ -218,9 +218,10 @@ def convert(
         array[slicer] = dat
     print("")
 
+    voxel_size = list(map(float, reversed(voxel_size)))
     # Generate Zarr pyramid and metadata
     omz.generate_pyramid(levels=zarr_config.levels)
-    omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size[::-1])
+    omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
 
     # TODO: header has some problem with unit when deal with zarr 2, furthur
     #  debugging needed
@@ -228,10 +229,11 @@ def convert(
     if nii_config.nii:
         header = build_nifti_header(
             zgroup=omz,
-            voxel_size_zyx=tuple(voxel_size[::-1]),
+            voxel_size_zyx=tuple(voxel_size),
             unit="micrometer",
             nii_config=nii_config,
         )
         omz.write_nifti_header(header)
 
     logger.info("Conversion complete.")
+
