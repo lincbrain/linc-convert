@@ -8,22 +8,15 @@ into a OME-ZARR pyramid.
 import json
 import logging
 import os
-from functools import wraps
 from itertools import product
-from typing import Callable, Optional
+from typing import Optional
 
 import cyclopts
-import h5py
 import numpy as np
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.io.matlab import as_arraywrapper
-from linc_convert.utils.io.matlab_array_wrapper import (
-    ArrayWrapper,
-    H5ArrayWrapper,
-    MatArraywrapper,
-)
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.nifti_header import build_nifti_header
