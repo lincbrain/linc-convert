@@ -173,7 +173,7 @@ def convert(
     if nii_config.nii:
         header = build_nifti_header(
             zgroup=omz,
-            voxel_size_zyx=tuple([vxw, vxh, thickness or 1]),
+            voxel_size_zyx=tuple([thickness or 1, vxh, vxw]),
             unit="micrometer",
             nii_config=nii_config,
         )
