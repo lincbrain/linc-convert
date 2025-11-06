@@ -28,11 +28,6 @@ from linc_convert.utils.zarr_config import (
     autoconfig,
 )
 
-# Path to LincBrain dataset
-HOME = "/space/aspasia/2/users/linc/000003"
-LINCSET = os.path.join(HOME, "sourcedata")
-LINCOUT = os.path.join(HOME, "rawdata")
-
 logger = logging.getLogger(__name__)
 ms = App(name="multislice", help_format="markdown")
 df.command(ms)
