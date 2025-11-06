@@ -196,7 +196,7 @@ def convert(
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
     voxel_size = list(map(float, reversed(voxel_size)))
-    omz.write_ome_metadata(["c", "z", "y", "x"], list(map(float, voxel_size)))
+    omz.write_ome_metadata(["c", "z", "y", "x"], voxel_size)
 
     if nii_config.nii:
         header = build_nifti_header(
