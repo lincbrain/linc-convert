@@ -202,8 +202,7 @@ def convert(
     # Initialize Zarr group and array
     omz = from_config(general_config.out, zarr_config)
     array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
-    # TODO: logger
-    # print(out)
+    logger.info(general_config.out)
 
     print("Write level 0 with shape", fullshape)
 
