@@ -40,32 +40,6 @@ multi_slice = cyclopts.App(name="multi_slice", help_format="markdown")
 psoct.command(multi_slice)
 
 
-def _automap(func: Callable) -> Callable:
-    """Automatically maps the array in the mat file."""
-
-    @wraps(func)
-    def wrapper(inp: list[str], **kwargs: dict) -> callable:
-        dat = _mapmat(inp, kwargs.get("key", None))
-        return func(dat, **kwargs)
-
-    return wrapper
-
-
-def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[ArrayWrapper]:
-    """Load or memory-map an array stored in a .mat file."""
-
-    def make_wrapper(fname: str) -> ArrayWrapper:
-        try:
-            # "New" .mat file
-            f = h5py.File(fname, "r")
-            return H5ArrayWrapper(f, key)
-        except Exception:
-            # "Old" .mat file
-            return MatArraywrapper(fname, key)
-
-    return [make_wrapper(fname) for fname in fnames]
-
-
 @multi_slice.default
 @autoconfig
 def convert(
