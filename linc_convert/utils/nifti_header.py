@@ -13,7 +13,7 @@ from linc_convert.utils.io.zarr import open_array
 from linc_convert.utils.io.zarr.abc import NiftiHeader
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit
-from linc_convert.utils.zarr_config import NiiConfig
+from linc_convert.utils.zarr_config import NiftiConfig
 
 
 def _try_open_zarr_array(path: Path) -> "ZarrArray":  # noqa: F821
@@ -169,7 +169,7 @@ def build_nifti_header(
     zgroup: 'ZarrGroup',  # noqa: F821
     voxel_size_zyx: Tuple[float, float, float],
     unit: str,
-    nii_config: NiiConfig,
+    nii_config: NiftiConfig,
 ) -> NiftiHeader:
     """
     Build a NIfTI header for the data in `zgroup`.

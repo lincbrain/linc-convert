@@ -15,7 +15,7 @@ from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
-    NiiConfig,
+    NiftiConfig,
     ZarrConfig,
     autoconfig,
 )
@@ -32,7 +32,7 @@ def convert(
     dic: str = None,
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
-    nii_config: NiiConfig = None,
+    nii_config: NiftiConfig = None,
 ) -> None:
     """
     Convert annotations (in .wkw format) from webknossos to ome.zarr format.

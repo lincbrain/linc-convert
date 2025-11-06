@@ -173,7 +173,7 @@ class GeneralConfig:
 
 @Parameter(name="*")
 @dataclass
-class NiiConfig:
+class NiftiConfig:
     """
     Configuration related to output nifti-zarr.
 
