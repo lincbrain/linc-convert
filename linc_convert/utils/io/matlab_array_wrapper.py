@@ -60,7 +60,7 @@ class H5arraywrapper(ArrayWrapper):
 
     @property
     def dtype(self) -> np.dtype:
-        """Get dtype of the array."""
+        """Get data type of the array."""
         return self.array.dtype
 
     def __len__(self) -> int:
