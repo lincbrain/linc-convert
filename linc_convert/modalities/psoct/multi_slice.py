@@ -21,8 +21,8 @@ from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.matlab_array_wrapper import (
     ArrayWrapper,
-    H5arraywrapper,
-    Matarraywrapper,
+    H5ArrayWrapper,
+    MatArraywrapper,
 )
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
@@ -58,10 +58,10 @@ def _mapmat(fnames: list[str], key: Optional[str] = None) -> list[ArrayWrapper]:
         try:
             # "New" .mat file
             f = h5py.File(fname, "r")
-            return H5arraywrapper(f, key)
+            return H5ArrayWrapper(f, key)
         except Exception:
             # "Old" .mat file
-            return Matarraywrapper(fname, key)
+            return MatArraywrapper(fname, key)
 
     return [make_wrapper(fname) for fname in fnames]
 

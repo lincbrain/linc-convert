@@ -32,7 +32,7 @@ class ArrayWrapper:
         return key
 
 
-class H5arraywrapper(ArrayWrapper):
+class H5ArrayWrapper(ArrayWrapper):
     """Wrapper for arrays stored in HDF5 files."""
 
     def __init__(self, file: h5py.File, key: Optional[str]) -> None:
@@ -72,7 +72,7 @@ class H5arraywrapper(ArrayWrapper):
         return self.array[index]
 
 
-class Matarraywrapper(ArrayWrapper):
+class MatArraywrapper(ArrayWrapper):
     """Wrapper for arrays stored in old-style MATLAB .mat files."""
 
     def __init__(self, file: str, key: Optional[str]) -> None:

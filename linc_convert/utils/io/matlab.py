@@ -6,8 +6,8 @@ import h5py
 
 from linc_convert.utils.io.matlab_array_wrapper import (
     ArrayWrapper,
-    H5arraywrapper,
-    Matarraywrapper,
+    H5ArrayWrapper,
+    MatArraywrapper,
 )
 
 
@@ -16,10 +16,10 @@ def make_wrapper(fname: str, key: Optional[str] = None) -> ArrayWrapper:
     try:
         # "New" .mat file
         f = h5py.File(fname, "r")
-        return H5arraywrapper(f, key)
+        return H5ArrayWrapper(f, key)
     except Exception:
         # "Old" .mat file
-        return Matarraywrapper(fname, key)
+        return MatArraywrapper(fname, key)
 
 
 def as_arraywrapper(
