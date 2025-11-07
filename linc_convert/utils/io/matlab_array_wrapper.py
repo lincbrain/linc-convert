@@ -1,4 +1,4 @@
-"""Utilities for reading MATLAB .mat files and wrapping arrays."""
+"""Utilities for reading HDF5 and MATLAB .mat files, and wrapping arrays."""
 
 from _warnings import warn
 from typing import Mapping, Optional
