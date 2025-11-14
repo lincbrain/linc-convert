@@ -223,9 +223,6 @@ def convert(
     omz.generate_pyramid(levels=zarr_config.levels)
     omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
 
-    # TODO: header has some problem with unit when deal with zarr 2, furthur
-    #  debugging needed
-
     if nii_config.nii:
         header = build_nifti_header(
             zgroup=omz,
