@@ -155,7 +155,7 @@ class GeneralConfig:
         name : str
             Base filename (without extension) to use for the output archive.
         nii : bool
-            If True, the output will be in NIfTI format (with `.nii.zarr` extension).
+            If True, the output will be in NIfTI-Zarr format (with `.nii.zarr` extension).
             If False, the output will be in OME-Zarr format (with `.ome.zarr`
             extension).
 
