@@ -97,8 +97,7 @@ def load_nifti_header_from_zarray(path: str | Path) -> "NiftiHeader":
     Parameters
     ----------
     path : str | pathlib.Path
-        Path to the Zarr array (directory) containing NIfTI header bytes, or a
-        directory that contains a `nifti` Zarr array.
+        Path to the Zarr array (directory) containing the NIfTI header bytes.
 
     Returns
     -------
