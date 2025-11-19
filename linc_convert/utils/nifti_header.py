@@ -183,26 +183,14 @@ def build_nifti_header(
     multiscales = zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
 
     # Start from loaded header if available; else default
-    hdr_loaded = None
     loaded_affine = None
-
+    
     if nii_config.nifti_header:
-        hdr_loaded = load_nifti_header_from_file(nii_config.nifti_header)
+        hdr = load_nifti_header_from_file(nii_config.nifti_header)
         # Try to grab an affine if the loader exposes it
-        try:
-            if hasattr(hdr_loaded, "_nib"):
-                # nibabel header shim: need an affine; not stored in header, so None
-                loaded_affine = None
-        except Exception:
-            pass
-
-    if hdr_loaded is None:
-        # Fall back to the default header
-        # Note: this function expects the OME multiscales metadata.
-        hdr = default_nifti_header(arr, multiscales)
+        loaded_affine = hdr.get_best_affine()
     else:
-        hdr = hdr_loaded
-
+        hdr = default_nifti_header(arr, multiscales)
     # Compute affine (possibly from requested orientation/center)
     # NIfTI expects (X, Y, Z)
     shape_xyz = (shape_zyx[2], shape_zyx[1], shape_zyx[0])
