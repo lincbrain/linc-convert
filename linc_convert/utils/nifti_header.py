@@ -85,7 +85,7 @@ def load_nifti_header_from_file(path: str | Path) -> "NiftiHeader":
         f"directory.",
         stacklevel=2,
     )
-    raise ValueError(f"Unrecognized NIfTI header source: {p!r}")
+    raise ValueError(f"Cannot load NIfTI header from {p!r}. Not a recognized NIfTI file or Zarr directory.")
 
 
 def load_nifti_header_from_zarray(path: str | Path) -> "NiftiHeader":
