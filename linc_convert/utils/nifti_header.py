@@ -149,9 +149,6 @@ def _recompute_affine_if_requested(
 
     aff = orientation_to_affine(orientation, *voxel_size_xyz)
     if center:
-        # Your center_affine takes shape in XYZ order; you previously used
-        # reversed_shape[:3] where reversed_shape = list(reversed(arr.shape)).
-        # Here, shape_zyx is already in (Z, Y, X), so pass reversed to (X, Y, Z)
         aff = center_affine(aff, *shape_xyz)
     return aff
 
