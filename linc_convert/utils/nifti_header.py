@@ -219,7 +219,7 @@ def build_nifti_header(
         affine_loaded=loaded_affine,
         orientation=nii_config.orientation,
         center=nii_config.center,
-        shape_zyx=shape_zyx,
+        shape_xyz=shape_xyz,
         voxel_size_xyz=vx_xyz,
     )
 
