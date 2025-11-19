@@ -182,7 +182,7 @@ def build_nifti_header(
           * set shape / dtype to match the stored array
           * pick affine based on either the loaded header or the requested
           orientation/centering
-          * set units from project’s `to_nifti_unit(unit)`
+          * set units with `to_nifti_unit(unit)`
 
     Notes
     -----
