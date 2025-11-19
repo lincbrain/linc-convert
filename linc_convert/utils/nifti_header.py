@@ -80,11 +80,6 @@ def load_nifti_header_from_file(path: str | Path) -> "NiftiHeader":
             zarr_target = candidate
         return load_nifti_header_from_zarray(zarr_target)
 
-    warnings.warn(
-        f"Cannot load NIfTI header from {p!r}: not a recognized NIfTI file or Zarr "
-        f"directory.",
-        stacklevel=2,
-    )
     raise ValueError(f"Cannot load NIfTI header from {p!r}. "
                       "Not a recognized NIfTI file or Zarr directory.")
 
