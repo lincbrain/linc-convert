@@ -221,8 +221,6 @@ def build_nifti_header(
         voxel_size_xyz=vx_xyz,
     )
 
-    # NIfTI expects (X, Y, Z)
-    shape_xyz = (shape_zyx[2], shape_zyx[1], shape_zyx[0])
 
     # Synchronize core fields with the actual data
     hdr.set_data_shape(shape_xyz)
