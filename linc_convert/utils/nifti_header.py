@@ -27,7 +27,6 @@ def _try_open_zarr_array(path: Path) -> "ZarrArray":  # noqa: F821
         try:
             return open_array(path, mode="r", zarr_version=v)
         except Exception as e:  # noqa: BLE001 - we want to keep original exception
-            # types
             last_err = e
     # If we get here, all attempts failed.
     assert last_err is not None
