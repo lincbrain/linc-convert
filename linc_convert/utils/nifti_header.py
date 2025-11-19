@@ -72,6 +72,7 @@ def load_nifti_header_from_file(path: str | Path) -> "NiftiHeader":
         img = nib.load(str(p))
         return img.header.copy()
 
+    # Zarr directory
     if suffix.endswith(".zarr") or p.is_dir():
         zarr_target = p
         candidate = p / "nifti"
