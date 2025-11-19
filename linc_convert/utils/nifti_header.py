@@ -1,6 +1,5 @@
 """Utilities for loading, creating, and manipulating NIfTI headers."""
 import io
-import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
