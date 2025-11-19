@@ -148,9 +148,6 @@ def _recompute_affine_if_requested(
     if (affine_loaded is not None) and not want_custom:
         return affine_loaded
 
-    # Build from orientation + voxel size; your helpers already exist.
-    # Note: your `orientation_to_affine` expects voxel sizes in XYZ order,
-    # while the shape is ZYX; you previously used vx[::-1] for that call.
     aff = orientation_to_affine(orientation, *voxel_size_xyz)
     if center:
         # Your center_affine takes shape in XYZ order; you previously used
