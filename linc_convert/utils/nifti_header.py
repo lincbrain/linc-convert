@@ -133,7 +133,7 @@ def _recompute_affine_if_requested(
     affine_loaded: Optional[np.ndarray],
     orientation: str,
     center: bool,
-    shape_zyx: Tuple[int, int, int],
+    shape_xyz: Tuple[int, int, int],
     voxel_size_xyz: Tuple[float, float, float],
 ) -> np.ndarray:
     """
