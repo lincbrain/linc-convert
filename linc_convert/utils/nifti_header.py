@@ -39,8 +39,7 @@ def load_nifti_header_from_file(path: str | Path) -> "NiftiHeader":
 
     Supports:
       - Standard NIfTI files: `.nii`, `.nii.gz`
-      - Zarr containing Nifti Header Array: `.zarr`
-      - A Zarr Array containing a NIfTI header
+      - NIfTI-Zarr array containing a NIfTI header: `.nii.zarr`
 
     Parameters
     ----------
