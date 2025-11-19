@@ -213,6 +213,8 @@ def build_nifti_header(
     # Your previous code used vx[::-1] when calling orientation_to_affine
     # because vx was [y, x, z] or similar; here we accept voxel_size_zyx
     # and convert to XYZ for that call.
+    # NIfTI expects (X, Y, Z)
+    shape_xyz = (shape_zyx[2], shape_zyx[1], shape_zyx[0])
     vx_xyz = (voxel_size_zyx[2], voxel_size_zyx[1], voxel_size_zyx[0])
 
     affine = _recompute_affine_if_requested(
