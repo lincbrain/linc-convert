@@ -209,7 +209,7 @@ def build_nifti_header(
             pass
 
     if hdr_loaded is None:
-        # Fall back to your project's default header builder
+        # Fall back to the default header
         # Note: this function expects the OME multiscales metadata.
         hdr = default_nifti_header(arr, multiscales)
     else:
