@@ -208,8 +208,9 @@ def build_nifti_header(
     # Synchronize core fields with the actual data
     hdr.set_data_shape(shape_xyz)
     hdr.set_data_dtype(dtype)
-    hdr.set_qform(affine)
-    hdr.set_sform(affine)
+    if not loaded_affine or not np.all(loaded_affine == affine):
+        hdr.set_qform(affine)
+        hdr.set_sform(affine)
     hdr.set_xyzt_units(to_nifti_unit(unit))
 
     return hdr
