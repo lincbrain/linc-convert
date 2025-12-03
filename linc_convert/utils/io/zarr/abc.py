@@ -34,7 +34,7 @@ from linc_convert.utils.io.zarr.generate_pyramid import (
 )
 from linc_convert.utils.zarr_config import ZarrConfig
 
-NiftiHeaderLike: TypeAlias = Nifti1Header | Nifti2Header
+NiftiHeader: TypeAlias = Nifti1Header | Nifti2Header
 
 
 class ZarrArrayConfig(TypedDict):
@@ -206,7 +206,7 @@ class ZarrGroup(ZarrNode):
         shapes : list[list[int]]
             Shapes of each level, from finest to coarsest.
         """
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger("PyramidGeneration")
         base = self["0"]
         batch_shape, spatial_shape = base.shape[:-ndim], base.shape[-ndim:]
         all_shapes = [spatial_shape]
@@ -299,6 +299,6 @@ class ZarrGroup(ZarrNode):
             ome_version=ome_version,
         )
 
-    def write_nifti_header(self, header: NiftiHeaderLike) -> None:
+    def write_nifti_header(self, header: NiftiHeader) -> None:
         """Write a NIfTI header to the Zarr group."""
         niizarr.write_nifti_header(self, header)

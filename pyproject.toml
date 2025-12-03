@@ -4,9 +4,13 @@ version = "0.0.1"
 description = "Data conversion tools for the LINC project."
 authors = [
     "Yael Balbastre <yael.balbastre@gmail.com>",
+  "Kaidong Chai <mail@kchai.me>",
+  "Kabilar Gunalan <kabi@mit.edu>"
 ]
 maintainers = [
     "Yael Balbastre <yael.balbastre@gmail.com>",
+  "Kaidong Chai <mail@kchai.me>",
+  "Kabilar Gunalan <kabi@mit.edu>"
 ]
 license = "Apache-2.0"
 readme = "README.md"
