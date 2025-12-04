@@ -9,13 +9,15 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
-class TileInfo(dataclass):
+@dataclass
+class TileInfo:
     x: int
     y: int
     image: da.Array
 
 
-class MosaicInfo(dataclass):
+@dataclass
+class MosaicInfo:
     tiles: List[TileInfo]
     full_shape: Tuple[int, int, int]
     blend_ramp: da.Array
@@ -47,8 +49,8 @@ def _normalize_overlap(
 
 
 def _blending_ramp(
-    shape: tuple(int),
-    overlap: tuple(int),
+    shape: Tuple[int, int],
+    overlap: Tuple[int, int],
 ) -> np.ndarray:
     """
     Create a separable 2D blending ramp similar to build_slice().
