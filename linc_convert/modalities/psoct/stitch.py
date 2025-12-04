@@ -66,7 +66,7 @@ class MosaicInfo:
         
         # Extract tile dimensions from first tile
         first_tile = tiles[0]
-        tile_height, tile_width = first_tile.image.shape[:2]
+        tile_width, tile_height = first_tile.image.shape[:2]
         
         # Extract depth from first tile if 3D
         if depth is None and len(first_tile.image.shape) == 3:
@@ -87,7 +87,7 @@ class MosaicInfo:
         
         # Normalize tile_overlap to pixels
         x_overlap, y_overlap = _normalize_tile_overlap(
-            tile_overlap, tile_width, tile_height, x_coords, y_coords
+            tile_overlap, tile_width, tile_height
         )
         
         # Compute blending ramp with explicit overlap
@@ -133,9 +133,8 @@ class MosaicInfo:
             Blending ramp as a dask array.
         """
         # Create blending ramp
-        wx = np.ones(tile_height, dtype=np.float32)
-        wy = np.ones(tile_width, dtype=np.float32)
-        
+        wx = np.ones(tile_width, dtype=np.float32)
+        wy = np.ones(tile_height, dtype=np.float32)
         if x_overlap > 0:
             wx[:x_overlap] = np.linspace(0, 1, x_overlap, dtype=np.float32)
             wx[-x_overlap:] = np.linspace(1, 0, x_overlap, dtype=np.float32)
@@ -145,7 +144,7 @@ class MosaicInfo:
             wy[-y_overlap:] = np.linspace(1, 0, y_overlap, dtype=np.float32)
         
         ramp = np.outer(wx, wy)
-        return da.from_array(ramp, chunks="auto")
+        return ramp
     
     def stitch(self) -> da.Array:
         """
@@ -218,14 +217,13 @@ class MosaicInfo:
             # Place tile into that big block
             xs = slice(x0 - x_start, x0 - x_start + pw)
             ys = slice(y0 - y_start, y0 - y_start + ph)
-            
             # Apply blending ramp - handle both 2D and 3D
             if not self.circular_mean:
                 # For 2D: t * blend_ramp
                 # For 3D: t * blend_ramp[..., None]
                 if len(no_chunk_dim) == 0:  # 2D
                     weighted_tile = t * blend_ramp
-                else:  # 3D
+                else:
                     weighted_tile = t * blend_ramp[:, :, None]
                 block_canvas[xs, ys, ...] = weighted_tile
             else:
@@ -282,32 +280,22 @@ def _combine_block(
     return da.rad2deg(da.arctan2(normalized[..., 1], normalized[..., 0])) / 2
 
 
-def _to_dask(arr: ArrayLike, chunks="auto") -> da.Array:
-    """Convert array-like to dask array."""
-    if isinstance(arr, da.Array):
-        return arr
-    return da.from_array(np.asarray(arr), chunks=chunks)
-
-
 def _normalize_tile_overlap(
-    tile_overlap: Union[float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]],
+    tile_overlap: Union[float, int, Tuple[float, float], Tuple[int, int]],
     tile_width: int,
-    tile_height: int,
-    x_coords: Optional[np.ndarray] = None,
-    y_coords: Optional[np.ndarray] = None,
+    tile_height: int
 ) -> Tuple[int, int]:
     """
     Normalize tile_overlap parameter to (x_overlap, y_overlap) in pixels.
     
     Parameters
     ----------
-    tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]]
+    tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int]]
         Overlap specification:
         - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on each side)
         - int: number of pixels overlap on each side
         - Tuple[float, float]: percentiles for (x, y) dimensions
         - Tuple[int, int]: pixel counts for (x, y) dimensions
-        - "auto": compute maximum overlap from coordinates
     tile_width : int
         Width of each tile.
     tile_height : int
@@ -322,10 +310,6 @@ def _normalize_tile_overlap(
     Tuple[int, int]
         (x_overlap, y_overlap) in pixels.
     """
-    if tile_overlap == "auto":
-        if x_coords is None or y_coords is None:
-            raise ValueError("x_coords and y_coords required for auto tile_overlap")
-        return _compute_auto_overlap(tile_width, tile_height, x_coords, y_coords)
     
     # Handle tuple case
     if isinstance(tile_overlap, tuple):
@@ -352,34 +336,6 @@ def _normalize_tile_overlap(
     
     if x_overlap < 0 or y_overlap < 0:
         raise ValueError("Overlap must be non-negative.")
-    
-    return x_overlap, y_overlap
-
-
-def _compute_auto_overlap(
-    tile_width: int, tile_height: int, x_coords: np.ndarray, y_coords: np.ndarray
-) -> Tuple[int, int]:
-    """
-    Compute maximum overlap from tile coordinates.
-    
-    Returns the maximum number of overlapping pixels in each dimension.
-    """
-    if len(x_coords) == 0 or len(y_coords) == 0:
-        return 0, 0
-    
-    x_coords_flat = x_coords[~np.isnan(x_coords)]
-    y_coords_flat = y_coords[~np.isnan(y_coords)]
-    
-    x_overlap = 0
-    y_overlap = 0
-    
-    if len(x_coords_flat) > 1:
-        x_spacing = np.min(np.diff(np.sort(np.unique(x_coords_flat))))
-        x_overlap = max(0, tile_width - int(x_spacing)) if x_spacing < tile_width else 0
-    
-    if len(y_coords_flat) > 1:
-        y_spacing = np.min(np.diff(np.sort(np.unique(y_coords_flat))))
-        y_overlap = max(0, tile_height - int(y_spacing)) if y_spacing < tile_height else 0
     
     return x_overlap, y_overlap
 
