@@ -90,28 +90,13 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
                 # It's a group, try to get array '0'
                 if '0' in zarr_group.keys():
                     zarr_array_wrapper = zarr_group['0']
-                    # Get underlying zarr array for dask conversion
-                    # ZarrPythonArray has _array attribute with the actual zarr.Array
-                    if hasattr(zarr_array_wrapper, '_array'):
-                        zarr_python_array = zarr_array_wrapper._array
-                    elif hasattr(zarr_array_wrapper, '_zarr_array'):
-                        zarr_python_array = zarr_array_wrapper._zarr_array
-                    else:
-                        # Fallback: try to use the wrapper directly
-                        zarr_python_array = zarr_array_wrapper
-                    data = da.from_array(zarr_python_array, chunks=zarr_python_array.chunks)
+                    data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
                 else:
                     raise ValueError(f"Zarr group at {file_path} does not contain array '0'")
             except (ValueError, KeyError):
                 # Try as array
                 zarr_array_wrapper = open_array(file_path, mode="r")
-                if hasattr(zarr_array_wrapper, '_array'):
-                    zarr_python_array = zarr_array_wrapper._array
-                elif hasattr(zarr_array_wrapper, '_zarr_array'):
-                    zarr_python_array = zarr_array_wrapper._zarr_array
-                else:
-                    zarr_python_array = zarr_array_wrapper
-                data = da.from_array(zarr_python_array, chunks=zarr_python_array.chunks)
+                data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
             
             # Handle 3D data - take middle slice
             if data.ndim == 3:
@@ -226,10 +211,11 @@ def mosaic2d(
     *,
     jpeg_output: Annotated[Optional[str], Parameter(name=["--jpeg", "-j"])] = None,
     tiff_output: Annotated[Optional[str], Parameter(name=["--tiff", "-t"])] = None,
-    tile_overlap: float | Literal["auto"] = "auto",
+    nifti_output: Annotated[Optional[str], Parameter(name=["--nifti", "-n"])] = None,
+    tile_overlap: float = 0.2,
     circular_mean: bool = False,
-    cropx: int = 0,
-    cropy: int = 0,
+    clip_x: int = 0,
+    clip_y: int = 0,
     mask: Annotated[Optional[str], Parameter(name=["--mask", "-m"])] = None,
     zarr_config: ZarrConfig = None,
     general_config: GeneralConfig = None,
@@ -250,10 +236,10 @@ def mosaic2d(
         Tile overlap in pixels. If "auto", compute from tile coordinates.
     circular_mean : bool
         Whether to use circular mean for blending.
-    cropx : int
-        Number of pixels to crop from the left side of each tile. Coordinates will be shifted accordingly.
-    cropy : int
-        Number of pixels to crop from the top side of each tile. Coordinates will be shifted accordingly.
+    clip_x : int
+        Number of pixels to clip from the left side of each tile. Coordinates will be shifted accordingly.
+    clip_y : int
+        Number of pixels to clip from the top side of each tile. Coordinates will be shifted accordingly.
     mask : str, optional
         Path to binary mask file to apply to the result. Mask should be 2D and match the result dimensions.
     zarr_config : ZarrConfig, optional
@@ -277,12 +263,12 @@ def mosaic2d(
     metadata = tile_info.get("metadata", {})
     scan_resolution = metadata.get("scan_resolution", [1.0, 1.0])
     file_key = metadata.get("file_key")  # Key for mat file array
-    
-    # Get crop values from metadata if not provided as parameters
-    if cropx == 0:
-        cropx = metadata.get("cropx", 0)
-    if cropy == 0:
-        cropy = metadata.get("cropy", 0)
+    base_dir = metadata.get("base_dir", ".")
+    # Get clip values from metadata if not provided as parameters
+    if clip_x == 0:
+        clip_x = metadata.get("clip_x", 0)
+    if clip_y == 0:
+        clip_y = metadata.get("clip_y", 0)
     
     # Get mask from metadata if not provided as parameter
     if mask is None:
@@ -300,11 +286,12 @@ def mosaic2d(
     for i, tile in enumerate(tiles_config):
         x = tile.get("x")
         y = tile.get("y")
-        file_path = tile.get("file_path")
+        file_path = tile.get("filepath")
         if x is None or y is None or file_path is None:
             logger.warning(f"Skipping incomplete tile: {tile}")
             continue
-
+        if base_dir:
+            file_path = op.join(base_dir, file_path)
         if not op.exists(file_path):
             logger.warning(f"Tile file not found: {file_path}, skipping")
             continue
@@ -318,24 +305,24 @@ def mosaic2d(
             logger.warning(f"Failed to load {file_path}: {e}, skipping")
             continue
 
-        # Apply cropping if specified
-        if cropx > 0 or cropy > 0:
-            # Crop from left (cropx) and top (cropy)
+        # Apply clipping if specified
+        if clip_x > 0 or clip_y > 0:
+            # Clip from left (clip_x) and top (clip_y)
             # This removes pixels from the left and top edges
             if image.ndim == 2:
-                image = image[cropy:, cropx:]
-            elif image.ndim == 3:
-                image = image[cropy:, cropx:, :]
+                image = image[clip_x:, clip_y:]
+            elif image.ndim >= 3:
+                image = image[clip_x:, clip_y:, ...]
             else:
                 logger.warning(f"Unexpected image dimensions {image.ndim} for {file_path}")
                 continue
             
-            # Shift coordinates to account for cropping
-            # After cropping cropx pixels from the left, the remaining content
-            # represents what was at position cropx in the original tile.
-            # To align this correctly in the mosaic, we shift coordinates by +cropx and +cropy
-            x = int(x) + cropx
-            y = int(y) + cropy
+            # Shift coordinates to account for clipping
+            # After clipping clip_x pixels from the left, the remaining content
+            # represents what was at position clip_x in the original tile.
+            # To align this correctly in the mosaic, we shift coordinates by +clip_x and +clip_y
+            x = int(x) + clip_x
+            y = int(y) + clip_y
         else:
             x = int(x)
             y = int(y)
@@ -364,12 +351,6 @@ def mosaic2d(
     # Compute the result
     result = result.compute()
 
-    # Set default output name if not provided
-    general_config.set_default_name(op.splitext(op.basename(tile_info_file))[0])
-
-    # Save to Zarr
-    out = general_config.out
-    logger.info(f"Saving to Zarr: {out}")
 
     # Result is (width, height), but Zarr expects (height, width) for 2D
     # Transpose to get (height, width)
@@ -406,48 +387,13 @@ def mosaic2d(
         except Exception as e:
             logger.error(f"Failed to load or apply mask: {e}")
             raise
-
+    
+    # Compute result if it's still a dask array
+    result_2d = result_2d.compute() if isinstance(result_2d, da.Array) else result_2d
+    
     # Get dimensions from result
     full_height, full_width = result_2d.shape
-
-    # Compute zarr layout for 2D
-    chunk, shard = compute_zarr_layout((full_height, full_width), np.float32,
-                                       zarr_config)
-
-    zarr_config.out = out
-    zgroup = from_config(zarr_config)
-
-    if shard:
-        result_dask = da.rechunk(da.from_array(result_2d, chunks=chunk), chunks=shard)
-    else:
-        result_dask = da.rechunk(da.from_array(result_2d, chunks=chunk), chunks=chunk)
-
-    writer = zgroup.create_array("0", shape=result_2d.shape, dtype=np.float32,
-                                 zarr_config=zarr_config)
-
-    task = da.store(result_dask, writer, compute=False)
-    with ProgressBar():
-        task.compute()
-
-    # Generate pyramid and metadata
-    logger.info("Generating pyramid and metadata")
-    zgroup.generate_pyramid()
-
-    scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0,
-                                                                                1.0]
-    zgroup.write_ome_metadata(["y", "x"], space_scale=scan_resolution_2d,
-                              space_unit="millimeter")
-
-    if nifti_config and nifti_config.nii:
-        from niizarr import default_nifti_header
-
-        nii_header = default_nifti_header(
-            zgroup["0"], zgroup._get_zarr_python_group().attrs["multiscales"]
-        )
-        nii_header.set_xyzt_units("mm")
-        zgroup.write_nifti_header(nii_header)
-
-    logger.info("Finished generating pyramid")
+    scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0, 1.0]
 
     # Save JPEG if requested
     if jpeg_output:
@@ -459,4 +405,61 @@ def mosaic2d(
         logger.info(f"Saving TIFF: {tiff_output}")
         _save_tiff(result_2d, tiff_output)
 
+    # Save NIfTI file if requested
+    if nifti_output:
+        logger.info(f"Saving NIfTI file: {nifti_output}")
+        # Create affine matrix for 2D image
+        # NIfTI expects (x, y) but our data is (y, x), so we need to handle this
+        affine = np.eye(4)
+        affine[0, 0] = scan_resolution_2d[1]  # x voxel size
+        affine[1, 1] = scan_resolution_2d[0]  # y voxel size
+        affine[0, 3] = -scan_resolution_2d[1] * full_width / 2.0  # center x
+        affine[1, 3] = -scan_resolution_2d[0] * full_height / 2.0  # center y
+        
+        # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
+        # Add a singleton z dimension
+        result_3d = result_2d[:, :]
+        nii_img = nib.Nifti1Image(result_3d, affine)
+        nii_img.header.set_xyzt_units(xyz="mm", t="sec")
+        nib.save(nii_img, nifti_output)
+        logger.info("NIfTI file saved successfully")
+
+    # Save to Zarr if output is specified
+    if general_config.out:
+        logger.info(f"Saving to Zarr: {general_config.out}")
+        
+        # Compute zarr layout for 2D
+        chunk, shard = compute_zarr_layout(result_2d.shape, np.float32,
+                                           zarr_config)
+
+        # Prepare Zarr group (similar to single_volume.py)
+        zgroup = from_config(general_config.out, zarr_config)
+
+        # Create array and write data directly (like single_volume.py)
+        dataset = zgroup.create_array(
+            "0", shape=result_2d.shape, dtype=np.float32, zarr_config=zarr_config
+        )
+        
+        # Write data directly using indexing (similar to single_volume.py)
+        dataset[...] = result_2d
+
+        # Generate pyramid and metadata
+        logger.info("Generating pyramid and metadata")
+        zgroup.generate_pyramid()
+        zgroup.write_ome_metadata(["y", "x"], space_scale=scan_resolution_2d,
+                                  space_unit="millimeter")
+
+        if nifti_config and nifti_config.nii:
+            header = build_nifti_header(
+                zgroup=zgroup,
+                voxel_size_zyx=(1.0, scan_resolution_2d[0], scan_resolution_2d[1]),
+                unit="millimeter",
+                nii_config=nifti_config,
+            )
+            zgroup.write_nifti_header(header)
+
+        logger.info("Finished generating pyramid")
+    else:
+        logger.info("Skipping Zarr output (no output path specified)")
+    
     logger.info("Finished mosaic2d")
