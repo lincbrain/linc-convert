@@ -253,6 +253,9 @@ def mosaic3d(
     logger.info("Stitching tiles")
     tile_size = (tile_width, tile_height)
     
+    # Get tile_overlap from metadata (defaults to "auto")
+    tile_overlap = metadata.get("tile_overlap", "auto")
+    
     # Create MosaicInfo for each modality
     dbi_mosaic = MosaicInfo.from_tiles_and_coords(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
@@ -263,6 +266,7 @@ def mosaic3d(
         depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
+        tile_overlap=tile_overlap,
     )
     
     r3d_mosaic = MosaicInfo.from_tiles_and_coords(
@@ -274,6 +278,7 @@ def mosaic3d(
         depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
+        tile_overlap=tile_overlap,
     )
     
     o3d_mosaic = MosaicInfo.from_tiles_and_coords(
@@ -285,6 +290,7 @@ def mosaic3d(
         depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
+        tile_overlap=tile_overlap,
     )
     
     # Stitch using lazy dask operations

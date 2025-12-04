@@ -44,29 +44,116 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
 
 
 def _load_image_tile(file_path: str, key: str = None) -> da.Array:
-    """Load 2D image from a file (NIfTI or mat)."""
-    if file_path.endswith(('.nii', '.nii.gz')):
-        img = nib.load(file_path)
-        data = img.get_fdata()
-        # If 3D, take middle slice or first slice
-        if data.ndim == 3:
-            data = data[:, :, data.shape[2] // 2]
-        elif data.ndim > 3:
-            # Take first 2D slice
-            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
-        return da.from_array(data, chunks="auto")
-    else:
-        # Assume mat file
+    """
+    Load 2D image from a file with lazy loading support.
+    
+    Supports:
+    - .mat files (MATLAB)
+    - Zarr archives (groups or arrays)
+    - NIfTI files (with mmap for lazy loading)
+    - Other formats via dask-image
+    """
+    import os.path as op
+    
+    # Check for .mat files
+    if file_path.endswith('.mat'):
         wrapper = as_arraywrapper(file_path, key)
         if not hasattr(wrapper, "dtype"):
             raise ValueError(f"Could not load array from {file_path}")
-        data = wrapper[:]
+        data = wrapper
         # Handle 3D data - take middle slice
         if data.ndim == 3:
             data = data[:, :, data.shape[2] // 2]
         elif data.ndim > 3:
             data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return da.from_array(data, chunks="auto")
+    
+    # Check for zarr archives
+    # Check if path looks like zarr (directory with zarr metadata files)
+    is_zarr = False
+    if op.isdir(file_path):
+        # Check for zarr v3 (zarr.json) or v2 (.zgroup or .zarray)
+        if op.exists(op.join(file_path, 'zarr.json')) or \
+           op.exists(op.join(file_path, '.zgroup')) or \
+           op.exists(op.join(file_path, '.zarray')):
+            is_zarr = True
+    elif file_path.endswith('.zarr') or '.zarr' in file_path:
+        is_zarr = True
+    
+    if is_zarr:
+        try:
+            from linc_convert.utils.io.zarr import open_array, open_group
+            
+            # Try to open as zarr group first
+            try:
+                zarr_group = open_group(file_path, mode="r")
+                # It's a group, try to get array '0'
+                if '0' in zarr_group.keys():
+                    zarr_array_wrapper = zarr_group['0']
+                    # Get underlying zarr array for dask conversion
+                    # ZarrPythonArray has _array attribute with the actual zarr.Array
+                    if hasattr(zarr_array_wrapper, '_array'):
+                        zarr_python_array = zarr_array_wrapper._array
+                    elif hasattr(zarr_array_wrapper, '_zarr_array'):
+                        zarr_python_array = zarr_array_wrapper._zarr_array
+                    else:
+                        # Fallback: try to use the wrapper directly
+                        zarr_python_array = zarr_array_wrapper
+                    data = da.from_array(zarr_python_array, chunks=zarr_python_array.chunks)
+                else:
+                    raise ValueError(f"Zarr group at {file_path} does not contain array '0'")
+            except (ValueError, KeyError):
+                # Try as array
+                zarr_array_wrapper = open_array(file_path, mode="r")
+                if hasattr(zarr_array_wrapper, '_array'):
+                    zarr_python_array = zarr_array_wrapper._array
+                elif hasattr(zarr_array_wrapper, '_zarr_array'):
+                    zarr_python_array = zarr_array_wrapper._zarr_array
+                else:
+                    zarr_python_array = zarr_array_wrapper
+                data = da.from_array(zarr_python_array, chunks=zarr_python_array.chunks)
+            
+            # Handle 3D data - take middle slice
+            if data.ndim == 3:
+                data = data[:, :, data.shape[2] // 2]
+            elif data.ndim > 3:
+                data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+            return data
+        except Exception as e:
+            logger.warning(f"Failed to load as zarr: {e}, trying other formats")
+    
+    # Check for NIfTI files
+    if file_path.endswith(('.nii', '.nii.gz')):
+        img = nib.load(file_path)
+        # Use dataobj for lazy loading with mmap instead of get_fdata()
+        dataobj = img.dataobj
+        # Convert to dask array with lazy loading
+        data = da.from_array(dataobj, chunks="auto")
+        # Handle 3D data - take middle slice
+        if data.ndim == 3:
+            data = data[:, :, data.shape[2] // 2]
+        elif data.ndim > 3:
+            # Take first 2D slice
+            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        return data
+    
+    # Try dask-image as fallback
+    try:
+        import dask_image.imread  # noqa: F401
+        data = dask_image.imread.imread(file_path)
+        # Handle 3D data - take middle slice
+        if data.ndim == 3:
+            data = data[:, :, data.shape[2] // 2]
+        elif data.ndim > 3:
+            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        return data
+    except ImportError:
+        raise ValueError(
+            f"Could not load {file_path}. "
+            "Supported formats: .mat, .zarr, .nii/.nii.gz, or formats supported by dask-image"
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to load {file_path} with dask-image: {e}")
 
 
 def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95):
@@ -85,21 +172,26 @@ def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95):
 
 
 def _save_tiff(image: np.ndarray, output_path: str):
-    """Save image as TIFF."""
+    """Save image as TIFF without normalization - data is saved as-is."""
     try:
         import tifffile
-
-        tifffile.imwrite(output_path, image.astype(np.float32))
+        # Save data as-is without any normalization or scaling
+        # Preserve original dtype and values
+        tifffile.imwrite(output_path, image)
     except ImportError:
         # Fallback to PIL if tifffile not available
-        img_min = np.nanmin(image)
-        img_max = np.nanmax(image)
-        if img_max > img_min:
-            normalized = ((image - img_min) / (img_max - img_min) * 65535).astype(
-                np.uint16)
+        # PIL requires uint8 or uint16, so we need to convert
+        # But we don't normalize - just convert dtype preserving values as much as possible
+        if image.dtype in (np.float32, np.float64):
+            # For float, convert to uint16 without normalization
+            # This will clip values outside [0, 65535] range
+            image_uint16 = np.clip(image, 0, 65535).astype(np.uint16)
+        elif image.dtype == np.uint8:
+            image_uint16 = image
         else:
-            normalized = np.zeros_like(image, dtype=np.uint16)
-        pil_image = Image.fromarray(normalized)
+            # For other types, convert to uint16
+            image_uint16 = np.clip(image, 0, 65535).astype(np.uint16)
+        pil_image = Image.fromarray(image_uint16)
         pil_image.save(output_path, "TIFF")
 
 
@@ -154,6 +246,11 @@ def mosaic2d(
     tile_height = metadata.get("tile_height")
     scan_resolution = metadata.get("scan_resolution", [1.0, 1.0])
     file_key = metadata.get("file_key")  # Key for mat file array
+    
+    # Use tile_overlap from function parameter (defaults to "auto")
+    # If "auto" and metadata has tile_overlap, use that instead
+    if tile_overlap == "auto" and "tile_overlap" in metadata:
+        tile_overlap = metadata.get("tile_overlap", "auto")
 
     if tile_width is None or tile_height is None:
         raise ValueError("tile_width and tile_height must be specified in metadata")
@@ -243,6 +340,7 @@ def mosaic2d(
         depth=None,  # 2D mosaic
         chunk_size=tile_size,
         circular_mean=circular_mean,
+        tile_overlap=tile_overlap,
     )
     
     # Stitch using lazy dask operations
