@@ -17,7 +17,7 @@ from dask.diagnostics import ProgressBar
 from PIL import Image
 
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.modalities.psoct.stitch import TileInfo, stitch_tiles
+from linc_convert.modalities.psoct.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import \
@@ -41,50 +41,6 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
     """Load tile information from YAML file."""
     with open(yaml_file, "r") as f:
         return yaml.safe_load(f)
-
-
-def _compute_blending_ramp_2d(
-    tile_width: int, tile_height: int, x_coords: np.ndarray, y_coords: np.ndarray
-) -> np.ndarray:
-    """
-    Compute blending ramp for 2D tile stitching.
-    
-    This computes overlap regions between tiles and creates a blending ramp.
-    """
-    # Find minimum distances between tile centers to estimate overlap
-    if len(x_coords) == 0 or len(y_coords) == 0:
-        return np.ones((tile_height, tile_width), dtype=np.float32)
-
-    # Estimate overlap from coordinate spacing
-    x_coords_flat = x_coords[~np.isnan(x_coords)]
-    y_coords_flat = y_coords[~np.isnan(y_coords)]
-
-    if len(x_coords_flat) > 1:
-        x_spacing = np.min(np.diff(np.sort(np.unique(x_coords_flat))))
-        x_overlap = max(0, tile_width - int(x_spacing)) if x_spacing < tile_width else 0
-    else:
-        x_overlap = 0
-
-    if len(y_coords_flat) > 1:
-        y_spacing = np.min(np.diff(np.sort(np.unique(y_coords_flat))))
-        y_overlap = max(0,
-                        tile_height - int(y_spacing)) if y_spacing < tile_height else 0
-    else:
-        y_overlap = 0
-
-    # Create blending ramp
-    wx = np.ones(tile_height, dtype=np.float32)
-    wy = np.ones(tile_width, dtype=np.float32)
-
-    if x_overlap > 0:
-        wx[:x_overlap] = np.linspace(0, 1, x_overlap, dtype=np.float32)
-        wx[-x_overlap:] = np.linspace(1, 0, x_overlap, dtype=np.float32)
-
-    if y_overlap > 0:
-        wy[:y_overlap] = np.linspace(0, 1, y_overlap, dtype=np.float32)
-        wy[-y_overlap:] = np.linspace(1, 0, y_overlap, dtype=np.float32)
-
-    return np.outer(wx, wy)
 
 
 def _load_image_tile(file_path: str, key: str = None) -> da.Array:
@@ -224,12 +180,9 @@ def mosaic2d(
     x_coords = np.array(x_coords_list)
     y_coords = np.array(y_coords_list)
 
-    # Compute full mosaic dimensions
+    # Compute full mosaic dimensions (will be used by MosaicInfo)
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
-
-    # Compute blending ramp
-    blend_ramp = _compute_blending_ramp_2d(tile_width, tile_height, x_coords, y_coords)
 
     # Process each tile and collect results
     tiles = []
@@ -258,16 +211,15 @@ def mosaic2d(
                 logger.warning(f"Image {file_path} is not 2D, skipping")
                 continue
 
-        # Apply blending ramp if tile matches expected size
-        if image.shape[0] == tile_height and image.shape[1] == tile_width:
-            image = image * blend_ramp
-        elif image.shape[0] >= tile_height and image.shape[1] >= tile_width:
-            # Crop to expected size
-            image = image[:tile_height, :tile_width] * blend_ramp
+        # Validate and crop tile to expected size
+        if image.shape[0] >= tile_height and image.shape[1] >= tile_width:
+            # Crop to expected size if needed
+            if image.shape[0] != tile_height or image.shape[1] != tile_width:
+                image = image[:tile_height, :tile_width]
         else:
             logger.warning(
                 f"Tile {file_path} has unexpected size {image.shape}, "
-                f"expected ({tile_height}, {tile_width})"
+                f"expected at least ({tile_height}, {tile_width})"
             )
             continue
 
@@ -277,20 +229,25 @@ def mosaic2d(
     if not coords:
         raise ValueError("No valid tiles were processed")
 
-    # Stitch tiles
+    # Stitch tiles using MosaicInfo
     logger.info("Stitching tiles")
     tile_size = (tile_width, tile_height)
-
-    # For 2D, stitch_tiles expects (width, height) format
-    # Pass as (width, height) - the function handles 2D by having no_chunk_dim be empty
-    result = stitch_tiles(
-        [TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, tiles)],
-        full_shape=(full_width, full_height),  # (width, height) for 2D
-        blend_ramp=blend_ramp,
+    
+    # Create MosaicInfo for 2D mosaic
+    mosaic = MosaicInfo.from_tiles_and_coords(
+        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, tiles)],
+        tile_width=tile_width,
+        tile_height=tile_height,
+        x_coords=x_coords,
+        y_coords=y_coords,
+        depth=None,  # 2D mosaic
         chunk_size=tile_size,
         circular_mean=circular_mean,
     )
-
+    
+    # Stitch using lazy dask operations
+    result = mosaic.stitch()
+    
     # Compute the result
     result = result.compute()
 

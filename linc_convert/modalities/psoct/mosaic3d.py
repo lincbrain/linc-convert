@@ -20,7 +20,7 @@ from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.single_tile import process_complex3d
-from linc_convert.modalities.psoct.stitch import TileInfo, stitch_tiles
+from linc_convert.modalities.psoct.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import \
@@ -45,50 +45,6 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
     """Load tile information from YAML file."""
     with open(yaml_file, "r") as f:
         return yaml.safe_load(f)
-
-
-def _compute_blending_ramp(
-    tile_width: int, tile_height: int, x_coords: np.ndarray, y_coords: np.ndarray
-) -> np.ndarray:
-    """
-    Compute blending ramp for tile stitching.
-    
-    This computes overlap regions between tiles and creates a blending ramp.
-    """
-    # Find minimum distances between tile centers to estimate overlap
-    if len(x_coords) == 0 or len(y_coords) == 0:
-        return np.ones((tile_height, tile_width), dtype=np.float32)
-
-    # Estimate overlap from coordinate spacing
-    x_coords_flat = x_coords[~np.isnan(x_coords)]
-    y_coords_flat = y_coords[~np.isnan(y_coords)]
-
-    if len(x_coords_flat) > 1:
-        x_spacing = np.min(np.diff(np.sort(np.unique(x_coords_flat))))
-        x_overlap = max(0, tile_width - int(x_spacing)) if x_spacing < tile_width else 0
-    else:
-        x_overlap = 0
-
-    if len(y_coords_flat) > 1:
-        y_spacing = np.min(np.diff(np.sort(np.unique(y_coords_flat))))
-        y_overlap = max(0,
-                        tile_height - int(y_spacing)) if y_spacing < tile_height else 0
-    else:
-        y_overlap = 0
-
-    # Create blending ramp
-    wx = np.ones(tile_height, dtype=np.float32)
-    wy = np.ones(tile_width, dtype=np.float32)
-
-    if x_overlap > 0:
-        wx[:x_overlap] = np.linspace(0, 1, x_overlap, dtype=np.float32)
-        wx[-x_overlap:] = np.linspace(1, 0, x_overlap, dtype=np.float32)
-
-    if y_overlap > 0:
-        wy[:y_overlap] = np.linspace(0, 1, y_overlap, dtype=np.float32)
-        wy[-y_overlap:] = np.linspace(1, 0, y_overlap, dtype=np.float32)
-
-    return np.outer(wx, wy)
 
 
 def _load_complex_tile(file_path: str, key: str = None) -> da.Array:
@@ -227,9 +183,6 @@ def mosaic3d(
     full_width = int(np.nanmax(x_coords) + tile_width)
     full_height = int(np.nanmax(y_coords) + tile_height)
 
-    # Compute blending ramp
-    blend_ramp = _compute_blending_ramp(tile_width, tile_height, x_coords, y_coords)
-
     # Compute zarr layout
     chunk, shard = compute_zarr_layout((depth, full_height, full_width), np.float32,
                                        zarr_config)
@@ -284,9 +237,9 @@ def mosaic3d(
             R3D = da.flip(R3D, axis=2)
             O3D = da.flip(O3D, axis=2)
 
-        # Clip and apply blending ramp
+        # Clip tiles
         results = da.stack([dBI3D, R3D, O3D], axis=3)
-        results = results[clip_x:, clip_y:, :, :] * blend_ramp[:, :, None, None]
+        results = results[clip_x:, clip_y:, :, :]
 
         dbi_tiles.append(results[:, :, :, 0])
         r3d_tiles.append(results[:, :, :, 1])
@@ -296,33 +249,48 @@ def mosaic3d(
     if not coords:
         raise ValueError("No valid tiles were processed")
 
-    # Stitch tiles for each modality
+    # Stitch tiles for each modality using MosaicInfo
     logger.info("Stitching tiles")
     tile_size = (tile_width, tile_height)
-
-    dBI_result = stitch_tiles(
-        [TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
-        full_shape=(full_width, full_height, depth),
-        blend_ramp=blend_ramp,
+    
+    # Create MosaicInfo for each modality
+    dbi_mosaic = MosaicInfo.from_tiles_and_coords(
+        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
+        tile_width=tile_width,
+        tile_height=tile_height,
+        x_coords=x_coords,
+        y_coords=y_coords,
+        depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
     )
-
-    R3D_result = stitch_tiles(
-        [TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, r3d_tiles)],
-        full_shape=(full_width, full_height, depth),
-        blend_ramp=blend_ramp,
+    
+    r3d_mosaic = MosaicInfo.from_tiles_and_coords(
+        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, r3d_tiles)],
+        tile_width=tile_width,
+        tile_height=tile_height,
+        x_coords=x_coords,
+        y_coords=y_coords,
+        depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
     )
-
-    O3D_result = stitch_tiles(
-        [TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
-        full_shape=(full_width, full_height, depth),
-        blend_ramp=blend_ramp,
+    
+    o3d_mosaic = MosaicInfo.from_tiles_and_coords(
+        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
+        tile_width=tile_width,
+        tile_height=tile_height,
+        x_coords=x_coords,
+        y_coords=y_coords,
+        depth=depth,
         chunk_size=tile_size,
         circular_mean=False,
     )
+    
+    # Stitch using lazy dask operations
+    dBI_result = dbi_mosaic.stitch()
+    R3D_result = r3d_mosaic.stitch()
+    O3D_result = o3d_mosaic.stitch()
 
     # Transpose to (z, y, x) for output
     dBI_result = dBI_result.transpose(2, 1, 0)
