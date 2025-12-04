@@ -195,6 +195,30 @@ def _save_tiff(image: np.ndarray, output_path: str):
         pil_image.save(output_path, "TIFF")
 
 
+def _load_mask(mask_path: str) -> np.ndarray:
+    """
+    Load a binary mask from a file.
+    
+    Supports the same formats as _load_image_tile but expects a 2D binary mask.
+    """
+    # Use the same loading function as tiles
+    mask = _load_image_tile(mask_path, key=None)
+    
+    # Ensure it's a 2D array
+    if mask.ndim != 2:
+        if mask.ndim == 3 and mask.shape[2] == 1:
+            mask = mask[:, :, 0]
+        else:
+            raise ValueError(f"Mask must be 2D, got shape {mask.shape}")
+    
+    # Convert to binary (0 or 1)
+    # Handle both boolean and numeric masks
+    mask = mask.compute() if isinstance(mask, da.Array) else mask
+    mask = (mask > 0).astype(np.float32)
+    
+    return mask
+
+
 @mosaic2d.default
 @autoconfig
 def mosaic2d(
@@ -204,6 +228,9 @@ def mosaic2d(
     tiff_output: Annotated[Optional[str], Parameter(name=["--tiff", "-t"])] = None,
     tile_overlap: float | Literal["auto"] = "auto",
     circular_mean: bool = False,
+    cropx: int = 0,
+    cropy: int = 0,
+    mask: Annotated[Optional[str], Parameter(name=["--mask", "-m"])] = None,
     zarr_config: ZarrConfig = None,
     general_config: GeneralConfig = None,
     nifti_config: NiftiConfig = None,
@@ -223,6 +250,12 @@ def mosaic2d(
         Tile overlap in pixels. If "auto", compute from tile coordinates.
     circular_mean : bool
         Whether to use circular mean for blending.
+    cropx : int
+        Number of pixels to crop from the left side of each tile. Coordinates will be shifted accordingly.
+    cropy : int
+        Number of pixels to crop from the top side of each tile. Coordinates will be shifted accordingly.
+    mask : str, optional
+        Path to binary mask file to apply to the result. Mask should be 2D and match the result dimensions.
     zarr_config : ZarrConfig, optional
         Zarr configuration.
     general_config : GeneralConfig, optional
@@ -242,56 +275,41 @@ def mosaic2d(
 
     # Get metadata
     metadata = tile_info.get("metadata", {})
-    tile_width = metadata.get("tile_width")
-    tile_height = metadata.get("tile_height")
     scan_resolution = metadata.get("scan_resolution", [1.0, 1.0])
     file_key = metadata.get("file_key")  # Key for mat file array
+    
+    # Get crop values from metadata if not provided as parameters
+    if cropx == 0:
+        cropx = metadata.get("cropx", 0)
+    if cropy == 0:
+        cropy = metadata.get("cropy", 0)
+    
+    # Get mask from metadata if not provided as parameter
+    if mask is None:
+        mask = metadata.get("mask")
     
     # Use tile_overlap from function parameter (defaults to "auto")
     # If "auto" and metadata has tile_overlap, use that instead
     if tile_overlap == "auto" and "tile_overlap" in metadata:
         tile_overlap = metadata.get("tile_overlap", "auto")
 
-    if tile_width is None or tile_height is None:
-        raise ValueError("tile_width and tile_height must be specified in metadata")
+    # Process each tile and collect TileInfo objects
+    tile_infos = []
 
-    # Collect tile coordinates and file paths
-    x_coords_list = []
-    y_coords_list = []
-    tile_files = []
-
-    for tile in tiles_config:
+    logger.info(f"Loading and processing {len(tiles_config)} tiles")
+    for i, tile in enumerate(tiles_config):
         x = tile.get("x")
         y = tile.get("y")
         file_path = tile.get("file_path")
         if x is None or y is None or file_path is None:
             logger.warning(f"Skipping incomplete tile: {tile}")
             continue
-        x_coords_list.append(x)
-        y_coords_list.append(y)
-        tile_files.append(file_path)
 
-    if not tile_files:
-        raise ValueError("No valid tiles found in YAML file")
-
-    x_coords = np.array(x_coords_list)
-    y_coords = np.array(y_coords_list)
-
-    # Compute full mosaic dimensions (will be used by MosaicInfo)
-    full_width = int(np.nanmax(x_coords) + tile_width)
-    full_height = int(np.nanmax(y_coords) + tile_height)
-
-    # Process each tile and collect results
-    tiles = []
-    coords = []
-
-    logger.info(f"Loading and processing {len(tile_files)} tiles")
-    for i, (x0, y0, file_path) in enumerate(zip(x_coords, y_coords, tile_files)):
         if not op.exists(file_path):
             logger.warning(f"Tile file not found: {file_path}, skipping")
             continue
 
-        logger.info(f"Processing tile {i + 1}/{len(tile_files)}: {file_path}")
+        logger.info(f"Processing tile {i + 1}/{len(tiles_config)}: {file_path}")
 
         # Load 2D image
         try:
@@ -300,45 +318,42 @@ def mosaic2d(
             logger.warning(f"Failed to load {file_path}: {e}, skipping")
             continue
 
-        # Ensure 2D
-        if image.ndim != 2:
-            if image.ndim == 3 and image.shape[2] == 1:
-                image = image[:, :, 0]
+        # Apply cropping if specified
+        if cropx > 0 or cropy > 0:
+            # Crop from left (cropx) and top (cropy)
+            # This removes pixels from the left and top edges
+            if image.ndim == 2:
+                image = image[cropy:, cropx:]
+            elif image.ndim == 3:
+                image = image[cropy:, cropx:, :]
             else:
-                logger.warning(f"Image {file_path} is not 2D, skipping")
+                logger.warning(f"Unexpected image dimensions {image.ndim} for {file_path}")
                 continue
-
-        # Validate and crop tile to expected size
-        if image.shape[0] >= tile_height and image.shape[1] >= tile_width:
-            # Crop to expected size if needed
-            if image.shape[0] != tile_height or image.shape[1] != tile_width:
-                image = image[:tile_height, :tile_width]
+            
+            # Shift coordinates to account for cropping
+            # After cropping cropx pixels from the left, the remaining content
+            # represents what was at position cropx in the original tile.
+            # To align this correctly in the mosaic, we shift coordinates by +cropx and +cropy
+            x = int(x) + cropx
+            y = int(y) + cropy
         else:
-            logger.warning(
-                f"Tile {file_path} has unexpected size {image.shape}, "
-                f"expected at least ({tile_height}, {tile_width})"
-            )
-            continue
+            x = int(x)
+            y = int(y)
 
-        tiles.append(image)
-        coords.append((int(x0), int(y0)))
+        # Create TileInfo
+        tile_infos.append(TileInfo(x=x, y=y, image=image))
 
-    if not coords:
+    if not tile_infos:
         raise ValueError("No valid tiles were processed")
 
     # Stitch tiles using MosaicInfo
     logger.info("Stitching tiles")
-    tile_size = (tile_width, tile_height)
     
-    # Create MosaicInfo for 2D mosaic
-    mosaic = MosaicInfo.from_tiles_and_coords(
-        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, tiles)],
-        tile_width=tile_width,
-        tile_height=tile_height,
-        x_coords=x_coords,
-        y_coords=y_coords,
+    # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
+    mosaic = MosaicInfo.from_tiles(
+        tiles=tile_infos,
         depth=None,  # 2D mosaic
-        chunk_size=tile_size,
+        chunk_size=None,  # Will use tile dimensions
         circular_mean=circular_mean,
         tile_overlap=tile_overlap,
     )
@@ -359,6 +374,41 @@ def mosaic2d(
     # Result is (width, height), but Zarr expects (height, width) for 2D
     # Transpose to get (height, width)
     result_2d = result.T
+
+    # Apply mask if provided
+    if mask:
+        logger.info(f"Loading and applying mask: {mask}")
+        try:
+            mask_array = _load_mask(mask)
+            # Check if mask dimensions match result
+            if mask_array.shape != result_2d.shape:
+                logger.warning(
+                    f"Mask shape {mask_array.shape} does not match result shape {result_2d.shape}. "
+                    "Attempting to resize mask."
+                )
+                # Resize mask to match result if possible
+                try:
+                    from scipy.ndimage import zoom
+                    zoom_factors = (result_2d.shape[0] / mask_array.shape[0],
+                                   result_2d.shape[1] / mask_array.shape[1])
+                    mask_array = zoom(mask_array, zoom_factors, order=0)  # order=0 for nearest neighbor
+                    # Ensure binary after resize
+                    mask_array = (mask_array > 0.5).astype(np.float32)
+                except ImportError:
+                    raise ValueError(
+                        "scipy is required for mask resizing. "
+                        "Please ensure mask dimensions match result dimensions or install scipy."
+                    )
+            
+            # Apply mask (multiply: 0 where mask is 0, keep original value where mask is 1)
+            result_2d = result_2d * mask_array
+            logger.info("Mask applied successfully")
+        except Exception as e:
+            logger.error(f"Failed to load or apply mask: {e}")
+            raise
+
+    # Get dimensions from result
+    full_height, full_width = result_2d.shape
 
     # Compute zarr layout for 2D
     chunk, shard = compute_zarr_layout((full_height, full_width), np.float32,
