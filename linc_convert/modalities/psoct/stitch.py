@@ -27,33 +27,21 @@ class MosaicInfo:
     circular_mean: bool = False
     
     @classmethod
-    def from_tiles_and_coords(
+    def from_tiles(
         cls,
         tiles: List[TileInfo],
-        tile_width: int,
-        tile_height: int,
-        x_coords: np.ndarray,
-        y_coords: np.ndarray,
         depth: Optional[int] = None,
         chunk_size: Optional[Tuple[int, int]] = None,
         circular_mean: bool = False,
         tile_overlap: Union[float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]] = "auto",
     ) -> "MosaicInfo":
         """
-        Create MosaicInfo from tiles and coordinates.
+        Create MosaicInfo from tiles, extracting dimensions and coordinates automatically.
         
         Parameters
         ----------
         tiles : List[TileInfo]
             List of tile information with coordinates and images.
-        tile_width : int
-            Width of each tile.
-        tile_height : int
-            Height of each tile.
-        x_coords : np.ndarray
-            X coordinates of tile centers.
-        y_coords : np.ndarray
-            Y coordinates of tile centers.
         depth : Optional[int]
             Depth dimension for 3D mosaics. If None, creates 2D mosaic.
         chunk_size : Optional[Tuple[int, int]]
@@ -73,6 +61,21 @@ class MosaicInfo:
         MosaicInfo
             Configured MosaicInfo instance.
         """
+        if not tiles:
+            raise ValueError("No tiles provided")
+        
+        # Extract tile dimensions from first tile
+        first_tile = tiles[0]
+        tile_height, tile_width = first_tile.image.shape[:2]
+        
+        # Extract depth from first tile if 3D
+        if depth is None and len(first_tile.image.shape) == 3:
+            depth = first_tile.image.shape[2]
+        
+        # Extract coordinates from tiles
+        x_coords = np.array([tile.x for tile in tiles])
+        y_coords = np.array([tile.y for tile in tiles])
+        
         # Compute full mosaic dimensions
         full_width = int(np.nanmax(x_coords) + tile_width)
         full_height = int(np.nanmax(y_coords) + tile_height)
