@@ -52,7 +52,7 @@ def _load_complex_tile(file_path: str, key: str = None) -> da.Array:
     wrapper = as_arraywrapper(file_path, key)
     if not hasattr(wrapper, "dtype"):
         raise ValueError(f"Could not load array from {file_path}")
-    data = wrapper[:]
+    data = wrapper
     return da.from_array(data, chunks="auto")
 
 
@@ -251,44 +251,31 @@ def mosaic3d(
 
     # Stitch tiles for each modality using MosaicInfo
     logger.info("Stitching tiles")
-    tile_size = (tile_width, tile_height)
     
     # Get tile_overlap from metadata (defaults to "auto")
     tile_overlap = metadata.get("tile_overlap", "auto")
     
-    # Create MosaicInfo for each modality
-    dbi_mosaic = MosaicInfo.from_tiles_and_coords(
+    # Create MosaicInfo for each modality - dimensions and coordinates extracted from tiles
+    dbi_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
-        tile_width=tile_width,
-        tile_height=tile_height,
-        x_coords=x_coords,
-        y_coords=y_coords,
         depth=depth,
-        chunk_size=tile_size,
+        chunk_size=None,  # Will use tile dimensions
         circular_mean=False,
         tile_overlap=tile_overlap,
     )
     
-    r3d_mosaic = MosaicInfo.from_tiles_and_coords(
+    r3d_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, r3d_tiles)],
-        tile_width=tile_width,
-        tile_height=tile_height,
-        x_coords=x_coords,
-        y_coords=y_coords,
         depth=depth,
-        chunk_size=tile_size,
+        chunk_size=None,  # Will use tile dimensions
         circular_mean=False,
         tile_overlap=tile_overlap,
     )
     
-    o3d_mosaic = MosaicInfo.from_tiles_and_coords(
+    o3d_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
-        tile_width=tile_width,
-        tile_height=tile_height,
-        x_coords=x_coords,
-        y_coords=y_coords,
         depth=depth,
-        chunk_size=tile_size,
+        chunk_size=None,  # Will use tile dimensions
         circular_mean=False,
         tile_overlap=tile_overlap,
     )
