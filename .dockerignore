@@ -1,0 +1,53 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+.venv
+venv
+env
+ENV
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.mypy_cache
+.ruff_cache
+
+# Documentation
+site
+docs/requirements.txt
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+scripts/*.ipynb
+scripts/*.nii
+scripts/*.tiff
+scripts/*.jpeg
+scripts/*.yaml
+tests/data
+
+# Poetry
+poetry.lock.bak
+
