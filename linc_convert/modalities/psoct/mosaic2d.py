@@ -15,6 +15,7 @@ import yaml
 from cyclopts import Parameter
 from dask.diagnostics import ProgressBar
 from PIL import Image
+from tqdm import tqdm
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.stitch import MosaicInfo, TileInfo
@@ -283,7 +284,7 @@ def mosaic2d(
     tile_infos = []
 
     logger.info(f"Loading and processing {len(tiles_config)} tiles")
-    for i, tile in enumerate(tiles_config):
+    for tile in tqdm(tiles_config, desc="Processing tiles"):
         x = tile.get("x")
         y = tile.get("y")
         file_path = tile.get("filepath")
@@ -295,8 +296,6 @@ def mosaic2d(
         if not op.exists(file_path):
             logger.warning(f"Tile file not found: {file_path}, skipping")
             continue
-
-        logger.info(f"Processing tile {i + 1}/{len(tiles_config)}: {file_path}")
 
         # Load 2D image
         try:
@@ -346,16 +345,9 @@ def mosaic2d(
     )
     
     # Stitch using lazy dask operations
-    result = mosaic.stitch()
+    result_2d = mosaic.stitch()
+
     
-    # Compute the result
-    result = result.compute()
-
-
-    # Result is (width, height), but Zarr expects (height, width) for 2D
-    # Transpose to get (height, width)
-    result_2d = result.T
-
     # Apply mask if provided
     if mask:
         logger.info(f"Loading and applying mask: {mask}")
@@ -389,11 +381,22 @@ def mosaic2d(
             raise
     
     # Compute result if it's still a dask array
-    result_2d = result_2d.compute() if isinstance(result_2d, da.Array) else result_2d
+    result_2d = np.array(result_2d.compute()) if isinstance(result_2d, da.Array) else result_2d
     
-    # Get dimensions from result
-    full_height, full_width = result_2d.shape
     scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0, 1.0]
+    # Save NIfTI file if requested
+    if nifti_output:
+        logger.info(f"Saving NIfTI file: {nifti_output}")
+        # Create affine matrix for 2D image
+        affine = np.eye(4)
+        # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
+        # Add a singleton z dimension
+        result_3d = result_2d[:, :]
+        nii_img = nib.Nifti1Image(result_3d, affine)
+        nii_img.header.set_xyzt_units(xyz="mm", t="sec")
+        nib.save(nii_img, nifti_output)
+        logger.info("NIfTI file saved successfully")
+    result_2d = result_2d.T
 
     # Save JPEG if requested
     if jpeg_output:
@@ -404,26 +407,7 @@ def mosaic2d(
     if tiff_output:
         logger.info(f"Saving TIFF: {tiff_output}")
         _save_tiff(result_2d, tiff_output)
-
-    # Save NIfTI file if requested
-    if nifti_output:
-        logger.info(f"Saving NIfTI file: {nifti_output}")
-        # Create affine matrix for 2D image
-        # NIfTI expects (x, y) but our data is (y, x), so we need to handle this
-        affine = np.eye(4)
-        affine[0, 0] = scan_resolution_2d[1]  # x voxel size
-        affine[1, 1] = scan_resolution_2d[0]  # y voxel size
-        affine[0, 3] = -scan_resolution_2d[1] * full_width / 2.0  # center x
-        affine[1, 3] = -scan_resolution_2d[0] * full_height / 2.0  # center y
-        
-        # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
-        # Add a singleton z dimension
-        result_3d = result_2d[:, :]
-        nii_img = nib.Nifti1Image(result_3d, affine)
-        nii_img.header.set_xyzt_units(xyz="mm", t="sec")
-        nib.save(nii_img, nifti_output)
-        logger.info("NIfTI file saved successfully")
-
+    
     # Save to Zarr if output is specified
     if general_config.out:
         logger.info(f"Saving to Zarr: {general_config.out}")
