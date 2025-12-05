@@ -25,6 +25,8 @@ from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import \
     _compute_zarr_layout as compute_zarr_layout
+from linc_convert.utils.nifti_header import build_nifti_header
+from linc_convert.utils.unit import to_ome_unit
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
     NiftiConfig,
@@ -137,6 +139,7 @@ def mosaic3d(
     tile_height = metadata.get("tile_height")
     depth = metadata.get("depth")
     scan_resolution = metadata.get("scan_resolution", [1.0, 1.0, 1.0])
+    unit = metadata.get("unit", "millimeter")
     flip_z = metadata.get("flip_z", True)
     clip_x = metadata.get("clip_x", 0)
     clip_y = metadata.get("clip_y", 0)
@@ -253,7 +256,7 @@ def mosaic3d(
     logger.info("Stitching tiles")
     
     # Get tile_overlap from metadata (defaults to "auto")
-    tile_overlap = metadata.get("tile_overlap", "auto")
+    tile_overlap = metadata.get("tile_overlap")
     
     # Create MosaicInfo for each modality - dimensions and coordinates extracted from tiles
     dbi_mosaic = MosaicInfo.from_tiles(
@@ -276,7 +279,7 @@ def mosaic3d(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
         depth=depth,
         chunk_size=None,  # Will use tile dimensions
-        circular_mean=False,
+        circular_mean=True,
         tile_overlap=tile_overlap,
     )
     
@@ -302,8 +305,7 @@ def mosaic3d(
         else:
             res = da.rechunk(res, chunks=chunk)
 
-        zarr_config.out = out
-        zgroup = from_config(zarr_config)
+        zgroup = from_config(out, zarr_config)
         zgroups.append(zgroup)
 
         writer = zgroup.create_array("0", shape=res.shape, dtype=np.float32,
@@ -320,20 +322,21 @@ def mosaic3d(
     logger.info("Finished stitching, generating pyramid and metadata")
 
     for zgroup in zgroups:
-        zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=scan_resolution,
-                                  space_unit="millimeter")
+        zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+        logger.info("Write OME-Zarr multiscale metadata")
+        zgroup.write_ome_metadata(axes=["z", "y", "x"], space_scale=scan_resolution,
+                                  space_unit=to_ome_unit(unit))
 
-        if not zarr_config.nii:
+        if not nifti_config.nii:
             continue
 
-        from niizarr import default_nifti_header
-
-        nii_header = default_nifti_header(
-            zgroup["0"], zgroup._get_zarr_python_group().attrs["multiscales"]
+        header = build_nifti_header(
+            zgroup=zgroup,
+            voxel_size_zyx=tuple(scan_resolution),
+            unit=unit,
+            nii_config=nifti_config,
         )
-        nii_header.set_xyzt_units("mm")
-        zgroup.write_nifti_header(nii_header)
+        zgroup.write_nifti_header(header)
 
     logger.info("Finished generating pyramid")
 
