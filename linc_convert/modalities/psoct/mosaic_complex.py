@@ -92,7 +92,7 @@ def _shift_focus(
 
 @mosaic_complex.default
 @autoconfig
-def mosaic3d(
+def mosaic_complex(
     tile_info_file: str,
     *,
     dbi_output: Annotated[str, Parameter(name=["--dBI", "-d"])],
