@@ -5,10 +5,9 @@ have permission from the owner to include the code here.
 """
 
 import logging
-import os
 import os.path as op
 import warnings
-from typing import Annotated, Literal
+from typing import Annotated
 
 import cyclopts
 import dask.array as da
@@ -36,8 +35,8 @@ from linc_convert.utils.zarr_config import (
 
 logger = logging.getLogger(__name__)
 
-mosaic3d = cyclopts.App(name="mosaic3d", help_format="markdown")
-psoct.command(mosaic3d)
+mosaic_complex = cyclopts.App(name="mosaic_complex", help_format="markdown")
+psoct.command(mosaic_complex)
 
 # 3d data has pixdim incorrectly set and cause nibabel keep logging warning
 nib.imageglobals.logger.setLevel(40)
@@ -91,7 +90,7 @@ def _shift_focus(
     return tile.map_blocks(shift_block, dtype=tile.dtype, chunks=result_shape)
 
 
-@mosaic3d.default
+@mosaic_complex.default
 @autoconfig
 def mosaic3d(
     tile_info_file: str,
@@ -178,7 +177,7 @@ def mosaic3d(
             continue
         x_coords_list.append(x)
         y_coords_list.append(y)
-        tile_files.append(op.join(base_dir,file_path))
+        tile_files.append(op.join(base_dir, file_path))
 
     if not tile_files:
         raise ValueError("No valid tiles found in YAML file")
@@ -258,11 +257,12 @@ def mosaic3d(
 
     # Stitch tiles for each modality using MosaicInfo
     logger.info("Stitching tiles")
-    
+
     # Get tile_overlap from metadata (defaults to "auto")
     tile_overlap = metadata.get("tile_overlap", 0.2)
 
-    # Create MosaicInfo for each modality - dimensions and coordinates extracted from tiles
+    # Create MosaicInfo for each modality - dimensions and coordinates extracted from
+    # tiles
     dbi_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
         depth=depth,
@@ -270,7 +270,7 @@ def mosaic3d(
         circular_mean=False,
         tile_overlap=tile_overlap,
     )
-    
+
     r3d_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, r3d_tiles)],
         depth=depth,
@@ -278,7 +278,7 @@ def mosaic3d(
         circular_mean=False,
         tile_overlap=tile_overlap,
     )
-    
+
     o3d_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
         depth=depth,
@@ -286,7 +286,7 @@ def mosaic3d(
         circular_mean=True,
         tile_overlap=tile_overlap,
     )
-    
+
     # Stitch using lazy dask operations
     dBI_result = dbi_mosaic.stitch()
     R3D_result = r3d_mosaic.stitch()
@@ -326,7 +326,8 @@ def mosaic3d(
     logger.info("Finished stitching, generating pyramid and metadata")
 
     for zgroup in zgroups:
-        zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
+        zgroup.generate_pyramid(mode="mean",
+                                no_pyramid_axis=zarr_config.no_pyramid_axis)
         logger.info("Write OME-Zarr multiscale metadata")
         zgroup.write_ome_metadata(axes=["z", "y", "x"], space_scale=scan_resolution,
                                   space_unit=to_ome_unit(unit))
@@ -343,4 +344,3 @@ def mosaic3d(
         zgroup.write_nifti_header(header)
 
     logger.info("Finished generating pyramid")
-

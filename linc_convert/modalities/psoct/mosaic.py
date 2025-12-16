@@ -3,21 +3,17 @@ Create 2D mosaic from tile information in YAML file.
 """
 
 import logging
-import os
 import os.path as op
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures.process import ProcessPoolExecutor
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Optional
 
 import cyclopts
-import dask
 import dask.array as da
 import nibabel as nib
 import numpy as np
 import yaml
+from PIL import Image
 from cyclopts import Parameter
 from dask.diagnostics import ProgressBar
-from PIL import Image
 from tqdm import tqdm
 
 from linc_convert.modalities.psoct.cli import psoct
@@ -27,7 +23,6 @@ from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import \
     _compute_zarr_layout as compute_zarr_layout
 from linc_convert.utils.nifti_header import build_nifti_header
-from linc_convert.utils.unit import to_ome_unit
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
     NiftiConfig,
@@ -37,8 +32,8 @@ from linc_convert.utils.zarr_config import (
 
 logger = logging.getLogger(__name__)
 
-mosaic2d = cyclopts.App(name="mosaic2d", help_format="markdown")
-psoct.command(mosaic2d)
+mosaic = cyclopts.App(name="mosaic", help_format="markdown")
+psoct.command(mosaic)
 
 
 def _load_tile_info_yaml(yaml_file: str) -> dict:
@@ -57,7 +52,7 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     - NIfTI files (with mmap for lazy loading)
     - Other formats via dask-image
     """
-    
+
     # Check for .mat files
     if file_path.endswith('.mat'):
         wrapper = as_arraywrapper(file_path, key)
@@ -70,37 +65,40 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         # elif data.ndim > 3:
         #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return da.from_array(data, chunks="auto")
-    
+
     # Check for zarr archives
     # Check if path looks like zarr (directory with zarr metadata files)
     is_zarr = False
     if op.isdir(file_path):
         # Check for zarr v3 (zarr.json) or v2 (.zgroup or .zarray)
         if op.exists(op.join(file_path, 'zarr.json')) or \
-           op.exists(op.join(file_path, '.zgroup')) or \
-           op.exists(op.join(file_path, '.zarray')):
+            op.exists(op.join(file_path, '.zgroup')) or \
+            op.exists(op.join(file_path, '.zarray')):
             is_zarr = True
     elif file_path.endswith('.zarr') or '.zarr' in file_path:
         is_zarr = True
-    
+
     if is_zarr:
         try:
             from linc_convert.utils.io.zarr import open_array, open_group
-            
+
             # Try to open as zarr group first
             try:
                 zarr_group = open_group(file_path, mode="r")
                 # It's a group, try to get array '0'
                 if '0' in zarr_group.keys():
                     zarr_array_wrapper = zarr_group['0']
-                    data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
+                    data = da.from_array(zarr_array_wrapper,
+                                         chunks=zarr_array_wrapper.chunks)
                 else:
-                    raise ValueError(f"Zarr group at {file_path} does not contain array '0'")
+                    raise ValueError(
+                        f"Zarr group at {file_path} does not contain array '0'")
             except (ValueError, KeyError):
                 # Try as array
                 zarr_array_wrapper = open_array(file_path, mode="r")
-                data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
-            
+                data = da.from_array(zarr_array_wrapper,
+                                     chunks=zarr_array_wrapper.chunks)
+
             # Handle 3D data - take middle slice
             # if data.ndim == 3:
             #     data = data[:, :, data.shape[2] // 2]
@@ -109,7 +107,7 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
             return data
         except Exception as e:
             logger.warning(f"Failed to load as zarr: {e}, trying other formats")
-    
+
     # Check for NIfTI files
     if file_path.endswith(('.nii', '.nii.gz')):
         img = nib.load(file_path)
@@ -124,10 +122,11 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         #     # Take first 2D slice
         #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return data
-    
+
     # Try dask-image as fallback
     try:
         import dask_image.imread  # noqa: F401
+
         data = dask_image.imread.imread(file_path)
         # Handle 3D data - take middle slice
         # if data.ndim == 3:
@@ -138,7 +137,8 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     except ImportError:
         raise ValueError(
             f"Could not load {file_path}. "
-            "Supported formats: .mat, .zarr, .nii/.nii.gz, or formats supported by dask-image"
+            "Supported formats: .mat, .zarr, .nii/.nii.gz, or formats supported by "
+            "dask-image"
         )
     except Exception as e:
         raise ValueError(f"Failed to load {file_path} with dask-image: {e}")
@@ -163,13 +163,15 @@ def _save_tiff(image: np.ndarray, output_path: str):
     """Save image as TIFF without normalization - data is saved as-is."""
     try:
         import tifffile
+
         # Save data as-is without any normalization or scaling
         # Preserve original dtype and values
         tifffile.imwrite(output_path, image)
     except ImportError:
         # Fallback to PIL if tifffile not available
         # PIL requires uint8 or uint16, so we need to convert
-        # But we don't normalize - just convert dtype preserving values as much as possible
+        # But we don't normalize - just convert dtype preserving values as much as
+        # possible
         if image.dtype in (np.float32, np.float64):
             # For float, convert to uint16 without normalization
             # This will clip values outside [0, 65535] range
@@ -191,22 +193,23 @@ def _load_mask(mask_path: str) -> np.ndarray:
     """
     # Use the same loading function as tiles
     mask = _load_image_tile(mask_path, key=None)
-    
+
     # Ensure it's a 2D array
     if mask.ndim != 2:
         if mask.ndim == 3 and mask.shape[2] == 1:
             mask = mask[:, :, 0]
         else:
             raise ValueError(f"Mask must be 2D, got shape {mask.shape}")
-    
+
     # Convert to binary (0 or 1)
     # Handle both boolean and numeric masks
     mask = mask.compute() if isinstance(mask, da.Array) else mask
     mask = (mask > 0).astype(np.float32)
-    
+
     return mask
 
-@mosaic2d.default
+
+@mosaic.default
 @autoconfig
 def mosaic2d(
     tile_info_file: str,
@@ -239,11 +242,14 @@ def mosaic2d(
     circular_mean : bool
         Whether to use circular mean for blending.
     clip_x : int
-        Number of pixels to clip from the left side of each tile. Coordinates will be shifted accordingly.
+        Number of pixels to clip from the left side of each tile. Coordinates will be
+        shifted accordingly.
     clip_y : int
-        Number of pixels to clip from the top side of each tile. Coordinates will be shifted accordingly.
+        Number of pixels to clip from the top side of each tile. Coordinates will be
+        shifted accordingly.
     mask : str, optional
-        Path to binary mask file to apply to the result. Mask should be 2D and match the result dimensions.
+        Path to binary mask file to apply to the result. Mask should be 2D and match
+        the result dimensions.
     zarr_config : ZarrConfig, optional
         Zarr configuration.
     general_config : GeneralConfig, optional
@@ -271,11 +277,11 @@ def mosaic2d(
         clip_x = metadata.get("clip_x", 0)
     if clip_y == 0:
         clip_y = metadata.get("clip_y", 0)
-    
+
     # Get mask from metadata if not provided as parameter
     if mask is None:
         mask = metadata.get("mask")
-    
+
     # Use tile_overlap from function parameter (defaults to "auto")
     # If "auto" and metadata has tile_overlap, use that instead
     if tile_overlap == "auto" and "tile_overlap" in metadata:
@@ -314,13 +320,15 @@ def mosaic2d(
             elif image.ndim >= 3:
                 image = image[clip_x:, clip_y:, ...]
             else:
-                logger.warning(f"Unexpected image dimensions {image.ndim} for {file_path}")
+                logger.warning(
+                    f"Unexpected image dimensions {image.ndim} for {file_path}")
                 continue
-            
+
             # Shift coordinates to account for clipping
             # After clipping clip_x pixels from the left, the remaining content
             # represents what was at position clip_x in the original tile.
-            # To align this correctly in the mosaic, we shift coordinates by +clip_x and +clip_y
+            # To align this correctly in the mosaic, we shift coordinates by +clip_x
+            # and +clip_y
             x = int(x) + clip_x
             y = int(y) + clip_y
         else:
@@ -335,7 +343,7 @@ def mosaic2d(
 
     # Stitch tiles using MosaicInfo
     logger.info("Stitching tiles")
-    
+
     # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
     mosaic = MosaicInfo.from_tiles(
         tiles=tile_infos,
@@ -344,11 +352,10 @@ def mosaic2d(
         circular_mean=circular_mean,
         tile_overlap=tile_overlap,
     )
-    
+
     # Stitch using lazy dask operations
     result_2d = mosaic.stitch()
 
-    
     # Apply mask if provided
     if mask:
         logger.info(f"Loading and applying mask: {mask}")
@@ -357,35 +364,41 @@ def mosaic2d(
             # Check if mask dimensions match result
             if mask_array.shape != result_2d.shape:
                 logger.warning(
-                    f"Mask shape {mask_array.shape} does not match result shape {result_2d.shape}. "
+                    f"Mask shape {mask_array.shape} does not match result shape "
+                    f"{result_2d.shape}. "
                     "Attempting to resize mask."
                 )
                 # Resize mask to match result if possible
                 try:
                     from scipy.ndimage import zoom
+
                     zoom_factors = (result_2d.shape[0] / mask_array.shape[0],
-                                   result_2d.shape[1] / mask_array.shape[1])
-                    mask_array = zoom(mask_array, zoom_factors, order=0)  # order=0 for nearest neighbor
+                                    result_2d.shape[1] / mask_array.shape[1])
+                    mask_array = zoom(mask_array, zoom_factors,
+                                      order=0)  # order=0 for nearest neighbor
                     # Ensure binary after resize
                     mask_array = (mask_array > 0.5).astype(np.float32)
                 except ImportError:
                     raise ValueError(
                         "scipy is required for mask resizing. "
-                        "Please ensure mask dimensions match result dimensions or install scipy."
+                        "Please ensure mask dimensions match result dimensions or "
+                        "install scipy."
                     )
-            
-            # Apply mask (multiply: 0 where mask is 0, keep original value where mask is 1)
+
+            # Apply mask (multiply: 0 where mask is 0, keep original value where mask
+            # is 1)
             result_2d = result_2d * mask_array
             logger.info("Mask applied successfully")
         except Exception as e:
             logger.error(f"Failed to load or apply mask: {e}")
             raise
-    
+
     if nifti_output or jpeg_output or tiff_output:
         with ProgressBar():
             result_2d = np.array(result_2d)
-    
-    scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0, 1.0]
+
+    scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0,
+                                                                                1.0]
     # Save NIfTI file if requested
     if nifti_output:
         logger.info(f"Saving NIfTI file: {nifti_output}")
@@ -409,11 +422,11 @@ def mosaic2d(
     if tiff_output:
         logger.info(f"Saving TIFF: {tiff_output}")
         _save_tiff(result_2d, tiff_output)
-    
+
     # Save to Zarr if output is specified
     if general_config.out:
         logger.info(f"Saving to Zarr: {general_config.out}")
-        
+
         # Compute zarr layout for 2D
         chunk, shard = compute_zarr_layout(result_2d.shape, np.float32,
                                            zarr_config)
@@ -427,7 +440,7 @@ def mosaic2d(
             shard=shard,
             zarr_config=zarr_config
         )
-        
+
         # Write data directly using indexing (similar to single_volume.py)
         if isinstance(result_2d, da.Array):
             if shard:
@@ -440,11 +453,11 @@ def mosaic2d(
 
         else:
             dataset[...] = result_2d
-        
+
         # Generate pyramid and metadata
         logger.info("Generating pyramid and metadata")
         zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["z","y", "x"], space_scale=scan_resolution_2d,
+        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=scan_resolution_2d,
                                   space_unit="millimeter")
 
         if nifti_config and nifti_config.nii:
@@ -459,5 +472,5 @@ def mosaic2d(
         logger.info("Finished generating pyramid")
     else:
         logger.info("Skipping Zarr output (no output path specified)")
-    
+
     logger.info("Finished mosaic2d")
