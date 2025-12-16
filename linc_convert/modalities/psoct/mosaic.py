@@ -5,9 +5,12 @@ Create 2D mosaic from tile information in YAML file.
 import logging
 import os
 import os.path as op
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.process import ProcessPoolExecutor
 from typing import Annotated, Literal, Optional
 
 import cyclopts
+import dask
 import dask.array as da
 import nibabel as nib
 import numpy as np
@@ -54,7 +57,6 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     - NIfTI files (with mmap for lazy loading)
     - Other formats via dask-image
     """
-    import os.path as op
     
     # Check for .mat files
     if file_path.endswith('.mat'):
@@ -62,11 +64,11 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         if not hasattr(wrapper, "dtype"):
             raise ValueError(f"Could not load array from {file_path}")
         data = wrapper
-        # Handle 3D data - take middle slice
-        if data.ndim == 3:
-            data = data[:, :, data.shape[2] // 2]
-        elif data.ndim > 3:
-            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        # # Handle 3D data - take middle slice
+        # if data.ndim == 3:
+        #     data = data[:, :, data.shape[2] // 2]
+        # elif data.ndim > 3:
+        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return da.from_array(data, chunks="auto")
     
     # Check for zarr archives
@@ -100,10 +102,10 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
                 data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
             
             # Handle 3D data - take middle slice
-            if data.ndim == 3:
-                data = data[:, :, data.shape[2] // 2]
-            elif data.ndim > 3:
-                data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+            # if data.ndim == 3:
+            #     data = data[:, :, data.shape[2] // 2]
+            # elif data.ndim > 3:
+            #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
             return data
         except Exception as e:
             logger.warning(f"Failed to load as zarr: {e}, trying other formats")
@@ -114,13 +116,13 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         # Use dataobj for lazy loading with mmap instead of get_fdata()
         dataobj = img.dataobj
         # Convert to dask array with lazy loading
-        data = da.from_array(dataobj, chunks="auto")
+        data = da.from_array(dataobj, chunks=img.shape)
         # Handle 3D data - take middle slice
-        if data.ndim == 3:
-            data = data[:, :, data.shape[2] // 2]
-        elif data.ndim > 3:
-            # Take first 2D slice
-            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        # if data.ndim == 3:
+        #     data = data[:, :, data.shape[2] // 2]
+        # elif data.ndim > 3:
+        #     # Take first 2D slice
+        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return data
     
     # Try dask-image as fallback
@@ -128,10 +130,10 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         import dask_image.imread  # noqa: F401
         data = dask_image.imread.imread(file_path)
         # Handle 3D data - take middle slice
-        if data.ndim == 3:
-            data = data[:, :, data.shape[2] // 2]
-        elif data.ndim > 3:
-            data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        # if data.ndim == 3:
+        #     data = data[:, :, data.shape[2] // 2]
+        # elif data.ndim > 3:
+        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return data
     except ImportError:
         raise ValueError(
@@ -203,7 +205,6 @@ def _load_mask(mask_path: str) -> np.ndarray:
     mask = (mask > 0).astype(np.float32)
     
     return mask
-
 
 @mosaic2d.default
 @autoconfig
@@ -380,8 +381,9 @@ def mosaic2d(
             logger.error(f"Failed to load or apply mask: {e}")
             raise
     
-    # Compute result if it's still a dask array
-    result_2d = np.array(result_2d.compute()) if isinstance(result_2d, da.Array) else result_2d
+    if nifti_output or jpeg_output or tiff_output:
+        with ProgressBar():
+            result_2d = np.array(result_2d)
     
     scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0, 1.0]
     # Save NIfTI file if requested
@@ -391,8 +393,8 @@ def mosaic2d(
         affine = np.eye(4)
         # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
         # Add a singleton z dimension
-        result_3d = result_2d[:, :]
-        nii_img = nib.Nifti1Image(result_3d, affine)
+        # result_3d = result_2d[:, :]
+        nii_img = nib.Nifti1Image(result_2d, affine)
         nii_img.header.set_xyzt_units(xyz="mm", t="sec")
         nib.save(nii_img, nifti_output)
         logger.info("NIfTI file saved successfully")
@@ -421,16 +423,28 @@ def mosaic2d(
 
         # Create array and write data directly (like single_volume.py)
         dataset = zgroup.create_array(
-            "0", shape=result_2d.shape, dtype=np.float32, zarr_config=zarr_config
+            "0", shape=result_2d.shape, dtype=np.float32, chunk=chunk,
+            shard=shard,
+            zarr_config=zarr_config
         )
         
         # Write data directly using indexing (similar to single_volume.py)
-        dataset[...] = result_2d
+        if isinstance(result_2d, da.Array):
+            if shard:
+                result_2d = da.rechunk(result_2d, chunks=shard)
+            else:
+                result_2d = da.rechunk(result_2d, chunks=chunk)
 
+            with ProgressBar():
+                da.store(result_2d, dataset, compute=True)
+
+        else:
+            dataset[...] = result_2d
+        
         # Generate pyramid and metadata
         logger.info("Generating pyramid and metadata")
         zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["y", "x"], space_scale=scan_resolution_2d,
+        zgroup.write_ome_metadata(["z","y", "x"], space_scale=scan_resolution_2d,
                                   space_unit="millimeter")
 
         if nifti_config and nifti_config.nii:

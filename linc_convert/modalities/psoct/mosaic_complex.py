@@ -50,12 +50,15 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
 
 
 def _load_complex_tile(file_path: str, key: str = None) -> da.Array:
-    """Load complex 3D data from a mat file."""
-    wrapper = as_arraywrapper(file_path, key)
-    if not hasattr(wrapper, "dtype"):
-        raise ValueError(f"Could not load array from {file_path}")
-    data = wrapper
-    return da.from_array(data, chunks="auto")
+    """Load complex 3D data from a file."""
+    if file_path.endswith('.mat'):
+        wrapper = as_arraywrapper(file_path, key)
+        if not hasattr(wrapper, "dtype"):
+            raise ValueError(f"Could not load array from {file_path}")
+        data = wrapper
+    elif file_path.endswith('.nii') or file_path.endswith('.nii.gz'):
+        data = nib.load(file_path).dataobj
+    return da.from_array(data, chunks=data.shape)
 
 
 def _shift_focus(
@@ -135,6 +138,7 @@ def mosaic3d(
 
     # Get metadata
     metadata = tile_info.get("metadata", {})
+    base_dir = metadata.get("base_dir")
     tile_width = metadata.get("tile_width")
     tile_height = metadata.get("tile_height")
     depth = metadata.get("depth")
@@ -168,13 +172,13 @@ def mosaic3d(
     for tile in tiles_config:
         x = tile.get("x")
         y = tile.get("y")
-        file_path = tile.get("file_path")
+        file_path = tile.get("filepath")
         if x is None or y is None or file_path is None:
             logger.warning(f"Skipping incomplete tile: {tile}")
             continue
         x_coords_list.append(x)
         y_coords_list.append(y)
-        tile_files.append(file_path)
+        tile_files.append(op.join(base_dir,file_path))
 
     if not tile_files:
         raise ValueError("No valid tiles found in YAML file")
@@ -256,8 +260,8 @@ def mosaic3d(
     logger.info("Stitching tiles")
     
     # Get tile_overlap from metadata (defaults to "auto")
-    tile_overlap = metadata.get("tile_overlap")
-    
+    tile_overlap = metadata.get("tile_overlap", 0.2)
+
     # Create MosaicInfo for each modality - dimensions and coordinates extracted from tiles
     dbi_mosaic = MosaicInfo.from_tiles(
         tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
@@ -316,7 +320,7 @@ def mosaic3d(
     # Store results
     task = da.store(results, writers, compute=False)
     with ProgressBar():
-        task.compute()
+        da.compute(task)
 
     scan_resolution = scan_resolution[:3][::-1]  # Reverse to (z, y, x)
     logger.info("Finished stitching, generating pyramid and metadata")
@@ -340,38 +344,3 @@ def mosaic3d(
 
     logger.info("Finished generating pyramid")
 
-
-def mosaic3d_vol(
-    tile_info_file: str,
-    *,
-    tile_overlap: float | Literal["auto"] = "auto",
-    circular_mean: bool = False,
-    general_config: GeneralConfig = None,
-    nifti_config: NiftiConfig = None,
-    zarr_config: ZarrConfig = None,
-) -> None:
-    """
-    Create 3D mosaic from pre-processed volume tiles.
-
-    Parameters
-    ----------
-    tile_info_file : str
-        Path to YAML file containing tile information.
-    tile_overlap : float | Literal["auto"]
-        Tile overlap in pixels. If "auto", compute from tile coordinates.
-    circular_mean : bool
-        Whether to use circular mean for blending.
-    general_config : GeneralConfig, optional
-        General configuration.
-    nifti_config : NiftiConfig, optional
-        NIfTI configuration.
-    zarr_config : ZarrConfig, optional
-        Zarr configuration.
-    """
-    # load tile info
-    # normalize tile_overlap, if auto, find the max overlap of all tiles, if float number, use as percentile of the tile size
-
-    # load volume
-    # mosaic volume
-    # save mosaic volume
-    pass
