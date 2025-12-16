@@ -147,7 +147,7 @@ def _recompute_affine_if_requested(
 
     aff = orientation_to_affine(orientation, *voxel_size_xyz)
     if center:
-        aff = center_affine(aff, *shape_xyz)
+        aff = center_affine(aff, shape_xyz)
     return aff
 
 
