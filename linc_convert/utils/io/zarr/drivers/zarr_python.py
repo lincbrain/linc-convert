@@ -191,7 +191,7 @@ class ZarrPythonGroup(ZarrGroup):
     ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
-            arr = self._zgroup.create_array(name, shape, dtype, **kwargs)
+            arr = self._zgroup.create_array(name, shape=shape, dtype=dtype, **kwargs)
             if data is not None:
                 arr[:] = data
             return ZarrPythonArray(arr)
