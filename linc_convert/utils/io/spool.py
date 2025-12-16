@@ -66,7 +66,11 @@ class SpoolSetInterpreter:
             self.spool_shape[2],
             self.spool_shape[0] * len(self.spool_files),
         )
-
+        self.raw_assembled_spool_shape = (
+            self.spool_shape[1],
+            self.spool_shape[2],
+            self.spool_shape[0] * len(self.spool_files),
+        )
     def _load_info_file(self, info_file: str | PathLike[str]) -> None:
         loaded_info = loadmat(info_file)
         info = loaded_info.get("info", None)
@@ -254,10 +258,10 @@ class SpoolSetInterpreter:
         canvas = np.zeros(
             (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
         )
-        for idx, spool_file in enumerate(self):
+        for idx, spool_data in enumerate(self):
             start = idx * axis_0_shape
             stop = start + axis_0_shape
-            canvas[start:stop] = spool_file
+            canvas[start:stop] = spool_data
         return canvas
 
     # this is the modified version for lsm pipeline
