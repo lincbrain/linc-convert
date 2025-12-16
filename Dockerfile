@@ -7,8 +7,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl
 
 # Install Poetry
 ENV POETRY_VERSION=1.8.4
@@ -28,20 +27,19 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/opt/poetry-cache
 
 # Copy Poetry configuration files
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml ./
 
 # Install dependencies
-RUN poetry install --no-dev --no-root
+RUN poetry install --no-dev --no-root --extras all
 
 # Copy application code
 COPY . .
 
 # Install the application
-RUN poetry install --no-dev
+RUN poetry install --no-dev --extras all
 
 # Set the entrypoint
-ENTRYPOINT ["linc-convert"]
+ENTRYPOINT ["poetry", "run", "linc-convert"]
 
 # Default command (can be overridden)
 CMD ["--help"]
-
