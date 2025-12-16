@@ -2,7 +2,7 @@
 # STAGE 1: Builder
 # Used to install Poetry, compile dependencies, and create the virtual environment.
 # ----------------------------------------------------------------------------
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -40,7 +40,7 @@ RUN ./.venv/bin/pip install dist/*.whl
 # STAGE 2: Runtime
 # A fresh, empty image that only contains the Python runtime and our copied venv.
 # ----------------------------------------------------------------------------
-FROM python:3.11-slim as runtime
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
