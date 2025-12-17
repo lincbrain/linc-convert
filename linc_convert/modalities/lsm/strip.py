@@ -6,18 +6,11 @@ https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 %2Fmicr%2Fsample18_run10__y10_z01_HR&page=1
 """
 import logging
-
 # stdlib
-import os
 import os.path as op
-import re
-import warnings
-from collections import defaultdict, namedtuple
-from glob import glob
-import dask.array as da
+
 # externals
 import cyclopts
-import numpy as np
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -40,7 +33,7 @@ lsm.command(stripe)
 @autoconfig
 def convert(
     stripe_directory: str,
-    info_file:str,
+    info_file: str,
     *,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
@@ -53,12 +46,10 @@ def convert(
     Parameters
     ----------
     inp
-        Path to the root directory, which contains a collection of
+        Path to the stripe directory, which contains a collection of
         subfolders named `*_y{:02d}_z{:02d}*_HR`, each containing a
         collection of files named `*spool.dat`.
         TODO: add instrution for metadata file and info file
-    overlap
-        Number of pixels between slices that are overlapped
     voxel_size
         Voxel size along the X, Y and Z dimensions, in microns.
     general_config
@@ -71,7 +62,6 @@ def convert(
 
     reader = SpoolSetInterpreter(stripe_directory, info_file)
 
-
     # Set default output path if not provided
     general_config.set_default_name(op.basename(info_file))
 
@@ -79,13 +69,13 @@ def convert(
 
     # Initialize Zarr group and array
     omz = from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config, dtype=reader.dtype)
+    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config,
+                             dtype=reader.dtype)
     logger.info(general_config.out)
     result = reader.assemble()
-    result = result.transpose(1,2,0)
+    result = result.transpose(1, 2, 0)
     array[:] = result[:]
     print("Write level 0 with shape", fullshape)
-
 
     voxel_size = list(map(float, reversed(voxel_size)))
     # Generate Zarr pyramid and metadata
@@ -102,4 +92,3 @@ def convert(
         omz.write_nifti_header(header)
 
     logger.info("Conversion complete.")
-
