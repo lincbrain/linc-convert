@@ -254,15 +254,10 @@ class SpoolSetInterpreter:
         A NumPy array of shape (frames_total, rows, columns),
         where frames_total = images_per_file * number_of_files.
         """
-        axis_0_shape = self.spool_shape[0]
-        canvas = np.zeros(
-            (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
-        )
-        for idx, spool_data in enumerate(self):
-            start = idx * axis_0_shape
-            stop = start + axis_0_shape
-            canvas[start:stop] = spool_data
-        return canvas
+        chunks = list(self)
+        if not chunks:
+            return np.zeros((0, *self.spool_shape[1:]), dtype=self.dtype)
+        return np.concatenate(chunks, axis=0).astype(self.dtype, copy=False)
 
     # this is the modified version for lsm pipeline
     def assemble_cropped(self) -> np.ndarray:
