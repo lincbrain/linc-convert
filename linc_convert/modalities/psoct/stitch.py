@@ -273,7 +273,11 @@ def _combine_block(
     
     total_paint = da.sum(da.stack(paints, axis=0), axis=0)
     total_weight = da.sum(da.stack(weights, axis=0), axis=0)
-    normalized = total_paint / np.broadcast_to(total_weight, total_paint.shape)
+    # For 3D data, total_weight should be broadcasted 
+    if len(total_paint.shape) > 2:
+        expand_dim = len(total_paint.shape) - len(total_weight.shape)
+        total_weight = total_weight.reshape(total_weight.shape + (1,)*expand_dim)
+    normalized = total_paint / total_weight
     
     if not circular_mean:
         return normalized
