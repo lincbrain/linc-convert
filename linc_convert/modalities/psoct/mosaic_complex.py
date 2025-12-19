@@ -64,9 +64,11 @@ def _shift_focus(
     tile: da.Array, focus_plane: np.ndarray, s_max: int
 ) -> da.Array:
     """Shift tile depth based on focus plane."""
-
+    if len(focus_plane.shape) == 2:
+        focus_plane = focus_plane[..., None]
     # This function will be applied per block using map_blocks
     def shift_block(block, block_info=None):
+        nonlocal focus_plane
         if block_info is None:
             return block
         # Get the spatial coordinates for this block
@@ -77,11 +79,12 @@ def _shift_focus(
             block, pad_width, mode="constant", constant_values=np.nan
         )
         # build indices for the expanded depth
-        z = np.arange(block.shape[-1] - s_max, dtype=np.int32)[None, None, :]
+        z = np.arange(block.shape[-1] + s_max, dtype=np.int32)[None, None, :]
         # Use a subset of focus_plane corresponding to this block
         # For now, use the full focus_plane (assuming it matches tile spatial
         # dimensions)
-        idx = z + focus_plane[..., None]
+        
+        idx = z + focus_plane
         result = np.take_along_axis(block_padded, idx, axis=2)
         return result
 
@@ -143,7 +146,7 @@ def mosaic_complex(
     depth = metadata.get("depth")
     scan_resolution = metadata.get("scan_resolution", [1.0, 1.0, 1.0])
     unit = metadata.get("unit", "millimeter")
-    flip_z = metadata.get("flip_z", True)
+    flip_z = metadata.get("flip_z", False)
     clip_x = metadata.get("clip_x", 0)
     clip_y = metadata.get("clip_y", 0)
     raw_tile_width = metadata.get("raw_tile_width")
@@ -230,18 +233,18 @@ def mosaic_complex(
         # Process complex data to get dBI, R3D, O3D
         dBI3D, R3D, O3D = process_complex3d(complex3d, offset=100, flip_phi=False)
 
-        # Handle focus plane shifting
-        if focus_plane_data is not None:
-            s_max = int(np.max(focus_plane_data))
-            dBI3D = _shift_focus(dBI3D, focus_plane_data, s_max)
-            R3D = _shift_focus(R3D, focus_plane_data, s_max)
-            O3D = _shift_focus(O3D, focus_plane_data, s_max)
 
         # Apply transformations
         if flip_z:
             dBI3D = da.flip(dBI3D, axis=2)
             R3D = da.flip(R3D, axis=2)
             O3D = da.flip(O3D, axis=2)
+        # Handle focus plane shifting
+        if focus_plane_data is not None:
+            s_max = int(np.max(focus_plane_data))
+            dBI3D = _shift_focus(dBI3D, focus_plane_data, s_max)
+            R3D = _shift_focus(R3D, focus_plane_data, s_max)
+            O3D = _shift_focus(O3D, focus_plane_data, s_max)
 
         # Clip tiles
         results = da.stack([dBI3D, R3D, O3D], axis=3)
