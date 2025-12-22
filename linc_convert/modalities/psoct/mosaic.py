@@ -222,6 +222,11 @@ def mosaic2d(
     clip_x: int = 0,
     clip_y: int = 0,
     mask: Annotated[Optional[str], Parameter(name=["--mask", "-m"])] = None,
+    focus_plane: Annotated[
+        Optional[str], Parameter(name=["--focus-plane", "-f"])] = None,
+    normalize_focus_plane: bool = False,
+    crop_focus_plane_depth: int = 500,
+    crop_focus_plane_offset: int = 30,
     zarr_config: ZarrConfig = None,
     general_config: GeneralConfig = None,
     nifti_config: NiftiConfig = None,
@@ -250,6 +255,14 @@ def mosaic2d(
     mask : str, optional
         Path to binary mask file to apply to the result. Mask should be 2D and match
         the result dimensions.
+    focus_plane : str, optional
+        Path to focus plane NIfTI file for depth shifting.
+    normalize_focus_plane : bool
+        Whether to normalize the focus plane by the minimum value.
+    crop_focus_plane_depth : int
+        Number of pixels to crop below the focus plane.
+    crop_focus_plane_offset : int
+        Offset of the focus plane to crop below the minimum value.
     zarr_config : ZarrConfig, optional
         Zarr configuration.
     general_config : GeneralConfig, optional
@@ -341,13 +354,39 @@ def mosaic2d(
     if not tile_infos:
         raise ValueError("No valid tiles were processed")
 
+    if focus_plane:
+        focus_plane = nib.load(focus_plane).get_fdata().astype(np.uint16)
+        focus_plane = focus_plane.squeeze()
+        if normalize_focus_plane:
+            focus_plane = focus_plane - focus_plane.min()
+        focus_plane = focus_plane + crop_focus_plane_offset
+
+        def apply_focus_plane(image):
+            nonlocal focus_plane
+            z = np.arange(crop_focus_plane_depth, dtype=np.int32)[None, None, :]
+            idx = z + focus_plane[..., None]
+            idx = idx[..., None]
+            result = np.take_along_axis(image, idx, axis=2)
+            return result
+
+        all_images = da.stack([tile.image for tile in tile_infos], axis=-1)
+        print(crop_focus_plane_depth)
+        result_shape = (
+        all_images.shape[0], all_images.shape[1], crop_focus_plane_depth,
+        all_images.shape[3])
+        all_images = all_images.map_blocks(apply_focus_plane, dtype=all_images.dtype,
+                                           chunks=(
+                                           all_images.chunks[0], all_images.chunks[1],
+                                           crop_focus_plane_depth, 1))
+        for i, tile in enumerate(tile_infos):
+            tile.image = all_images[..., i]
+    # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
     # Stitch tiles using MosaicInfo
     logger.info("Stitching tiles")
 
-    # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
     mosaic = MosaicInfo.from_tiles(
         tiles=tile_infos,
-        depth=None,  # 2D mosaic
+        depth=crop_focus_plane_depth if focus_plane is not None else None,  # 2D mosaic
         chunk_size=None,  # Will use tile dimensions
         circular_mean=circular_mean,
         tile_overlap=tile_overlap,
