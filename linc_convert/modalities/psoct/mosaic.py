@@ -227,6 +227,8 @@ def mosaic2d(
     normalize_focus_plane: bool = False,
     crop_focus_plane_depth: int = 500,
     crop_focus_plane_offset: int = 30,
+    voxel_size_xyz: Annotated[
+        Optional[list[float]], Parameter(name=["--voxel-size", "-s"])] = None,
     zarr_config: ZarrConfig = None,
     general_config: GeneralConfig = None,
     nifti_config: NiftiConfig = None,
@@ -263,6 +265,8 @@ def mosaic2d(
         Number of pixels to crop below the focus plane.
     crop_focus_plane_offset : int
         Offset of the focus plane to crop below the minimum value.
+    voxel_size_xyz : list[float], optional
+        Voxel size in x, y, z directions, in millimeters.
     zarr_config : ZarrConfig, optional
         Zarr configuration.
     general_config : GeneralConfig, optional
@@ -282,7 +286,8 @@ def mosaic2d(
 
     # Get metadata
     metadata = tile_info.get("metadata", {})
-    scan_resolution = metadata.get("scan_resolution", [1.0, 1.0])
+    if voxel_size_xyz is None:
+        voxel_size_xyz = metadata.get("scan_resolution", [10, 10, 2.5])
     file_key = metadata.get("file_key")  # Key for mat file array
     base_dir = metadata.get("base_dir", ".")
     # Get clip values from metadata if not provided as parameters
@@ -323,7 +328,6 @@ def mosaic2d(
         except Exception as e:
             logger.warning(f"Failed to load {file_path}: {e}, skipping")
             continue
-
         # Apply clipping if specified
         if clip_x > 0 or clip_y > 0:
             # Clip from left (clip_x) and top (clip_y)
@@ -372,12 +376,13 @@ def mosaic2d(
         all_images = da.stack([tile.image for tile in tile_infos], axis=-1)
         print(crop_focus_plane_depth)
         result_shape = (
-        all_images.shape[0], all_images.shape[1], crop_focus_plane_depth,
-        all_images.shape[3])
+            all_images.shape[0], all_images.shape[1], crop_focus_plane_depth,
+            all_images.shape[3])
         all_images = all_images.map_blocks(apply_focus_plane, dtype=all_images.dtype,
                                            chunks=(
-                                           all_images.chunks[0], all_images.chunks[1],
-                                           crop_focus_plane_depth, 1))
+                                               all_images.chunks[0],
+                                               all_images.chunks[1],
+                                               crop_focus_plane_depth, 1))
         for i, tile in enumerate(tile_infos):
             tile.image = all_images[..., i]
     # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
@@ -393,7 +398,7 @@ def mosaic2d(
     )
 
     # Stitch using lazy dask operations
-    result_2d = mosaic.stitch()
+    result = mosaic.stitch()
 
     # Apply mask if provided
     if mask:
@@ -401,32 +406,16 @@ def mosaic2d(
         try:
             mask_array = _load_mask(mask)
             # Check if mask dimensions match result
-            if mask_array.shape != result_2d.shape:
-                logger.warning(
+            if mask_array.shape != result.shape:
+                logger.error(
                     f"Mask shape {mask_array.shape} does not match result shape "
-                    f"{result_2d.shape}. "
+                    f"{result.shape}. "
                     "Attempting to resize mask."
                 )
-                # Resize mask to match result if possible
-                try:
-                    from scipy.ndimage import zoom
-
-                    zoom_factors = (result_2d.shape[0] / mask_array.shape[0],
-                                    result_2d.shape[1] / mask_array.shape[1])
-                    mask_array = zoom(mask_array, zoom_factors,
-                                      order=0)  # order=0 for nearest neighbor
-                    # Ensure binary after resize
-                    mask_array = (mask_array > 0.5).astype(np.float32)
-                except ImportError:
-                    raise ValueError(
-                        "scipy is required for mask resizing. "
-                        "Please ensure mask dimensions match result dimensions or "
-                        "install scipy."
-                    )
 
             # Apply mask (multiply: 0 where mask is 0, keep original value where mask
             # is 1)
-            result_2d = result_2d * mask_array
+            result = result * mask_array
             logger.info("Mask applied successfully")
         except Exception as e:
             logger.error(f"Failed to load or apply mask: {e}")
@@ -434,10 +423,9 @@ def mosaic2d(
 
     if nifti_output or jpeg_output or tiff_output:
         with ProgressBar():
-            result_2d = np.array(result_2d)
+            result = np.array(result)
 
-    scan_resolution_2d = scan_resolution[:2] if len(scan_resolution) >= 2 else [1.0,
-                                                                                1.0]
+    voxel_size_2d = voxel_size_xyz[:2] if len(voxel_size_xyz) >= 2 else [0.1, 0.1]
     # Save NIfTI file if requested
     if nifti_output:
         logger.info(f"Saving NIfTI file: {nifti_output}")
@@ -446,28 +434,29 @@ def mosaic2d(
         # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
         # Add a singleton z dimension
         # result_3d = result_2d[:, :]
-        nii_img = nib.Nifti1Image(result_2d, affine)
+        nii_img = nib.Nifti1Image(result, affine)
         nii_img.header.set_xyzt_units(xyz="mm", t="sec")
+        nii_img.header.set_zooms(voxel_size_2d)
         nib.save(nii_img, nifti_output)
         logger.info("NIfTI file saved successfully")
-    result_2d = result_2d.T
+    result = result.T
 
     # Save JPEG if requested
     if jpeg_output:
         logger.info(f"Saving JPEG preview: {jpeg_output}")
-        _save_jpeg(result_2d, jpeg_output)
+        _save_jpeg(result, jpeg_output)
 
     # Save TIFF if requested
     if tiff_output:
         logger.info(f"Saving TIFF: {tiff_output}")
-        _save_tiff(result_2d, tiff_output)
+        _save_tiff(result, tiff_output)
 
     # Save to Zarr if output is specified
     if general_config.out:
         logger.info(f"Saving to Zarr: {general_config.out}")
 
         # Compute zarr layout for 2D
-        chunk, shard = compute_zarr_layout(result_2d.shape, np.float32,
+        chunk, shard = compute_zarr_layout(result.shape, np.float32,
                                            zarr_config)
 
         # Prepare Zarr group (similar to single_volume.py)
@@ -475,40 +464,41 @@ def mosaic2d(
 
         # Create array and write data directly (like single_volume.py)
         dataset = zgroup.create_array(
-            "0", shape=result_2d.shape, dtype=np.float32, chunk=chunk,
+            "0", shape=result.shape, dtype=np.float32, chunk=chunk,
             shard=shard,
             zarr_config=zarr_config
         )
-
         # Write data directly using indexing (similar to single_volume.py)
-        if isinstance(result_2d, da.Array):
+        if isinstance(result, da.Array):
             if shard:
-                result_2d = da.rechunk(result_2d, chunks=shard)
+                result = da.rechunk(result, chunks=shard)
             else:
-                result_2d = da.rechunk(result_2d, chunks=chunk)
+                result = da.rechunk(result, chunks=chunk)
 
             with ProgressBar():
-                da.store(result_2d, dataset, compute=True)
+                da.store(result, dataset, compute=True)
 
         else:
-            dataset[...] = result_2d
+            dataset[...] = result
 
         # Generate pyramid and metadata
         logger.info("Generating pyramid and metadata")
         zgroup.generate_pyramid()
-        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=scan_resolution_2d,
+        logger.info("Finished generating pyramid")
+        logger.info("Writing OME-Zarr metadata")
+        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=voxel_size_xyz[::-1],
                                   space_unit="millimeter")
 
         if nifti_config and nifti_config.nii:
             header = build_nifti_header(
                 zgroup=zgroup,
-                voxel_size_zyx=(1.0, scan_resolution_2d[0], scan_resolution_2d[1]),
+                voxel_size_zyx=voxel_size_xyz[::-1],
                 unit="millimeter",
                 nii_config=nifti_config,
             )
             zgroup.write_nifti_header(header)
 
-        logger.info("Finished generating pyramid")
+
     else:
         logger.info("Skipping Zarr output (no output path specified)")
 
