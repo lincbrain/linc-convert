@@ -25,11 +25,11 @@ from linc_convert.utils.zarr_config import (
 )
 
 logger = logging.getLogger(__name__)
-stripe = cyclopts.App(name="stripe", help_format="markdown")
-lsm.command(stripe)
+strip = cyclopts.App(name="strip", help_format="markdown")
+lsm.command(strip)
 
 
-@stripe.default
+@strip.default
 @autoconfig
 def convert(
     inp: str,

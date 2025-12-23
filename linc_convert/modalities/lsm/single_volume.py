@@ -18,7 +18,7 @@ from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.unit import to_ome_unit
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
-    NiiConfig,
+    NiftiConfig,
     ZarrConfig,
     autoconfig,
 )
@@ -35,7 +35,7 @@ def convert(
     *,
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
-    nii_config: NiiConfig = None,
+    nii_config: NiftiConfig = None,
 ) -> None:
     """
     Tiff to OME-Zarr.
