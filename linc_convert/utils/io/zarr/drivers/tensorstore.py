@@ -94,10 +94,9 @@ class ZarrTSArray(ZarrArray):
     def open(
         cls,
         path: Union[str, PathLike],
+        mode: Literal["r", "r+", "a", "w", "w-"] = "a",
         *,
         zarr_version: Literal[2, 3] | int = 3,
-        create: bool = False,
-        delete_exsisting: bool = False,
     ) -> "ZarrTSArray":
         """
         Open an existing Zarr array.
@@ -109,18 +108,29 @@ class ZarrTSArray(ZarrArray):
         zarr_version : {2, 3}
             Zarr format version to use.
         mode : {'r','r+','a','w','w-'}
-            Access mode; see TensorStore docs.
+            Persistence mode: 'r' means read only (must exist); 'r+' means
+            read/write (must exist); 'a' means read/write (create if doesn't
+            exist); 'w' means create (overwrite if exists); 'w-' means create
+            (fail if exists).
 
         Returns
         -------
         ZarrTSArray
         """
+        create = False
+        delete_existing = False
+        if mode == "w":
+            delete_existing = True
+            create = True
+        elif mode == "w-" or mode == "a":
+            create = True
+
         spec = {
             "kvstore": make_kvstore(path),
             "driver": "zarr3" if zarr_version == 3 else "zarr",
             "open": True,
             "create": create,
-            "delete_existing": delete_exsisting,
+            "delete_existing": delete_existing,
         }
         ts_array = ts.open(spec).result()
         return cls(ts_array)
@@ -147,7 +157,9 @@ class ZarrTSGroup(ZarrGroup):
         self._metadata: Optional[GroupMetadata] = None
 
     @classmethod
-    def from_config(cls, zarr_config: ZarrConfig) -> "ZarrTSGroup":
+    def from_config(
+        cls, out: str | PathLike[str], zarr_config: ZarrConfig
+        ) -> "ZarrTSGroup":
         """
         Create a ZarrTSGroup from a configuration object.
 
@@ -161,7 +173,7 @@ class ZarrTSGroup(ZarrGroup):
         ZarrTSGroup
         """
         return cls.open(
-            zarr_config.out, mode="a", zarr_version=zarr_config.zarr_version
+            out, mode="a", zarr_version=zarr_config.zarr_version
         )
 
     @classmethod

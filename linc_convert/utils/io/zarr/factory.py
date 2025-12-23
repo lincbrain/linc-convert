@@ -11,7 +11,7 @@ from linc_convert.utils.zarr_config import DriverLike, ZarrConfig
 class UnsupportedDriverError(ValueError):
     """Exception raised when an unsupported driver is specified."""
 
-    def __init__(self, driver: DriverLike) -> None:
+    def __init__(self, driver: DriverLike | str) -> None:
         super().__init__(f"Unsupported driver: {driver}")
         self.driver = driver
 
@@ -72,9 +72,11 @@ def open_array(
     path: str | PathLike[str],
     mode: Literal["r", "r+", "a", "w", "w-"] = "a",
     zarr_version: Literal[2, 3] = 3,
-    driver: DriverLike = "zarr-python",
+    driver: DriverLike | None = None,
 ) -> ZarrNode:
     """Open a Zarr Node (Array or Group) based on the specified driver."""
+    if driver is None:
+        driver = next(iter(_DRIVER_ARRAY))
     array_cls = _DRIVER_ARRAY.get(driver)
     if array_cls is None:
         raise UnsupportedDriverError(driver)
@@ -85,18 +87,20 @@ def open_group(
     path: str | PathLike[str],
     mode: Literal["r", "r+", "a", "w", "w-"] = "a",
     zarr_version: Literal[2, 3] = 3,
-    driver: DriverLike = "zarr-python",
+    driver: DriverLike | None = None,
 ) -> ZarrGroup:
     """Open a Zarr Group based on the specified driver."""
+    if driver is None:
+        driver = next(iter(_DRIVER_GROUP))
     group_cls = _DRIVER_GROUP.get(driver)
     if group_cls is None:
         raise UnsupportedDriverError(driver)
     return group_cls.open(path, mode, zarr_version=zarr_version)
 
 
-def from_config(zarr_config: ZarrConfig) -> ZarrGroup:
+def from_config(out: str | PathLike[str], zarr_config: ZarrConfig) -> ZarrGroup:
     """Create a ZarrGroup from a ZarrConfig."""
     group_cls = _DRIVER_GROUP.get(zarr_config.driver)
     if group_cls is None:
         raise UnsupportedDriverError(zarr_config.driver)
-    return group_cls.from_config(zarr_config)
+    return group_cls.from_config(out, zarr_config)

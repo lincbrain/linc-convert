@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 import skimage
 import zarr
+from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.lsm import spool
-from utils.compare_file import assert_zarr_equal
 
 
 @pytest.fixture

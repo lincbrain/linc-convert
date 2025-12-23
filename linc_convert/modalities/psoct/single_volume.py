@@ -8,71 +8,40 @@ into a OME-ZARR pyramid.
 import json
 import logging
 import os
-from functools import wraps
-from typing import Callable, Optional, Unpack
+from typing import Optional
 
 import cyclopts
-import h5py
 import numpy as np
-from niizarr import default_nifti_header
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.chunk_processing import chunk_slice_generator
-from linc_convert.utils.io._array_wrapper import (
-    _ArrayWrapper,
-    _H5ArrayWrapper,
-    _MatArrayWrapper,
-)
+from linc_convert.utils.io.matlab import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.orientation import center_affine, orientation_to_affine
-from linc_convert.utils.unit import to_nifti_unit, to_ome_unit
-from linc_convert.utils.zarr_config import ZarrConfig, update_default_config
+from linc_convert.utils.nifti_header import build_nifti_header
+from linc_convert.utils.unit import to_ome_unit
+from linc_convert.utils.zarr_config import (
+    GeneralConfig,
+    NiftiConfig,
+    ZarrConfig,
+    autoconfig,
+)
 
 logger = logging.getLogger(__name__)
 single_volume = cyclopts.App(name="single_volume", help_format="markdown")
 psoct.command(single_volume)
 
 
-def _automap(func: Callable) -> Callable:
-    """Automatically map the array in the mat file."""
-
-    @wraps(func)
-    def wrapper(inp: str, zarr_config: ZarrConfig = None, **kwargs: dict) -> None:
-        # with _mapmat(inp, kwargs.get("key", None)) as dat:
-        #     return func(dat, zarr_config=zarr_config, **kwargs)
-        dat = _mapmat(inp, kwargs.get("key", None))
-        return func(dat, **kwargs)
-
-    return wrapper
-
-
-def _mapmat(fname: str, key: Optional[str] = None) -> _ArrayWrapper:
-    """Load or memory-map an array stored in a .mat file."""
-
-    def make_wrapper(fname: str) -> _ArrayWrapper:
-        try:
-            # "New" .mat file
-            f = h5py.File(fname, "r")
-            return _H5ArrayWrapper(f, key)
-        except Exception:
-            # "Old" .mat file
-            return _MatArrayWrapper(fname, key)
-
-    return make_wrapper(fname)
-
-
 @single_volume.default
-@_automap
+@autoconfig
 def convert(
     inp: str,
     *,
     key: Optional[str] = None,
     meta: str = None,
-    orientation: str = "RAS",
-    center: bool = True,
+    general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
-    **kwargs: Unpack[ZarrConfig],
+    nii_config: NiftiConfig = None,
 ) -> None:
     """
     Matlab to OME-Zarr.
@@ -88,35 +57,24 @@ def convert(
         Key of the array to be extracted, default to first key found
     meta
         Path to the metadata file
-    chunk
-        Output chunk size
-    compressor : {blosc, zlib, raw}
-        Compression method
-    compressor_opt
-        Compression options
-    max_load
-        Maximum input chunk size
-    max_levels
-        Maximum number of pyramid levels
-    no_pool
-        Index of dimension to not pool when building pyramid
-    nii
-        Convert to nifti-zarr. True if path ends in ".nii.zarr"
-    orientation
-        Orientation of the volume
-    center
-        Set RAS[0, 0, 0] at FOV center
+    general_config
+        General configuration
+    zarr_config
+        Zarr related configuration
+    nii_config
+        NIfTI header related configuration
     """
-    zarr_config = update_default_config(zarr_config, **kwargs)
-    zarr_config.set_default_name(os.path.splitext(inp.file)[0])
+    inp = as_arraywrapper(inp, key)
+    general_config.set_default_name(os.path.splitext(inp.file)[0])
 
+    out = general_config.out
     # Process metadata if provided
     if meta:
         logger.info("Writing JSON metadata")
         with open(meta, "r") as f:
             meta_txt = f.read()
             meta_json = make_json(meta_txt)
-        path_json = ".".join(zarr_config.out.split(".")[:-2]) + ".json"
+        path_json = ".".join(out.split(".")[:-2]) + ".json"
         with open(path_json, "w") as f:
             json.dump(meta_json, f, indent=4)
         vx = meta_json["PixelSize"]
@@ -126,18 +84,17 @@ def convert(
         unit = "um"
 
     # Prepare Zarr group
-    zgroup = from_config(zarr_config)
+    zgroup = from_config(out, zarr_config)
 
     if not hasattr(inp, "dtype"):
         raise Exception("Input is not a numpy array. This is unexpected.")
     if len(inp.shape) != 3:
         raise Exception("Input array is not 3d:", inp.shape)
 
-    inp_chunk = [min(x, zarr_config.max_load) for x in inp.shape]
+    inp_chunk = [min(x, general_config.max_load) for x in inp.shape]
 
     dataset = zgroup.create_array(
-        "0", shape=inp.shape, zarr_config=zarr_config, dtype=np.dtype(inp.dtype)
-    )
+        "0", shape=inp.shape, dtype=np.dtype(inp.dtype), zarr_config=zarr_config)
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(
@@ -150,23 +107,13 @@ def convert(
     logger.info("Write OME-Zarr multiscale metadata")
     zgroup.write_ome_metadata(axes=["z", "y", "x"], space_unit=to_ome_unit(unit))
 
-    if not zarr_config.nii:
-        logger.info("Conversion complete.")
-        return
+    if nii_config.nii:
+        header = build_nifti_header(
+            zgroup=zgroup,
+            voxel_size_zyx=tuple(vx),
+            unit=unit,
+            nii_config=nii_config,
+        )
+        zgroup.write_nifti_header(header)
 
-    # Write NIfTI-Zarr header
-    arr = zgroup["0"]
-    header = default_nifti_header(
-        arr, zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
-    )
-    reversed_shape = list(reversed(arr.shape))
-    affine = orientation_to_affine(orientation, *vx[::-1])
-    if center:
-        affine = center_affine(affine, reversed_shape[:3])
-    header.set_data_shape(reversed_shape)
-    header.set_data_dtype(arr.dtype)
-    header.set_qform(affine)
-    header.set_sform(affine)
-    header.set_xyzt_units(to_nifti_unit(unit))
-
-    zgroup.write_nifti_header(header)
+    logger.info("Conversion complete.")

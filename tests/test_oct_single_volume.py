@@ -5,9 +5,9 @@ import pytest
 import skimage
 import zarr.storage
 from scipy.io import savemat
+from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.psoct import single_volume
-from utils.compare_file import assert_zarr_equal
 
 
 @pytest.fixture

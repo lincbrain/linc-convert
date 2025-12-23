@@ -5,9 +5,9 @@ import glymur
 import pytest
 import skimage
 import zarr
+from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.df import single_slice
-from utils.compare_file import assert_zarr_equal
 
 
 @pytest.fixture

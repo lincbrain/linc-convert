@@ -1,6 +1,7 @@
 """ZarrIO Implementation using the zarr-python library."""
 
 from numbers import Number
+from os import PathLike
 from typing import (
     Any,
     Iterator,
@@ -111,12 +112,14 @@ class ZarrPythonGroup(ZarrGroup):
         self._zgroup = zarr_group
 
     @classmethod
-    def from_config(cls, zarr_config: ZarrConfig) -> "ZarrPythonGroup":
+    def from_config(
+        cls, out: str | PathLike[str], zarr_config: ZarrConfig
+        ) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
-        if zarr_config.out.startswith("/") or zarr_config.out.startswith("\\"):
-            store = zarr.storage.LocalStore(zarr_config.out)
+        if out.startswith("/") or out.startswith("\\"):
+            store = zarr.storage.LocalStore(out)
         else:
-            store = zarr.storage.FsspecStore(zarr_config.out)
+            store = zarr.storage.FsspecStore(out)
         return cls(
             zarr.group(
                 store=store,
@@ -191,7 +194,7 @@ class ZarrPythonGroup(ZarrGroup):
     ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
-            arr = self._zgroup.create_array(name, shape, dtype, **kwargs)
+            arr = self._zgroup.create_array(name, shape=shape, dtype=dtype, **kwargs)
             if data is not None:
                 arr[:] = data
             return ZarrPythonArray(arr)

@@ -7,10 +7,10 @@ import glymur
 import numpy as np
 import pytest
 import zarr
-
-from linc_convert.modalities.df import multi_slice
 from utils.compare_file import assert_zarr_equal
 from utils.sample_data import generate_sample_data_variation
+
+from linc_convert.modalities.df import multi_slice
 
 
 @pytest.fixture
