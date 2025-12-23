@@ -24,3 +24,6 @@ zarr
 subcommands
 sharding
 NIfTI
+pipx
+PyPI
+Apptainer
