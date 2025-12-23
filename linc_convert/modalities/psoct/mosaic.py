@@ -29,6 +29,7 @@ from linc_convert.utils.zarr_config import (
     ZarrConfig,
     autoconfig,
 )
+from linc_convert.utils.io.zarr import open_array, open_group
 
 logger = logging.getLogger(__name__)
 
@@ -59,68 +60,31 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         if not hasattr(wrapper, "dtype"):
             raise ValueError(f"Could not load array from {file_path}")
         data = wrapper
-        # # Handle 3D data - take middle slice
-        # if data.ndim == 3:
-        #     data = data[:, :, data.shape[2] // 2]
-        # elif data.ndim > 3:
-        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return da.from_array(data, chunks="auto")
 
-    # Check for zarr archives
-    # Check if path looks like zarr (directory with zarr metadata files)
-    is_zarr = False
-    if op.isdir(file_path):
-        # Check for zarr v3 (zarr.json) or v2 (.zgroup or .zarray)
-        if op.exists(op.join(file_path, 'zarr.json')) or \
-            op.exists(op.join(file_path, '.zgroup')) or \
-            op.exists(op.join(file_path, '.zarray')):
-            is_zarr = True
-    elif file_path.endswith('.zarr') or '.zarr' in file_path:
-        is_zarr = True
-
-    if is_zarr:
+    if file_path.endswith('.zarr'):
+        # Try to open as zarr group first
         try:
-            from linc_convert.utils.io.zarr import open_array, open_group
-
-            # Try to open as zarr group first
-            try:
-                zarr_group = open_group(file_path, mode="r")
-                # It's a group, try to get array '0'
-                if '0' in zarr_group.keys():
-                    zarr_array_wrapper = zarr_group['0']
-                    data = da.from_array(zarr_array_wrapper,
-                                         chunks=zarr_array_wrapper.chunks)
-                else:
-                    raise ValueError(
-                        f"Zarr group at {file_path} does not contain array '0'")
-            except (ValueError, KeyError):
-                # Try as array
-                zarr_array_wrapper = open_array(file_path, mode="r")
+            zarr_group = open_group(file_path, mode="r")
+            # It's a group, try to get array '0'
+            if '0' in zarr_group.keys():
+                zarr_array_wrapper = zarr_group['0']
                 data = da.from_array(zarr_array_wrapper,
-                                     chunks=zarr_array_wrapper.chunks)
-
-            # Handle 3D data - take middle slice
-            # if data.ndim == 3:
-            #     data = data[:, :, data.shape[2] // 2]
-            # elif data.ndim > 3:
-            #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
-            return data
-        except Exception as e:
-            logger.warning(f"Failed to load as zarr: {e}, trying other formats")
+                                        chunks=zarr_array_wrapper.chunks)
+            else:
+                raise ValueError(
+                    f"Zarr group at {file_path} does not contain array '0'")
+        except (ValueError, KeyError):
+            # Try as array
+            zarr_array_wrapper = open_array(file_path, mode="r")
+            data = da.from_array(zarr_array_wrapper,
+                                    chunks=zarr_array_wrapper.chunks)
+        return data
 
     # Check for NIfTI files
     if file_path.endswith(('.nii', '.nii.gz')):
         img = nib.load(file_path)
-        # Use dataobj for lazy loading with mmap instead of get_fdata()
-        dataobj = img.dataobj
-        # Convert to dask array with lazy loading
-        data = da.from_array(dataobj, chunks=img.shape)
-        # Handle 3D data - take middle slice
-        # if data.ndim == 3:
-        #     data = data[:, :, data.shape[2] // 2]
-        # elif data.ndim > 3:
-        #     # Take first 2D slice
-        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
+        data = da.from_array(img.dataobj, chunks=img.shape)
         return data
 
     # Try dask-image as fallback
@@ -128,11 +92,6 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         import dask_image.imread  # noqa: F401
 
         data = dask_image.imread.imread(file_path)
-        # Handle 3D data - take middle slice
-        # if data.ndim == 3:
-        #     data = data[:, :, data.shape[2] // 2]
-        # elif data.ndim > 3:
-        #     data = data.reshape(data.shape[0], data.shape[1], -1)[:, :, 0]
         return data
     except ImportError:
         raise ValueError(
@@ -168,24 +127,10 @@ def _save_tiff(image: np.ndarray, output_path: str):
         # Preserve original dtype and values
         tifffile.imwrite(output_path, image)
     except ImportError:
-        # Fallback to PIL if tifffile not available
-        # PIL requires uint8 or uint16, so we need to convert
-        # But we don't normalize - just convert dtype preserving values as much as
-        # possible
-        if image.dtype in (np.float32, np.float64):
-            # For float, convert to uint16 without normalization
-            # This will clip values outside [0, 65535] range
-            image_uint16 = np.clip(image, 0, 65535).astype(np.uint16)
-        elif image.dtype == np.uint8:
-            image_uint16 = image
-        else:
-            # For other types, convert to uint16
-            image_uint16 = np.clip(image, 0, 65535).astype(np.uint16)
-        pil_image = Image.fromarray(image_uint16)
-        pil_image.save(output_path, "TIFF")
+        raise ValueError("tifffile is not installed")
 
 
-def _load_mask(mask_path: str, keep_lazy: bool = False) -> Union[da.Array, np.ndarray]:
+def _load_mask(mask_path: str) -> Union[da.Array, np.ndarray]:
     """
     Load a binary mask from a file.
     
@@ -213,17 +158,7 @@ def _load_mask(mask_path: str, keep_lazy: bool = False) -> Union[da.Array, np.nd
         else:
             raise ValueError(f"Mask must be 2D, got shape {mask.shape}")
 
-    # Convert to binary (0 or 1)
-    # Handle both boolean and numeric masks
-    if keep_lazy:
-        # Keep as lazy dask array for optimization
-        mask = (mask > 0).astype(np.float32)
-    else:
-        # Compute for immediate use
-        mask = mask.compute() if isinstance(mask, da.Array) else mask
-        mask = (mask > 0).astype(np.float32)
-
-    return mask
+    return (mask > 0).astype(bool)
 
 
 def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
@@ -264,7 +199,7 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
     # This is critical: aligned chunks allow Dask to see block-level relationships
     # and the scheduler can use mask block information to optimize result computation
     if mask.chunks != result.chunks:
-        mask = mask.rechunk(result.chunks)
+        mask = mask.rechunk(result.chunks[:2] + mask.chunks[2:])
     
     # Use map_blocks with aligned chunks
     # The function receives both result and mask blocks, allowing it to
@@ -490,7 +425,7 @@ def mosaic2d(
         logger.info(f"Loading and applying mask: {mask}")
         try:
             # Load mask as lazy dask array for optimization
-            mask_array = _load_mask(mask, keep_lazy=True)
+            mask_array = _load_mask(mask)
             
             # Check if mask dimensions match result (accounting for broadcasting)
             mask_2d_shape = mask_array.shape[:2] if mask_array.ndim >= 2 else mask_array.shape
@@ -500,11 +435,9 @@ def mosaic2d(
                     f"Mask shape {mask_array.shape} does not match result shape "
                     f"{result.shape}. "
                 )
-
-            # Apply mask using optimized function that allows Dask to skip computation
-            # where mask is 0
             result = _apply_mask(result, mask_array)
             logger.info("Mask applied successfully (optimized for Dask)")
+
         except Exception as e:
             logger.error(f"Failed to load or apply mask: {e}")
             raise
