@@ -214,7 +214,7 @@ class ZarrGroup(ZarrNode):
         if isinstance(mode, Callable):
             window = mode
         else:
-            window_func = {"median": da.median, "mean": da.mean}
+            window_func = {"median": da.nanmedian, "mean": da.nanmean}
             if mode not in window_func:
                 raise ValueError(f"Unsupported mode: {mode}")
             window = window_func[mode]
