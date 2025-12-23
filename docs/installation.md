@@ -56,4 +56,4 @@ The `linc-convert` package is available through multiple installation methods. N
 
 ## Installation with Docker or Apptainer/Singularity
 
-For container-based installations using Docker, Apptainer, or Singularity, please refer to the [Container Installation Guide](./container-installation.md).
+For container-based installations using Docker, Apptainer, or Singularity, please refer to the [Container Installation Guide](./container.md).
