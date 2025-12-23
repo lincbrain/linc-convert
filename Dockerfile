@@ -55,7 +55,7 @@ COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 # Update PATH environment variable
 # This allows us to type 'linc-convert' instead of '/app/.venv/bin/linc-convert'
 ENV PATH="/app/.venv/bin:$PATH"
-LABEL org.opencontainers.image.source https://github.com/lincbrain/linc-convert
+LABEL org.opencontainers.image.source=https://github.com/lincbrain/linc-convert
 # Set the entrypoint
 ENTRYPOINT ["linc-convert"]
 # Default command
