@@ -41,6 +41,11 @@ markdown_extensions:
 plugins:
   - search
   - open-in-new-tab
+  - gen-files:
+      scripts:
+        - scripts/gen_ref_pages.py
+  - literate-nav:
+      nav_file: summary.md
   - section-index
   - same-dir
   - mkdocs-jupyter:
@@ -61,6 +66,7 @@ nav:
   - Welcome: index.md
   - Installation: installation.md
   - PS-OCT Single Volume Demo: "notebooks/psoct_single_volume_demo.ipynb"
+  - API: api/
   - Contribute: contribute.md
   - About: about.md
 
