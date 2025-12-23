@@ -49,7 +49,6 @@ plugins:
   - section-index
   - same-dir
   - mkdocs-jupyter:
-      ignore_h1_titles: True
       include: [ "*.ipynb" ]
   - mkdocstrings:
       handlers:
@@ -66,7 +65,7 @@ plugins:
 nav:
   - Welcome: index.md
   - Installation: installation.md
-  - Basic Usage Guide: basic-usage.md
+  - Container Setup and Usage: container.md
   - PS-OCT Single Volume Demo: "notebooks/psoct_single_volume_demo.ipynb"
   - API: api/
   - Contribute: contribute.md
