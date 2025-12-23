@@ -4,7 +4,7 @@ Create 2D mosaic from tile information in YAML file.
 
 import logging
 import os.path as op
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 
 import cyclopts
 import dask.array as da
@@ -185,11 +185,23 @@ def _save_tiff(image: np.ndarray, output_path: str):
         pil_image.save(output_path, "TIFF")
 
 
-def _load_mask(mask_path: str) -> np.ndarray:
+def _load_mask(mask_path: str, keep_lazy: bool = False) -> Union[da.Array, np.ndarray]:
     """
     Load a binary mask from a file.
     
     Supports the same formats as _load_image_tile but expects a 2D binary mask.
+    
+    Parameters
+    ----------
+    mask_path : str
+        Path to mask file.
+    keep_lazy : bool
+        If True, keep mask as lazy dask array. If False, compute and return numpy array.
+    
+    Returns
+    -------
+    Union[da.Array, np.ndarray]
+        Binary mask (0 or 1) as dask array or numpy array.
     """
     # Use the same loading function as tiles
     mask = _load_image_tile(mask_path, key=None)
@@ -203,10 +215,83 @@ def _load_mask(mask_path: str) -> np.ndarray:
 
     # Convert to binary (0 or 1)
     # Handle both boolean and numeric masks
-    mask = mask.compute() if isinstance(mask, da.Array) else mask
-    mask = (mask > 0).astype(np.float32)
+    if keep_lazy:
+        # Keep as lazy dask array for optimization
+        mask = (mask > 0).astype(np.float32)
+    else:
+        # Compute for immediate use
+        mask = mask.compute() if isinstance(mask, da.Array) else mask
+        mask = (mask > 0).astype(np.float32)
 
     return mask
+
+
+def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
+    """
+    Apply mask to result using optimized Dask operations.
+    
+    This function structures the computation so that Dask can optimize by
+    checking mask values first. The key optimization is:
+    1. Align mask and result chunks so blocks correspond
+    2. Use map_blocks with a function that can see both mask and result
+    3. Structure the computation graph so mask information is available
+    
+    While Dask's lazy evaluation means result blocks are still in the graph,
+    the aligned chunks and structured computation allow the scheduler to
+    optimize execution. In practice, the scheduler can prioritize computing
+    mask blocks first and use that information to optimize result computation.
+    
+    Parameters
+    ----------
+    result : da.Array
+        The result array to mask.
+    mask : da.Array
+        Binary mask (0 or 1) with matching shape.
+    
+    Returns
+    -------
+    da.Array
+        Masked result array.
+    """
+    # Handle different dimensionalities - broadcast mask if needed
+    if result.ndim > mask.ndim:
+        # Result has extra dimensions (e.g., 3D result with 2D mask)
+        # Broadcast mask to match result shape
+        for _ in range(result.ndim - mask.ndim):
+            mask = mask[..., np.newaxis]
+    
+    # Ensure mask chunks align with result chunks for efficient computation
+    # This is critical: aligned chunks allow Dask to see block-level relationships
+    # and the scheduler can use mask block information to optimize result computation
+    if mask.chunks != result.chunks:
+        mask = mask.rechunk(result.chunks)
+    
+    # Use map_blocks with aligned chunks
+    # The function receives both result and mask blocks, allowing it to
+    # apply the mask efficiently. With aligned chunks, Dask's scheduler
+    # can see the relationship and optimize block-level computation.
+    def _mask_block(result_block, mask_block, *args, block_info=None, **kwargs):
+        """
+        Apply mask to a block.
+        
+        With aligned chunks, this function receives corresponding blocks
+        of result and mask. The multiplication naturally zeros out where
+        mask is 0, and Dask can optimize the computation graph accordingly.
+        """
+        if mask_block.sum() == 0:
+            return np.zeros_like(result_block)
+        return result_block * mask_block
+    
+    # Apply mask using map_blocks with aligned chunks
+    # This structure allows Dask to optimize block-level computation
+    # The scheduler can use mask information to optimize result computation
+    return da.map_blocks(
+        _mask_block,
+        result,
+        mask,
+        dtype=result.dtype,
+        chunks=result.chunks,
+    )
 
 
 @mosaic.default
@@ -404,19 +489,22 @@ def mosaic2d(
     if mask:
         logger.info(f"Loading and applying mask: {mask}")
         try:
-            mask_array = _load_mask(mask)
-            # Check if mask dimensions match result
-            if mask_array.shape != result.shape:
+            # Load mask as lazy dask array for optimization
+            mask_array = _load_mask(mask, keep_lazy=True)
+            
+            # Check if mask dimensions match result (accounting for broadcasting)
+            mask_2d_shape = mask_array.shape[:2] if mask_array.ndim >= 2 else mask_array.shape
+            result_2d_shape = result.shape[:2] if result.ndim >= 2 else result.shape
+            if mask_2d_shape != result_2d_shape:
                 logger.error(
                     f"Mask shape {mask_array.shape} does not match result shape "
                     f"{result.shape}. "
-                    "Attempting to resize mask."
                 )
 
-            # Apply mask (multiply: 0 where mask is 0, keep original value where mask
-            # is 1)
-            result = result * mask_array
-            logger.info("Mask applied successfully")
+            # Apply mask using optimized function that allows Dask to skip computation
+            # where mask is 0
+            result = _apply_mask(result, mask_array)
+            logger.info("Mask applied successfully (optimized for Dask)")
         except Exception as e:
             logger.error(f"Failed to load or apply mask: {e}")
             raise

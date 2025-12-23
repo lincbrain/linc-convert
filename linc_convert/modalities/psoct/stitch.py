@@ -146,7 +146,7 @@ class MosaicInfo:
         ramp = np.outer(wx, wy)
         return ramp
     
-    def stitch(self) -> da.Array:
+    def stitch(self, mask: Optional[da.Array] = None) -> da.Array:
         """
         Stitch tiles into a mosaic using lazy dask operations.
         
@@ -249,6 +249,7 @@ class MosaicInfo:
             canvas,
             block_tiles,
             block_weights,
+            mask,
             self.circular_mean,
             dtype=canvas.dtype,
             chunks=(pw, ph, *no_chunk_dim)
@@ -260,7 +261,7 @@ class MosaicInfo:
 
 
 def _combine_block(
-    _, block_tiles, block_weights, circular_mean, *args, block_info=None, **kwargs
+    _, block_tiles, block_weights, mask, circular_mean, *args, block_info=None, **kwargs
 ):
     """Combine overlapping tile blocks with weighted averaging."""
     chunk_id = tuple(block_info[None]['chunk-location'][:2])
@@ -270,7 +271,9 @@ def _combine_block(
     
     if not paints:
         return np.broadcast_to(np.zeros((), dtype=np.float32), shape)
-    
+    if mask is not None:
+        # check if mask is zero for this chunk
+        
     total_paint = da.sum(da.stack(paints, axis=0), axis=0)
     total_weight = da.sum(da.stack(weights, axis=0), axis=0)
     # For 3D data, total_weight should be broadcasted 
