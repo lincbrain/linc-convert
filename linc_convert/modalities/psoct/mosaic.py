@@ -384,7 +384,10 @@ def mosaic2d(
         if normalize_focus_plane:
             focus_plane = focus_plane - focus_plane.min()
         focus_plane = focus_plane + crop_focus_plane_offset
-
+        if clip_x > 0:
+            focus_plane = focus_plane[clip_x:, :]
+        if clip_y > 0:
+            focus_plane = focus_plane[:, clip_y:]
         def apply_focus_plane(image):
             nonlocal focus_plane
             z = np.arange(crop_focus_plane_depth, dtype=np.int32)[None, None, :]
