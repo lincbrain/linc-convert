@@ -71,6 +71,10 @@ class H5ArrayWrapper(ArrayWrapper):
         """Get item by index."""
         return self.array[index]
 
+    @property
+    def ndim(self) -> int:
+        """Get dimension of the array."""
+        return self.array.ndim
 
 class MatArraywrapper(ArrayWrapper):
     """Wrapper for arrays stored in old-style MATLAB .mat files."""
@@ -117,3 +121,8 @@ class MatArraywrapper(ArrayWrapper):
         if self.array is None:
             self.load()
         return self.array[index]
+
+    @property
+    def ndim(self) -> int:
+        """Get dimension of the array."""
+        return self.array.ndim
