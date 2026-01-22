@@ -7,6 +7,7 @@ from typing import List, Literal, Optional, Tuple, Union
 import dask.array as da
 import numpy as np
 from numpy.typing import ArrayLike
+from tqdm import tqdm
 
 
 @dataclass
@@ -158,8 +159,8 @@ class MosaicInfo:
         """
         if not self.tiles:
             raise ValueError("No tiles to stitch")
-        
-        pw, ph = self.chunk_size
+        self.normalize_tile_coordinates()
+        pw, ph = self.chunk_size [:2]
         no_chunk_dim = self.full_shape[2:]  # Empty for 2D, (depth,) for 3D
         
         # Create canvas with appropriate shape
@@ -178,15 +179,16 @@ class MosaicInfo:
         block_tiles = defaultdict(list)
         block_weights = defaultdict(list)
         
-        for tile_info in self.tiles:
+        for tile_info in tqdm(self.tiles):
             x0, y0, t = tile_info.x, tile_info.y, tile_info.image
+            tile_size_x, tile_size_y = t.shape[:2]
             blend_ramp = self.blend_ramp
             
             # Determine which chunks this tile falls into
             x0c = x0 // pw
             y0c = y0 // ph
-            x1c = (x0 + pw - 1) // pw
-            y1c = (y0 + ph - 1) // ph
+            x1c = (x0 + tile_size_x - 1) // pw
+            y1c = (y0 + tile_size_y - 1) // ph
             
             # Pad region covering those chunks
             x_start = x0c * pw
@@ -215,8 +217,8 @@ class MosaicInfo:
             )
             
             # Place tile into that big block
-            xs = slice(x0 - x_start, x0 - x_start + pw)
-            ys = slice(y0 - y_start, y0 - y_start + ph)
+            xs = slice(x0 - x_start, x0 - x_start + tile_size_x)
+            ys = slice(y0 - y_start, y0 - y_start + tile_size_y)
             # Apply blending ramp - handle both 2D and 3D
             if not self.circular_mean:
                 # For 2D: t * blend_ramp
@@ -257,7 +259,15 @@ class MosaicInfo:
         # Crop canvas to get rid of excessive padded pixels
         canvas = canvas[:self.full_shape[0], :self.full_shape[1], ...]
         return canvas
-
+    
+    def normalize_tile_coordinates(self):
+        min_x = np.min([tile.x for tile in self.tiles])
+        min_y = np.min([tile.y for tile in self.tiles])
+        for tile in self.tiles:
+            tile.x -= min_x
+            tile.y -= min_y
+        self.full_shape = (self.full_shape[0] - min_x, self.full_shape[1] - min_y, *self.full_shape[2:])
+        return 
 
 def _combine_block(
     _, block_tiles, block_weights, circular_mean, *args, block_info=None, **kwargs
