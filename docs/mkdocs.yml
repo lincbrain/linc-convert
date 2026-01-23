@@ -68,6 +68,7 @@ nav:
   - Installation: installation.md
   - Basic Usage Guide: basic-usage.md
   - PS-OCT Single Volume Demo: "notebooks/psoct_single_volume_demo.ipynb"
+  - PS-OCT Stitching: psoct_stitching.md
   - API: api/
   - Contribute: contribute.md
   - About: about.md
