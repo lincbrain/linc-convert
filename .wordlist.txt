@@ -27,3 +27,13 @@ NIfTI
 pipx
 PyPI
 Apptainer
+Voxel
+config
+dir
+py
+yaml
+aip
+tensorstore
+voxel
+yaml
+YAML
