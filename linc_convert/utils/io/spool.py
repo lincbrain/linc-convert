@@ -24,7 +24,7 @@ from scipy.io import loadmat
 
 from linc_convert.utils.math import ceildiv
 
-
+logger = logging.getLogger(__name__)
 class SpoolSetInterpreter:
     """
     Interpreter for a set of spool files produced by a Zyla camera.
@@ -167,7 +167,7 @@ class SpoolSetInterpreter:
     def _load_spool_file(self, spool_file_name: str | PathLike[str]) -> np.ndarray:
         """Load a single spool file into a NumPy array."""
         file = self._make_filename_from_spool_set(spool_file_name)
-        print(f"Reading file {spool_file_name}")
+        logger.debug(f"Reading file {spool_file_name}")
         with open(file, "rb") as f:
             array = np.frombuffer(f.read(), dtype=self.dtype)
         return np.reshape(array, self.spool_shape)
