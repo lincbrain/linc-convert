@@ -37,3 +37,4 @@ jobs:
         run: poetry install --with dev --extras all
       - name: Run the automated tests
         run: poetry run pytest -v
+        working-directory: tests

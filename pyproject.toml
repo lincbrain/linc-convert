@@ -62,6 +62,8 @@ mypy = "^1.9.0"
 pre-commit = "^3.7.0"
 pytest-cov = "^5.0.0"
 ruff = "^0.3.4"
+scikit-image = "*"
+pooch = "*"
 
 [tool.poetry.group.docs]
 optional = true
