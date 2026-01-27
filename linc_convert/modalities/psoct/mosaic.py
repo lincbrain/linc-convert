@@ -17,8 +17,8 @@ from dask.diagnostics import ProgressBar
 from tqdm import tqdm
 
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.modalities.psoct.stitch import MosaicInfo, TileInfo
-from linc_convert.utils.io.matlab import as_arraywrapper
+from linc_convert.utils.stitch import MosaicInfo, TileInfo
+from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import \
     _compute_zarr_layout as compute_zarr_layout

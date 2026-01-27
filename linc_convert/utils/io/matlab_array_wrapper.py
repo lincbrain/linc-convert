@@ -1,7 +1,7 @@
 """Utilities for reading HDF5 and MATLAB .mat files, and wrapping arrays."""
-
+import os
 from _warnings import warn
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Union
 
 import h5py
 import numpy as np
@@ -126,3 +126,24 @@ class MatArraywrapper(ArrayWrapper):
     def ndim(self) -> int:
         """Get dimension of the array."""
         return self.array.ndim
+
+
+def make_wrapper(fname: str, key: Optional[str] = None) -> ArrayWrapper:
+    """Create an ArrayWrapper for a MATLAB .mat file."""
+    try:
+        # "New" .mat file
+        f = h5py.File(fname, "r")
+        return H5ArrayWrapper(f, key)
+    except Exception:
+        # "Old" .mat file
+        return MatArraywrapper(fname, key)
+
+
+def as_arraywrapper(
+    inp: Union[str, os.PathLike, ArrayWrapper],
+    key: Optional[str] = None,
+) -> ArrayWrapper:
+    """Convert input to an ArrayWrapper if it is not already one."""
+    if isinstance(inp, ArrayWrapper):
+        return inp
+    return make_wrapper(str(inp), key)
