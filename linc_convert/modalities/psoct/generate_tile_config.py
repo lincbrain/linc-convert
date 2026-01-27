@@ -18,8 +18,10 @@ Grid Layout Example (3 columns × 2 rows):
       Col 0    Col 1    Col 2
 
 Terminology:
-- **Columns**: Number of tiles horizontally (x-direction). In the example above, there are 3 columns.
-- **Rows**: Number of tiles vertically (y-direction). In the example above, there are 2 rows.
+- **Columns**: Number of tiles horizontally (x-direction). In the example above,
+there are 3 columns.
+- **Rows**: Number of tiles vertically (y-direction). In the example above, there are
+2 rows.
 - **Tile Size**: Dimensions of each individual tile in pixels.
   - `tile_size_x`: Width of each tile (horizontal dimension)
   - `tile_size_y`: Height of each tile (vertical dimension)
@@ -68,7 +70,9 @@ from cyclopts import Parameter
 
 from linc_convert.modalities.psoct.cli import psoct
 
-generate_tile_config_cmd = cyclopts.App(name="generate_tile_config", help_format="markdown")
+generate_tile_config_cmd = cyclopts.App(
+    name="generate_tile_config", help_format="markdown"
+)
 psoct.command(generate_tile_config_cmd)
 
 
@@ -113,7 +117,9 @@ def _format_filepath(naming_format: str, tile_number: int) -> str:
         return naming_format.replace("{tile_number}", str(tile_number))
 
 
-def _create_tile_entry(tile_number: int, x: float, y: float, naming_format: str) -> dict:
+def _create_tile_entry(
+    tile_number: int, x: float, y: float, naming_format: str
+) -> dict:
     """
     Create a tile dictionary entry.
 
@@ -137,7 +143,7 @@ def _create_tile_entry(tile_number: int, x: float, y: float, naming_format: str)
         "filepath": _format_filepath(naming_format, tile_number),
         "tile_number": tile_number,
         "x": float(x),
-        "y": float(y)
+        "y": float(y),
     }
 
 
@@ -149,7 +155,7 @@ def _generate_row_by_row(
     overlap_x: float,
     overlap_y: float,
     order: str,
-    naming_format: str
+    naming_format: str,
 ) -> List[dict]:
     """
     Generate tiles in row-by-row pattern.
@@ -218,7 +224,7 @@ def _generate_column_by_column(
     overlap_x: float,
     overlap_y: float,
     order: str,
-    naming_format: str
+    naming_format: str,
 ) -> List[dict]:
     """
     Generate tiles in column-by-column pattern.
@@ -287,7 +293,7 @@ def _generate_snake_by_rows(
     overlap_x: float,
     overlap_y: float,
     order: str,
-    naming_format: str
+    naming_format: str,
 ) -> List[dict]:
     """
     Generate tiles in snake-by-rows pattern.
@@ -362,7 +368,7 @@ def _generate_snake_by_columns(
     overlap_x: float,
     overlap_y: float,
     order: str,
-    naming_format: str
+    naming_format: str,
 ) -> List[dict]:
     """
     Generate tiles in snake-by-columns pattern.
@@ -437,11 +443,15 @@ def generate_tile_config(
     tile_size_y: Annotated[int, Parameter(name=["--tile-size-y"])] = 300,
     tile_size: Annotated[Optional[int], Parameter(name=["--tile-size"])] = None,
     base_dir: Annotated[str, Parameter(name=["--base-dir"])] = "./",
-    naming_format: Annotated[str, Parameter(name=["--naming-format"])] = "mosaic_001_tile_{tile_number:04d}_aip.nii",
+    naming_format: Annotated[
+        str, Parameter(name=["--naming-format"])
+    ] = "mosaic_001_tile_{tile_number:04d}_aip.nii",
     out: Annotated[str, Parameter(name=["--output", "-o"])] = "tile_config.yaml",
     grid_type: Annotated[str, Parameter(name=["--grid-type"])] = "snake-by-columns",
     order: Annotated[Optional[str], Parameter(name=["--order"])] = None,
-    overlap_percentage: Annotated[float, Parameter(name=["--overlap-percentage"])] = 0.0,
+    overlap_percentage: Annotated[
+        float, Parameter(name=["--overlap-percentage"])
+    ] = 0.0,
 ) -> None:
     """
     Generate tile configuration YAML file for Grid/Collection Stitching.
@@ -527,21 +537,33 @@ def generate_tile_config(
             order = "down-right"
 
     # Validate grid_type and order
-    valid_grid_types = ["row-by-row", "column-by-column", "snake-by-rows", "snake-by-columns"]
+    valid_grid_types = [
+        "row-by-row",
+        "column-by-column",
+        "snake-by-rows",
+        "snake-by-columns",
+    ]
     if grid_type not in valid_grid_types:
-        raise ValueError(f"Invalid grid_type: {grid_type}. Must be one of {valid_grid_types}")
+        raise ValueError(
+            f"Invalid grid_type: {grid_type}. Must be one of {valid_grid_types}"
+        )
 
     row_based = grid_type in ["row-by-row", "snake-by-rows"]
     valid_orders = (
-        ["right-down", "left-down", "right-up", "left-up"] if row_based
+        ["right-down", "left-down", "right-up", "left-up"]
+        if row_based
         else ["down-right", "down-left", "up-right", "up-left"]
     )
     if order not in valid_orders:
-        raise ValueError(f"Invalid order for {grid_type}: {order}. Must be one of {valid_orders}")
+        raise ValueError(
+            f"Invalid order for {grid_type}: {order}. Must be one of {valid_orders}"
+        )
 
     # Validate overlap_percentage
     if not 0.0 <= overlap_percentage <= 1.0:
-        raise ValueError(f"overlap_percentage must be between 0.0 and 1.0, got {overlap_percentage}")
+        raise ValueError(
+            f"overlap_percentage must be between 0.0 and 1.0, got {overlap_percentage}"
+        )
 
     # Generate tiles based on grid type
     overlap = overlap_percentage
@@ -552,27 +574,20 @@ def generate_tile_config(
         "snake-by-columns": _generate_snake_by_columns,
     }
     tiles = generator_map[grid_type](
-        columns, rows, tile_size_x, tile_size_y,
-        overlap, overlap, order, naming_format
+        columns, rows, tile_size_x, tile_size_y, overlap, overlap, order, naming_format
     )
 
     # Build metadata
-    metadata = {
-        "base_dir": base_dir,
-        "scan_resolution": [0.01, 0.01]
-    }
+    metadata = {"base_dir": base_dir, "scan_resolution": [0.01, 0.01]}
 
     # Add overlap to metadata if specified
     if overlap_percentage > 0.0:
         metadata["tile_overlap"] = overlap_percentage
 
-    config = {
-        "metadata": metadata,
-        "tiles": tiles
-    }
+    config = {"metadata": metadata, "tiles": tiles}
 
     # Write to YAML file
-    with open(out, 'w') as f:
+    with open(out, "w") as f:
         yaml.dump(config, f, default_flow_style=False, indent=2, allow_unicode=True)
 
     print(f"Generated tile configuration with {len(tiles)} tiles")
@@ -580,10 +595,13 @@ def generate_tile_config(
     if overlap_percentage > 0.0:
         print(f"Overlap: {overlap_percentage * 100:.1f}%")
     print(f"Configuration written to: {out}")
-    print(f"\nFirst few tiles:")
+    print("\nFirst few tiles:")
     for tile in tiles[:5]:
-        print(f"  Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}")
-    print(f"\nLast few tiles:")
+        print(
+            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}"
+        )
+    print("\nLast few tiles:")
     for tile in tiles[-5:]:
-        print(f"  Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}")
-
+        print(
+            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}"
+        )

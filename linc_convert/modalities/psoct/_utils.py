@@ -222,7 +222,7 @@ def process_complex3d(
     mag1 = da.abs(j1)
     mag2 = da.abs(j2)
 
-    dBI3D = da.flip(10 * da.log10(mag1 ** 2 + mag2 ** 2), axis=2)
+    dBI3D = da.flip(10 * da.log10(mag1**2 + mag2**2), axis=2)
     R3D = da.flip(da.arctan(mag1 / mag2) / da.pi * 180, axis=2)
     if flip_phi:
         phi = da.angle(j2) - da.angle(j1)
