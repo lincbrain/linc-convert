@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, Union
 
 import dask.array as da
@@ -19,13 +19,14 @@ class TileInfo:
 @dataclass
 class MosaicInfo:
     """Container for mosaic information with integrated blending and stitching."""
-    
+
     tiles: List[TileInfo]
-    full_shape: Tuple[int, ...]  # Can be 2D (width, height) or 3D (width, height, depth)
+    full_shape: Tuple[
+        int, ...]  # Can be 2D (width, height) or 3D (width, height, depth)
     blend_ramp: da.Array
     chunk_size: Tuple[int, int]
     circular_mean: bool = False
-    
+
     @classmethod
     def from_tiles(
         cls,
@@ -33,10 +34,12 @@ class MosaicInfo:
         depth: Optional[int] = None,
         chunk_size: Optional[Tuple[int, int]] = None,
         circular_mean: bool = False,
-        tile_overlap: Union[float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]] = "auto",
+        tile_overlap: Union[
+            float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]] = "auto",
     ) -> "MosaicInfo":
         """
-        Create MosaicInfo from tiles, extracting dimensions and coordinates automatically.
+        Create MosaicInfo from tiles, extracting dimensions and coordinates
+        automatically.
         
         Parameters
         ----------
@@ -63,41 +66,41 @@ class MosaicInfo:
         """
         if not tiles:
             raise ValueError("No tiles provided")
-        
+
         # Extract tile dimensions from first tile
         first_tile = tiles[0]
         tile_width, tile_height = first_tile.image.shape[:2]
-        
+
         # Extract depth from first tile if 3D
         if depth is None and len(first_tile.image.shape) == 3:
             depth = first_tile.image.shape[2]
-        
+
         # Extract coordinates from tiles
         x_coords = np.array([tile.x for tile in tiles])
         y_coords = np.array([tile.y for tile in tiles])
-        
+
         # Compute full mosaic dimensions
         full_width = int(np.nanmax(x_coords) + tile_width)
         full_height = int(np.nanmax(y_coords) + tile_height)
-        
+
         if depth is not None:
             full_shape = (full_width, full_height, depth)
         else:
             full_shape = (full_width, full_height)
-        
+
         # Normalize tile_overlap to pixels
         x_overlap, y_overlap = _normalize_tile_overlap(
             tile_overlap, tile_width, tile_height
         )
-        
+
         # Compute blending ramp with explicit overlap
         blend_ramp = cls._compute_blending_ramp(
             tile_width, tile_height, x_overlap, y_overlap
         )
-        
+
         if chunk_size is None:
             chunk_size = (tile_width, tile_height)
-        
+
         return cls(
             tiles=tiles,
             full_shape=full_shape,
@@ -105,7 +108,7 @@ class MosaicInfo:
             chunk_size=chunk_size,
             circular_mean=circular_mean,
         )
-    
+
     @staticmethod
     def _compute_blending_ramp(
         tile_width: int,
@@ -159,15 +162,15 @@ class MosaicInfo:
             ramp_full = np.linspace(0, 1, x_overlap + 2, dtype=np.float32)[1:-1]
             wx[:x_overlap] = ramp_full
             wx[-x_overlap:] = ramp_full[::-1]
-        
+
         if y_overlap > 0:
             ramp_full = np.linspace(0, 1, y_overlap + 2, dtype=np.float32)[1:-1]
             wy[:y_overlap] = ramp_full
             wy[-y_overlap:] = ramp_full[::-1]
-        
+
         ramp = np.outer(wx, wy)
         return ramp
-    
+
     def stitch(self) -> da.Array:
         """
         Stitch tiles into a mosaic using lazy dask operations.
@@ -181,42 +184,42 @@ class MosaicInfo:
         if not self.tiles:
             raise ValueError("No tiles to stitch")
         self.normalize_tile_coordinates()
-        pw, ph = self.chunk_size [:2]
+        pw, ph = self.chunk_size[:2]
         no_chunk_dim = self.full_shape[2:]  # Empty for 2D, (depth,) for 3D
-        
+
         # Create canvas with appropriate shape
         canvas = da.zeros(
             self.full_shape,
             chunks=(pw, ph, *no_chunk_dim),
             dtype=np.float32
         )
-        weight = da.zeros(
+        da.zeros(
             self.full_shape[:2],
             chunks=(pw, ph),
             dtype=np.float32
         )
-        
+
         # Collect per-chunk pieces
         block_tiles = defaultdict(list)
         block_weights = defaultdict(list)
-        
+
         for tile_info in tqdm(self.tiles):
             x0, y0, t = tile_info.x, tile_info.y, tile_info.image
             tile_size_x, tile_size_y = t.shape[:2]
             blend_ramp = self.blend_ramp
-            
+
             # Determine which chunks this tile falls into
             x0c = x0 // pw
             y0c = y0 // ph
             x1c = (x0 + tile_size_x - 1) // pw
             y1c = (y0 + tile_size_y - 1) // ph
-            
+
             # Pad region covering those chunks
             x_start = x0c * pw
             y_start = y0c * ph
             x_end = (x1c + 1) * pw
             y_end = (y1c + 1) * ph
-            
+
             # Create block canvas with appropriate shape
             if not self.circular_mean:
                 block_canvas = da.zeros(
@@ -230,13 +233,13 @@ class MosaicInfo:
                     chunks=(pw, ph, *no_chunk_dim, 2),
                     dtype=np.float32
                 )
-            
+
             block_weight = da.zeros(
                 (x_end - x_start, y_end - y_start),
                 chunks=(pw, ph),
                 dtype=np.float32
             )
-            
+
             # Place tile into that big block
             xs = slice(x0 - x_start, x0 - x_start + tile_size_x)
             ys = slice(y0 - y_start, y0 - y_start + tile_size_y)
@@ -254,9 +257,9 @@ class MosaicInfo:
                 rad = da.deg2rad(t) * 2
                 block_canvas[xs, ys, ..., 0] = da.cos(rad)
                 block_canvas[xs, ys, ..., 1] = da.sin(rad)
-            
+
             block_weight[xs, ys] = blend_ramp
-            
+
             # Chop into per-chunk pieces
             for cx in range(x0c, x1c + 1):
                 for cy in range(y0c, y1c + 1):
@@ -265,7 +268,7 @@ class MosaicInfo:
                     sub_y = slice((cy - y0c) * ph, (cy - y0c + 1) * ph)
                     block_tiles[bid].append(block_canvas[sub_x, sub_y, ...])
                     block_weights[bid].append(block_weight[sub_x, sub_y])
-        
+
         # Combine blocks using map_blocks
         canvas = da.map_blocks(
             _combine_block,
@@ -276,19 +279,21 @@ class MosaicInfo:
             dtype=canvas.dtype,
             chunks=(pw, ph, *no_chunk_dim)
         )
-        
+
         # Crop canvas to get rid of excessive padded pixels
         canvas = canvas[:self.full_shape[0], :self.full_shape[1], ...]
         return canvas
-    
-    def normalize_tile_coordinates(self):
+
+    def normalize_tile_coordinates(self) -> None:
         min_x = np.min([tile.x for tile in self.tiles])
         min_y = np.min([tile.y for tile in self.tiles])
         for tile in self.tiles:
             tile.x -= min_x
             tile.y -= min_y
-        self.full_shape = (self.full_shape[0] - min_x, self.full_shape[1] - min_y, *self.full_shape[2:])
-        return 
+        self.full_shape = (
+        self.full_shape[0] - min_x, self.full_shape[1] - min_y, *self.full_shape[2:])
+        return
+
 
 def _combine_block(
     _, block_tiles, block_weights, circular_mean, *args, block_info=None, **kwargs
@@ -298,7 +303,7 @@ def _combine_block(
     paints = block_tiles[chunk_id]
     weights = block_weights[chunk_id]
     shape = block_info[None]['chunk-shape']
-    
+
     if not paints:
         return np.broadcast_to(np.zeros((), dtype=np.float32), shape)
     total_paint = da.sum(da.stack(paints, axis=0), axis=0)
@@ -306,9 +311,9 @@ def _combine_block(
     # For 3D data, total_weight should be broadcasted 
     if len(total_paint.shape) > 2:
         expand_dim = len(total_paint.shape) - len(total_weight.shape)
-        total_weight = total_weight.reshape(total_weight.shape + (1,)*expand_dim)
+        total_weight = total_weight.reshape(total_weight.shape + (1,) * expand_dim)
     normalized = total_paint / total_weight
-    
+
     if not circular_mean:
         return normalized
     return da.rad2deg(da.arctan2(normalized[..., 1], normalized[..., 0])) / 2
@@ -344,33 +349,35 @@ def _normalize_tile_overlap(
     Tuple[int, int]
         (x_overlap, y_overlap) in pixels.
     """
-    
     # Handle tuple case
     if isinstance(tile_overlap, tuple):
         if len(tile_overlap) != 2:
-            raise ValueError("tile_overlap tuple must have 2 elements (x_overlap, y_overlap)")
+            raise ValueError(
+                "tile_overlap tuple must have 2 elements (x_overlap, y_overlap)")
         x_overlap_val, y_overlap_val = tile_overlap
     else:
         x_overlap_val = y_overlap_val = tile_overlap
-    
+
     # Convert to pixels if float (percentile)
     if isinstance(x_overlap_val, float):
         if not (0 < x_overlap_val < 1):
-            raise ValueError(f"Float tile_overlap must be in range (0, 1), got {x_overlap_val}")
+            raise ValueError(
+                f"Float tile_overlap must be in range (0, 1), got {x_overlap_val}")
         x_overlap = int(tile_width * x_overlap_val)
     else:
         x_overlap = int(x_overlap_val)
-    
+
     if isinstance(y_overlap_val, float):
         if not (0 < y_overlap_val < 1):
-            raise ValueError(f"Float tile_overlap must be in range (0, 1), got {y_overlap_val}")
+            raise ValueError(
+                f"Float tile_overlap must be in range (0, 1), got {y_overlap_val}")
         y_overlap = int(tile_height * y_overlap_val)
     else:
         y_overlap = int(y_overlap_val)
-    
+
     if x_overlap < 0 or y_overlap < 0:
         raise ValueError("Overlap must be non-negative.")
-    
+
     return x_overlap, y_overlap
 
 
@@ -391,10 +398,10 @@ def stitch_tiles(
     """
     if not tile_infos:
         raise ValueError("No tiles provided")
-    
+
     if chunk_size is None:
         chunk_size = tile_infos[0].image.shape[:2]
-    
+
     mosaic_info = MosaicInfo(
         tiles=tile_infos,
         full_shape=full_shape,
@@ -402,5 +409,5 @@ def stitch_tiles(
         chunk_size=chunk_size,
         circular_mean=circular_mean,
     )
-    
+
     return mosaic_info.stitch()
