@@ -75,6 +75,11 @@ pythonpath = [
 testpaths = [
   "tests"
 ]
+markers = [
+  "heavy: marks tests as slow or data-intensive",
+  "golden: regenerate golden Zarr archives"
+]
+addopts = "-m 'not heavy and not golden'"
 
 [tool.mypy]
 ignore_missing_imports = true
