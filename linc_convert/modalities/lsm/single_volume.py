@@ -84,7 +84,7 @@ def convert(
     if nii_config.nii:
         header = build_nifti_header(
             zgroup=zgroup,
-            voxel_size_zyx=tuple(1, 1, 1),
+            voxel_size_zyx=[1, 1, 1],
             unit="um",
             nii_config=nii_config,
         )
