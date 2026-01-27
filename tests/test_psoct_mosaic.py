@@ -49,11 +49,7 @@ def mosaic_tiles(tmp_path):
             tile_path = base_dir / f"tile_y{y_idx}_x{x_idx}.mat"
             savemat(str(tile_path), {"image": tile_data})
 
-            tiles.append({
-                "x": x,
-                "y": y,
-                "filepath": f"tile_y{y_idx}_x{x_idx}.mat"
-            })
+            tiles.append({"x": x, "y": y, "filepath": f"tile_y{y_idx}_x{x_idx}.mat"})
 
     # Create YAML file
     yaml_path = tmp_path / "tile_info.yaml"
@@ -65,9 +61,9 @@ def mosaic_tiles(tmp_path):
             "tile_overlap": 0.2,
             "clip_x": 0,
             "clip_y": 0,
-            "file_key": "image"
+            "file_key": "image",
         },
-        "tiles": tiles
+        "tiles": tiles,
     }
 
     with open(yaml_path, "w") as f:
@@ -145,7 +141,7 @@ def test_psoct_mosaic_convert(tmp_path, mosaic_tiles, zarr_version, driver):
 
 def test_psoct_mosaic_with_mask(
     tmp_path, mosaic_tiles, mosaic_mask, zarr_version, driver
-    ):
+):
     """Test psoct.mosaic with mask applied."""
     output = tmp_path / "mosaic_masked.nii.zarr"
 
@@ -165,7 +161,7 @@ def test_psoct_mosaic_with_mask(
 
 def test_psoct_mosaic_with_focus_plane(
     tmp_path, mosaic_tiles, mosaic_focus_plane, zarr_version, driver
-    ):
+):
     """Test psoct.mosaic with focus plane cropping."""
     output = tmp_path / "mosaic_focus.nii.zarr"
 

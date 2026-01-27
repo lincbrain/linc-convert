@@ -6,7 +6,6 @@ import zarr.storage
 from utils.compare_file import assert_zarr_equal
 
 from linc_convert.modalities.lsm import strip
-from test_lsm_spool import spool_dat
 
 
 def _get_first_strip_dir(root):
@@ -48,5 +47,3 @@ def test_lsm_strip_regen_golden(tmp_path, spool_dat, zarr_version):
     expected_zarr = f"data/lsm_strip_zarr{zarr_version}.nii.zarr.zip"
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
-
-

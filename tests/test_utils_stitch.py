@@ -1,6 +1,7 @@
 """
 Unit tests for linc_convert.utils.stitch module.
 """
+
 import dask.array as da
 import numpy as np
 import pytest
@@ -80,12 +81,10 @@ class TestMosaicInfo:
         """Test creating 2D MosaicInfo from tiles."""
         # Create two small tiles
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
+            x=0, y=0, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
         )
         tile2 = TileInfo(
-            x=5, y=5,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 2
+            x=5, y=5, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 2
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -103,12 +102,10 @@ class TestMosaicInfo:
         """Test creating 3D MosaicInfo from tiles."""
         # Create two small 3D tiles
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32)
+            x=0, y=0, image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32)
         )
         tile2 = TileInfo(
-            x=5, y=5,
-            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 2
+            x=5, y=5, image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 2
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -125,12 +122,10 @@ class TestMosaicInfo:
         """Test normalize_tile_coordinates method."""
         # Create tiles with non-zero minimum coordinates
         tile1 = TileInfo(
-            x=10, y=20,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
+            x=10, y=20, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
         )
         tile2 = TileInfo(
-            x=15, y=25,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
+            x=15, y=25, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32)
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -161,12 +156,12 @@ class TestMosaicInfo:
         """Test stitching 2D tiles with simple overlap."""
         # Create two overlapping tiles
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
+            x=0, y=0, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
         )
         tile2 = TileInfo(
-            x=5, y=5,  # 5 pixel overlap in both dimensions
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20
+            x=5,
+            y=5,  # 5 pixel overlap in both dimensions
+            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20,
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -197,12 +192,12 @@ class TestMosaicInfo:
     def test_stitch_2d_no_overlap(self):
         """Test stitching 2D tiles with no overlap."""
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
+            x=0, y=0, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
         )
         tile2 = TileInfo(
-            x=10, y=10,  # No overlap
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20
+            x=10,
+            y=10,  # No overlap
+            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20,
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -224,12 +219,14 @@ class TestMosaicInfo:
     def test_stitch_3d(self):
         """Test stitching 3D tiles."""
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 10
+            x=0,
+            y=0,
+            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 10,
         )
         tile2 = TileInfo(
-            x=5, y=5,
-            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 20
+            x=5,
+            y=5,
+            image=da.ones((10, 10, 5), chunks=(5, 5, 5), dtype=np.float32) * 20,
         )
 
         mosaic = MosaicInfo.from_tiles(
@@ -252,13 +249,15 @@ class TestMosaicInfo:
         # Create tiles with angle values (in degrees)
         # Use simple angles for easy verification
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.full((10, 10), chunks=(5, 5), dtype=np.float32, fill_value=0.0)
+            x=0,
+            y=0,
+            image=da.full((10, 10), chunks=(5, 5), dtype=np.float32, fill_value=0.0),
             # 0 degrees
         )
         tile2 = TileInfo(
-            x=5, y=5,
-            image=da.full((10, 10), chunks=(5, 5), dtype=np.float32, fill_value=180.0)
+            x=5,
+            y=5,
+            image=da.full((10, 10), chunks=(5, 5), dtype=np.float32, fill_value=180.0),
             # 180 degrees
         )
 
@@ -292,12 +291,10 @@ class TestStitchTiles:
     def test_stitch_tiles_backward_compat(self):
         """Test that stitch_tiles produces same result as MosaicInfo.stitch()."""
         tile1 = TileInfo(
-            x=0, y=0,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
+            x=0, y=0, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 10
         )
         tile2 = TileInfo(
-            x=5, y=5,
-            image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20
+            x=5, y=5, image=da.ones((10, 10), chunks=(5, 5), dtype=np.float32) * 20
         )
 
         # Create MosaicInfo and stitch
@@ -319,9 +316,7 @@ class TestStitchTiles:
 
         # Results should be the same
         np.testing.assert_array_almost_equal(
-            result1.compute(),
-            result2.compute(),
-            decimal=5
+            result1.compute(), result2.compute(), decimal=5
         )
 
     def test_stitch_tiles_empty(self):

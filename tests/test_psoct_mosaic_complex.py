@@ -15,7 +15,7 @@ from linc_convert.modalities.psoct import mosaic_complex
 def mosaic_complex_tiles(tmp_path):
     """
     Create synthetic complex 3D tiles for mosaic_complex testing.
-    
+
     Each tile has shape (4 * raw_tile_width, tile_height, tile_width) where
     the first dimension is split into 4 parts: j1r, j1i, j2r, j2i.
     """
@@ -38,8 +38,9 @@ def mosaic_complex_tiles(tmp_path):
             # Create synthetic complex data
             # Shape: (4 * raw_tile_width, tile_height, tile_width)
             # Split into: j1r, j1i, j2r, j2i
-            tile_data = np.zeros((4 * raw_tile_width, tile_height, depth),
-                                 dtype=np.float32)
+            tile_data = np.zeros(
+                (4 * raw_tile_width, tile_height, depth), dtype=np.float32
+            )
 
             # Fill with synthetic data that varies by position
             for i in range(4 * raw_tile_width):
@@ -53,11 +54,7 @@ def mosaic_complex_tiles(tmp_path):
             tile_path = base_dir / f"tile_y{y_idx}_x{x_idx}.mat"
             savemat(str(tile_path), {"complex3d": tile_data})
 
-            tiles.append({
-                "x": x,
-                "y": y,
-                "filepath": f"tile_y{y_idx}_x{x_idx}.mat"
-            })
+            tiles.append({"x": x, "y": y, "filepath": f"tile_y{y_idx}_x{x_idx}.mat"})
 
     # Create YAML file
     yaml_path = tmp_path / "tile_info.yaml"
@@ -74,9 +71,9 @@ def mosaic_complex_tiles(tmp_path):
             "flip_z": False,
             "clip_x": 0,
             "clip_y": 0,
-            "file_key": "complex3d"
+            "file_key": "complex3d",
         },
-        "tiles": tiles
+        "tiles": tiles,
     }
 
     with open(yaml_path, "w") as f:
@@ -87,7 +84,7 @@ def mosaic_complex_tiles(tmp_path):
 
 def test_psoct_mosaic_complex_convert(
     tmp_path, mosaic_complex_tiles, zarr_version, driver
-    ):
+):
     """Test psoct.mosaic_complex conversion."""
     dbi_output = tmp_path / "dbi.nii.zarr"
     o3d_output = tmp_path / "o3d.nii.zarr"
@@ -114,7 +111,7 @@ def test_psoct_mosaic_complex_convert(
 @pytest.mark.golden
 def test_psoct_mosaic_complex_regen_golden(
     tmp_path, mosaic_complex_tiles, zarr_version
-    ):
+):
     """Regenerate golden archives for psoct.mosaic_complex."""
     dbi_output = tmp_path / "dbi_output.nii.zarr"
     o3d_output = tmp_path / "o3d_output.nii.zarr"
