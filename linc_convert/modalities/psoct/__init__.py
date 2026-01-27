@@ -6,6 +6,6 @@ try:
 
     __all__ = ["cli", "multi_slice", "single_volume", "mosaic", "mosaic_complex"]
 
-    from . import cli, multi_slice, single_volume, mosaic, mosaic_complex
+    from . import cli, mosaic, mosaic_complex, multi_slice, single_volume
 except ImportError:
     pass

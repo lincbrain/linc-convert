@@ -5,6 +5,7 @@ Example input files can be found at
 https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 %2Fmicr%2Fsample18_run10__y10_z01_HR&page=1
 """
+
 import logging
 
 # stdlib
@@ -233,4 +234,3 @@ def convert(
         omz.write_nifti_header(header)
 
     logger.info("Conversion complete.")
-

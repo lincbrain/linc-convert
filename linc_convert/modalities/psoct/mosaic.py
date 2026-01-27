@@ -1,6 +1,4 @@
-"""
-Create 2D mosaic from tile information in YAML file.
-"""
+"""Create 2D mosaic from tile information in YAML file."""
 
 import logging
 import os.path as op
@@ -11,25 +9,25 @@ import dask.array as da
 import nibabel as nib
 import numpy as np
 import yaml
-from PIL import Image
 from cyclopts import Parameter
 from dask.diagnostics import ProgressBar
+from PIL import Image
 from tqdm import tqdm
 
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
-from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.io.zarr.helpers import \
-    _compute_zarr_layout as compute_zarr_layout
+from linc_convert.utils.io.zarr import from_config, open_array, open_group
+from linc_convert.utils.io.zarr.helpers import (
+    _compute_zarr_layout as compute_zarr_layout,
+)
 from linc_convert.utils.nifti_header import build_nifti_header
+from linc_convert.utils.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
     NiftiConfig,
     ZarrConfig,
     autoconfig,
 )
-from linc_convert.utils.io.zarr import open_array, open_group
 
 logger = logging.getLogger(__name__)
 
@@ -46,43 +44,43 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
 def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     """
     Load 2D image from a file with lazy loading support.
-    
+
     Supports:
     - .mat files (MATLAB)
     - Zarr archives (groups or arrays)
     - NIfTI files (with mmap for lazy loading)
     - Other formats via dask-image
     """
-
     # Check for .mat files
-    if file_path.endswith('.mat'):
+    if file_path.endswith(".mat"):
         wrapper = as_arraywrapper(file_path, key)
         if not hasattr(wrapper, "dtype"):
             raise ValueError(f"Could not load array from {file_path}")
         data = wrapper
         return da.from_array(data, chunks="auto")
 
-    if file_path.endswith('.zarr'):
+    if file_path.endswith(".zarr"):
         # Try to open as zarr group first
         try:
             zarr_group = open_group(file_path, mode="r")
             # It's a group, try to get array '0'
-            if '0' in zarr_group.keys():
-                zarr_array_wrapper = zarr_group['0']
-                data = da.from_array(zarr_array_wrapper,
-                                        chunks=zarr_array_wrapper.chunks)
+            if "0" in zarr_group.keys():
+                zarr_array_wrapper = zarr_group["0"]
+                data = da.from_array(
+                    zarr_array_wrapper, chunks=zarr_array_wrapper.chunks
+                )
             else:
                 raise ValueError(
-                    f"Zarr group at {file_path} does not contain array '0'")
+                    f"Zarr group at {file_path} does not contain array '0'"
+                )
         except (ValueError, KeyError):
             # Try as array
             zarr_array_wrapper = open_array(file_path, mode="r")
-            data = da.from_array(zarr_array_wrapper,
-                                    chunks=zarr_array_wrapper.chunks)
+            data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
         return data
 
     # Check for NIfTI files
-    if file_path.endswith(('.nii', '.nii.gz')):
+    if file_path.endswith((".nii", ".nii.gz")):
         img = nib.load(file_path)
         data = da.from_array(img.dataobj, chunks=img.shape)
         return data
@@ -103,7 +101,7 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         raise ValueError(f"Failed to load {file_path} with dask-image: {e}")
 
 
-def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95):
+def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95) -> None:
     """Save image as JPEG."""
     # Normalize to 0-255 range
     img_min = np.nanmin(image)
@@ -118,7 +116,7 @@ def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95):
     pil_image.save(output_path, "JPEG", quality=quality)
 
 
-def _save_tiff(image: np.ndarray, output_path: str):
+def _save_tiff(image: np.ndarray, output_path: str) -> None:
     """Save image as TIFF without normalization - data is saved as-is."""
     try:
         import tifffile
@@ -133,16 +131,16 @@ def _save_tiff(image: np.ndarray, output_path: str):
 def _load_mask(mask_path: str) -> Union[da.Array, np.ndarray]:
     """
     Load a binary mask from a file.
-    
+
     Supports the same formats as _load_image_tile but expects a 2D binary mask.
-    
+
     Parameters
     ----------
     mask_path : str
         Path to mask file.
     keep_lazy : bool
         If True, keep mask as lazy dask array. If False, compute and return numpy array.
-    
+
     Returns
     -------
     Union[da.Array, np.ndarray]
@@ -164,25 +162,25 @@ def _load_mask(mask_path: str) -> Union[da.Array, np.ndarray]:
 def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
     """
     Apply mask to result using optimized Dask operations.
-    
+
     This function structures the computation so that Dask can optimize by
     checking mask values first. The key optimization is:
     1. Align mask and result chunks so blocks correspond
     2. Use map_blocks with a function that can see both mask and result
     3. Structure the computation graph so mask information is available
-    
+
     While Dask's lazy evaluation means result blocks are still in the graph,
     the aligned chunks and structured computation allow the scheduler to
     optimize execution. In practice, the scheduler can prioritize computing
     mask blocks first and use that information to optimize result computation.
-    
+
     Parameters
     ----------
     result : da.Array
         The result array to mask.
     mask : da.Array
         Binary mask (0 or 1) with matching shape.
-    
+
     Returns
     -------
     da.Array
@@ -194,13 +192,13 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
         # Broadcast mask to match result shape
         for _ in range(result.ndim - mask.ndim):
             mask = mask[..., np.newaxis]
-    
+
     # Ensure mask chunks align with result chunks for efficient computation
     # This is critical: aligned chunks allow Dask to see block-level relationships
     # and the scheduler can use mask block information to optimize result computation
     if mask.chunks != result.chunks:
         mask = mask.rechunk(result.chunks[:2] + mask.chunks[2:])
-    
+
     # Use map_blocks with aligned chunks
     # The function receives both result and mask blocks, allowing it to
     # apply the mask efficiently. With aligned chunks, Dask's scheduler
@@ -208,7 +206,7 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
     def _mask_block(result_block, mask_block, *args, block_info=None, **kwargs):
         """
         Apply mask to a block.
-        
+
         With aligned chunks, this function receives corresponding blocks
         of result and mask. The multiplication naturally zeros out where
         mask is 0, and Dask can optimize the computation graph accordingly.
@@ -216,7 +214,7 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
         if mask_block.sum() == 0:
             return np.zeros_like(result_block)
         return result_block * mask_block
-    
+
     # Apply mask using map_blocks with aligned chunks
     # This structure allows Dask to optimize block-level computation
     # The scheduler can use mask information to optimize result computation
@@ -243,12 +241,14 @@ def mosaic2d(
     clip_y: int = 0,
     mask: Annotated[Optional[str], Parameter(name=["--mask", "-m"])] = None,
     focus_plane: Annotated[
-        Optional[str], Parameter(name=["--focus-plane", "-f"])] = None,
+        Optional[str], Parameter(name=["--focus-plane", "-f"])
+    ] = None,
     normalize_focus_plane: bool = False,
     crop_focus_plane_depth: int = 500,
     crop_focus_plane_offset: int = 30,
     voxel_size_xyz: Annotated[
-        Optional[list[float]], Parameter(name=["--voxel-size", "-s"])] = None,
+        Optional[list[float]], Parameter(name=["--voxel-size", "-s"])
+    ] = None,
     zarr_config: ZarrConfig = None,
     general_config: GeneralConfig = None,
     nifti_config: NiftiConfig = None,
@@ -358,7 +358,8 @@ def mosaic2d(
                 image = image[clip_x:, clip_y:, ...]
             else:
                 logger.warning(
-                    f"Unexpected image dimensions {image.ndim} for {file_path}")
+                    f"Unexpected image dimensions {image.ndim} for {file_path}"
+                )
                 continue
 
             # Shift coordinates to account for clipping
@@ -385,24 +386,33 @@ def mosaic2d(
             focus_plane = focus_plane - focus_plane.min()
         focus_plane = focus_plane + crop_focus_plane_offset
         if clip_x or clip_y:
-            focus_plane=  focus_plane[clip_x:,clip_y:]
+            focus_plane = focus_plane[clip_x:, clip_y:]
         z = np.arange(crop_focus_plane_depth, dtype=np.int32)[None, None, :]
         idx = z + focus_plane[..., None]
         idx = idx[..., None]
+
         def apply_focus_plane(image):
             nonlocal idx
             result = np.take_along_axis(image, idx, axis=2)
             return result
 
         all_images = da.stack([tile.image for tile in tile_infos], axis=-1)
-        result_shape = (
-            all_images.shape[0], all_images.shape[1], crop_focus_plane_depth,
-            all_images.shape[3])
-        all_images = all_images.map_blocks(apply_focus_plane, dtype=all_images.dtype,
-                                           chunks=(
-                                               all_images.chunks[0],
-                                               all_images.chunks[1],
-                                               crop_focus_plane_depth, 1))
+        (
+            all_images.shape[0],
+            all_images.shape[1],
+            crop_focus_plane_depth,
+            all_images.shape[3],
+        )
+        all_images = all_images.map_blocks(
+            apply_focus_plane,
+            dtype=all_images.dtype,
+            chunks=(
+                all_images.chunks[0],
+                all_images.chunks[1],
+                crop_focus_plane_depth,
+                1,
+            ),
+        )
         for i, tile in enumerate(tile_infos):
             tile.image = all_images[..., i]
     # Create MosaicInfo for 2D mosaic - dimensions and coordinates extracted from tiles
@@ -426,9 +436,11 @@ def mosaic2d(
         try:
             # Load mask as lazy dask array for optimization
             mask_array = _load_mask(mask)
-            
+
             # Check if mask dimensions match result (accounting for broadcasting)
-            mask_2d_shape = mask_array.shape[:2] if mask_array.ndim >= 2 else mask_array.shape
+            mask_2d_shape = (
+                mask_array.shape[:2] if mask_array.ndim >= 2 else mask_array.shape
+            )
             result_2d_shape = result.shape[:2] if result.ndim >= 2 else result.shape
             if mask_2d_shape != result_2d_shape:
                 logger.error(
@@ -477,17 +489,19 @@ def mosaic2d(
         logger.info(f"Saving to Zarr: {general_config.out}")
 
         # Compute zarr layout for 2D
-        chunk, shard = compute_zarr_layout(result.shape, np.float32,
-                                           zarr_config)
+        chunk, shard = compute_zarr_layout(result.shape, np.float32, zarr_config)
 
         # Prepare Zarr group (similar to single_volume.py)
         zgroup = from_config(general_config.out, zarr_config)
 
         # Create array and write data directly (like single_volume.py)
         dataset = zgroup.create_array(
-            "0", shape=result.shape, dtype=np.float32, chunk=chunk,
+            "0",
+            shape=result.shape,
+            dtype=np.float32,
+            chunk=chunk,
             shard=shard,
-            zarr_config=zarr_config
+            zarr_config=zarr_config,
         )
         # Write data directly using indexing (similar to single_volume.py)
         if isinstance(result, da.Array):
@@ -507,8 +521,9 @@ def mosaic2d(
         zgroup.generate_pyramid()
         logger.info("Finished generating pyramid")
         logger.info("Writing OME-Zarr metadata")
-        zgroup.write_ome_metadata(["z", "y", "x"], space_scale=voxel_size_xyz[::-1],
-                                  space_unit="millimeter")
+        zgroup.write_ome_metadata(
+            ["z", "y", "x"], space_scale=voxel_size_xyz[::-1], space_unit="millimeter"
+        )
 
         if nifti_config and nifti_config.nii:
             header = build_nifti_header(
@@ -518,7 +533,6 @@ def mosaic2d(
                 nii_config=nifti_config,
             )
             zgroup.write_nifti_header(header)
-
 
     else:
         logger.info("Skipping Zarr output (no output path specified)")

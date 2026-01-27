@@ -19,12 +19,13 @@ from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.modalities.psoct.single_tile import process_complex3d
-from linc_convert.utils.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.io.zarr.helpers import \
-    _compute_zarr_layout as compute_zarr_layout
+from linc_convert.utils.io.zarr.helpers import (
+    _compute_zarr_layout as compute_zarr_layout,
+)
 from linc_convert.utils.nifti_header import build_nifti_header
+from linc_convert.utils.stitch import MosaicInfo, TileInfo
 from linc_convert.utils.unit import to_ome_unit
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
@@ -50,22 +51,21 @@ def _load_tile_info_yaml(yaml_file: str) -> dict:
 
 def _load_complex_tile(file_path: str, key: str = None) -> da.Array:
     """Load complex 3D data from a file."""
-    if file_path.endswith('.mat'):
+    if file_path.endswith(".mat"):
         wrapper = as_arraywrapper(file_path, key)
         if not hasattr(wrapper, "dtype"):
             raise ValueError(f"Could not load array from {file_path}")
         data = wrapper
-    elif file_path.endswith('.nii') or file_path.endswith('.nii.gz'):
+    elif file_path.endswith(".nii") or file_path.endswith(".nii.gz"):
         data = nib.load(file_path).dataobj
     return da.from_array(data, chunks=data.shape)
 
 
-def _shift_focus(
-    tile: da.Array, focus_plane: np.ndarray, s_max: int
-) -> da.Array:
+def _shift_focus(tile: da.Array, focus_plane: np.ndarray, s_max: int) -> da.Array:
     """Shift tile depth based on focus plane."""
     if len(focus_plane.shape) == 2:
         focus_plane = focus_plane[..., None]
+
     # This function will be applied per block using map_blocks
     def shift_block(block, block_info=None):
         nonlocal focus_plane
@@ -75,15 +75,13 @@ def _shift_focus(
         # For simplicity, we'll shift the entire tile
         # pad the sources at the END so indices up to Nz-1 are valid
         pad_width = ((0, 0), (0, 0), (s_max, s_max))
-        block_padded = np.pad(
-            block, pad_width, mode="constant", constant_values=np.nan
-        )
+        block_padded = np.pad(block, pad_width, mode="constant", constant_values=np.nan)
         # build indices for the expanded depth
         z = np.arange(block.shape[-1] + s_max, dtype=np.int32)[None, None, :]
         # Use a subset of focus_plane corresponding to this block
         # For now, use the full focus_plane (assuming it matches tile spatial
         # dimensions)
-        
+
         idx = z + focus_plane
         result = np.take_along_axis(block_padded, idx, axis=2)
         return result
@@ -154,7 +152,8 @@ def mosaic_complex(
 
     if tile_width is None or tile_height is None or depth is None:
         raise ValueError(
-            "tile_width, tile_height, and depth must be specified in metadata")
+            "tile_width, tile_height, and depth must be specified in metadata"
+        )
 
     # Load focus plane if provided
     focus_plane_data = None
@@ -193,8 +192,9 @@ def mosaic_complex(
     full_height = int(np.nanmax(y_coords) + tile_height)
 
     # Compute zarr layout
-    chunk, shard = compute_zarr_layout((depth, full_height, full_width), np.float32,
-                                       zarr_config)
+    chunk, shard = compute_zarr_layout(
+        (depth, full_height, full_width), np.float32, zarr_config
+    )
 
     # Process each tile and collect results
     dbi_tiles = []
@@ -232,7 +232,6 @@ def mosaic_complex(
 
         # Process complex data to get dBI, R3D, O3D
         dBI3D, R3D, O3D = process_complex3d(complex3d, offset=100, flip_phi=False)
-
 
         # Apply transformations
         if flip_z:
@@ -305,8 +304,9 @@ def mosaic_complex(
     results = []
     zgroups = []
 
-    for out, res in zip([dbi_output, r3d_output, o3d_output],
-                        [dBI_result, R3D_result, O3D_result]):
+    for out, res in zip(
+        [dbi_output, r3d_output, o3d_output], [dBI_result, R3D_result, O3D_result]
+    ):
         if shard:
             res = da.rechunk(res, chunks=shard)
         else:
@@ -315,8 +315,9 @@ def mosaic_complex(
         zgroup = from_config(out, zarr_config)
         zgroups.append(zgroup)
 
-        writer = zgroup.create_array("0", shape=res.shape, dtype=np.float32,
-                                     zarr_config=zarr_config)
+        writer = zgroup.create_array(
+            "0", shape=res.shape, dtype=np.float32, zarr_config=zarr_config
+        )
         writers.append(writer)
         results.append(res)
 
@@ -329,11 +330,15 @@ def mosaic_complex(
     logger.info("Finished stitching, generating pyramid and metadata")
 
     for zgroup in zgroups:
-        zgroup.generate_pyramid(mode="mean",
-                                no_pyramid_axis=zarr_config.no_pyramid_axis)
+        zgroup.generate_pyramid(
+            mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis
+        )
         logger.info("Write OME-Zarr multiscale metadata")
-        zgroup.write_ome_metadata(axes=["z", "y", "x"], space_scale=scan_resolution,
-                                  space_unit=to_ome_unit(unit))
+        zgroup.write_ome_metadata(
+            axes=["z", "y", "x"],
+            space_scale=scan_resolution,
+            space_unit=to_ome_unit(unit),
+        )
 
         if not nifti_config.nii:
             continue

@@ -94,7 +94,8 @@ def convert(
     inp_chunk = [min(x, general_config.max_load) for x in inp.shape]
 
     dataset = zgroup.create_array(
-        "0", shape=inp.shape, dtype=np.dtype(inp.dtype), zarr_config=zarr_config)
+        "0", shape=inp.shape, dtype=np.dtype(inp.dtype), zarr_config=zarr_config
+    )
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(

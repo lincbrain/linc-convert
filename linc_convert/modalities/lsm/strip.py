@@ -5,6 +5,7 @@ Example input files can be found at
 https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 %2Fmicr%2Fsample18_run10__y10_z01_HR&page=1
 """
+
 # stdlib
 import logging
 import os.path as op
@@ -50,7 +51,7 @@ def convert(
         Path to the stripe directory, which contains a
         collection of files named `*spool.dat`.
     info_file
-        Path to the info file (.mat), which contains the information 
+        Path to the info file (.mat), which contains the information
         about the scan and the spool files.
     voxel_size
         Voxel size along the X, Y and Z dimensions, in microns.
@@ -61,7 +62,6 @@ def convert(
     nii_config
         NIfTI header related configuration
     """
-
     reader = SpoolSetInterpreter(inp, info_file)
 
     # Set default output path if not provided
@@ -71,8 +71,9 @@ def convert(
 
     # Initialize Zarr group and array
     omz = from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config,
-                             dtype=reader.dtype)
+    array = omz.create_array(
+        "0", shape=fullshape, zarr_config=zarr_config, dtype=reader.dtype
+    )
     logger.info(general_config.out)
     result = reader.assemble()
     result = result.transpose(1, 2, 0)
