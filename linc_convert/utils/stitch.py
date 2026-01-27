@@ -6,7 +6,6 @@ from typing import List, Literal, Optional, Tuple, Union
 
 import dask.array as da
 import numpy as np
-from numpy.typing import ArrayLike
 from tqdm import tqdm
 
 

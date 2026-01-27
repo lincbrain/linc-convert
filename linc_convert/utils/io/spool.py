@@ -13,6 +13,7 @@ https://github.com/CBI-PITT/holis_tools/blob/main/LICENCE)
 # stdlib
 import configparser
 import io
+import logging
 import os
 import warnings
 from glob import glob
