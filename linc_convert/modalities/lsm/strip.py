@@ -5,9 +5,10 @@ Example input files can be found at
 https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 %2Fmicr%2Fsample18_run10__y10_z01_HR&page=1
 """
-import logging
 # stdlib
+import logging
 import os.path as op
+from typing import Optional
 
 # externals
 import cyclopts
@@ -33,7 +34,7 @@ lsm.command(strip)
 @autoconfig
 def convert(
     inp: str,
-    info_file: str,
+    info_file: Optional[str] = None,
     *,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
@@ -64,7 +65,7 @@ def convert(
     reader = SpoolSetInterpreter(inp, info_file)
 
     # Set default output path if not provided
-    general_config.set_default_name(op.basename(info_file))
+    general_config.set_default_name(op.basename(inp))
 
     fullshape = reader.raw_assembled_spool_shape
 
