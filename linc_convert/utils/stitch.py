@@ -131,17 +131,39 @@ class MosaicInfo:
         -------
         da.Array
             Blending ramp as a dask array.
+        
+        Examples
+        --------
+        Example with tile_size=3 and overlap=1:
+        
+        For the left edge (x_overlap=1):
+        - Create ramp of size (overlap+2) = 3: [0.0, 0.5, 1.0]
+        - Remove first and last: [0.5]
+        - Result: edge weight = 0.5 (non-zero)
+        
+        Visual diagram for tile_size=3, overlap=1:
+        
+        Position:  0    1    2
+        Weight:   0.5  1.0  0.5
+                  ↑         ↑
+                edge      edge
+              (non-zero) (non-zero)
+        
+        The full tile weights would be:
+        [0.5, 1.0, 0.5]  (left edge, center, right edge)
         """
         # Create blending ramp
         wx = np.ones(tile_width, dtype=np.float32)
         wy = np.ones(tile_height, dtype=np.float32)
         if x_overlap > 0:
-            wx[:x_overlap] = np.linspace(0, 1, x_overlap, dtype=np.float32)
-            wx[-x_overlap:] = np.linspace(1, 0, x_overlap, dtype=np.float32)
+            ramp_full = np.linspace(0, 1, x_overlap + 2, dtype=np.float32)[1:-1]
+            wx[:x_overlap] = ramp_full
+            wx[-x_overlap:] = ramp_full[::-1]
         
         if y_overlap > 0:
-            wy[:y_overlap] = np.linspace(0, 1, y_overlap, dtype=np.float32)
-            wy[-y_overlap:] = np.linspace(1, 0, y_overlap, dtype=np.float32)
+            ramp_full = np.linspace(0, 1, y_overlap + 2, dtype=np.float32)[1:-1]
+            wy[:y_overlap] = ramp_full
+            wy[-y_overlap:] = ramp_full[::-1]
         
         ramp = np.outer(wx, wy)
         return ramp
