@@ -1,8 +1,8 @@
-"""Create 2D mosaic from tile information in YAML file."""
+"""Create 2D/3D mosaic from tile information in YAML file."""
 
 import logging
 import os.path as op
-from typing import Annotated, Optional, Union
+from typing import Annotated, Any, Dict, List, Optional, Union
 
 import cyclopts
 import dask.array as da
@@ -203,7 +203,13 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
     # The function receives both result and mask blocks, allowing it to
     # apply the mask efficiently. With aligned chunks, Dask's scheduler
     # can see the relationship and optimize block-level computation.
-    def _mask_block(result_block, mask_block, *args, block_info=None, **kwargs):
+    def _mask_block(
+        result_block: da.Array,
+        mask_block: da.Array,
+        *args: List[Any],
+        block_info: Optional[dict] = None,
+        **kwargs: Dict[str, Any],
+    ) -> da.Array:
         """
         Apply mask to a block.
 
@@ -391,7 +397,7 @@ def mosaic2d(
         idx = z + focus_plane[..., None]
         idx = idx[..., None]
 
-        def apply_focus_plane(image):
+        def apply_focus_plane(image: da.Array) -> da.Array:
             nonlocal idx
             result = np.take_along_axis(image, idx, axis=2)
             return result

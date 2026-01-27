@@ -1,4 +1,8 @@
 """
+Create 3D mosaic from tile information in YAML file.
+
+Each tile has dimension (4 * raw_tile_width, tile_height, tile_width).
+
 This module includes components that are based on the
 https://github.com/CarolineMagnain/OCTAnalysis repository (currently private).  We
 have permission from the owner to include the code here.
@@ -7,7 +11,7 @@ have permission from the owner to include the code here.
 import logging
 import os.path as op
 import warnings
-from typing import Annotated
+from typing import Annotated, Optional
 
 import cyclopts
 import dask.array as da
@@ -17,8 +21,8 @@ import yaml
 from cyclopts import Parameter
 from dask.diagnostics import ProgressBar
 
+from linc_convert.modalities.psoct._utils import process_complex3d
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.modalities.psoct.single_tile import process_complex3d
 from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.io.zarr.helpers import (
@@ -67,7 +71,7 @@ def _shift_focus(tile: da.Array, focus_plane: np.ndarray, s_max: int) -> da.Arra
         focus_plane = focus_plane[..., None]
 
     # This function will be applied per block using map_blocks
-    def shift_block(block, block_info=None):
+    def shift_block(block: da.Array, block_info: Optional[dict] = None) -> da.Array:
         nonlocal focus_plane
         if block_info is None:
             return block
