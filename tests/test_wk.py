@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 
+from nibabel.nifti1 import Nifti1Header
 import niizarr
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ def wk_annotation(tmp_path):
         Nifti1Image(image, np.eye(4)),
         Nifti1Image(annotation, np.eye(4)),
     )
-
+    image.header.set_xyzt_units('mm')
     niizarr.nii2zarr(image, tmp_path / "image.nii.zarr", chunk=64)
     niizarr.nii2zarr(annotation, tmp_path / "annotation.nii.zarr", chunk=64)
     wkw_dir = tmp_path / "wkw"
