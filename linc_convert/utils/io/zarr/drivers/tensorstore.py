@@ -439,7 +439,7 @@ def make_kvstore(path: str | os.PathLike) -> dict:
     raise ValueError("Unsupported protocol:", path.protocol)
 
 
-def default_read_config(path: os.PathLike | str) -> dict:
+def default_read_config(path: str | PathLike[str]) -> dict:
     """
     Generate a TensorStore configuration to read an existing Zarr.
 
@@ -450,7 +450,7 @@ def default_read_config(path: os.PathLike | str) -> dict:
     """
     path = UPath(path)
     if not path.protocol:
-        path = "file://" / path
+        path = UPath("file://" + str(path))
     if (path / "zarr.json").exists():
         zarr_version = 3
     elif (path / ".zarray").exists():
@@ -498,7 +498,7 @@ def _detect_metadata(path: PathLike) -> Optional[Tuple[str, int]]:
 
 
 def default_write_config(
-    path: os.PathLike | str,
+    path: str | PathLike[str],
     shape: list[int],
     dtype: np.dtype | str,
     chunk: list[int] = [32],
@@ -530,7 +530,7 @@ def default_write_config(
     """
     path = UPath(path)
     if not path.protocol:
-        path = "file://" / path
+        path = UPath("file://" + str(path))
 
     # Format compressor
     if version == 3 and compressor == "zlib":

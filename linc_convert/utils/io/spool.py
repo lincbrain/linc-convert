@@ -13,6 +13,7 @@ https://github.com/CBI-PITT/holis_tools/blob/main/LICENCE)
 # stdlib
 import configparser
 import io
+import logging
 import os
 import warnings
 from glob import glob
@@ -24,7 +25,7 @@ from scipy.io import loadmat
 
 from linc_convert.utils.math import ceildiv
 
-
+logger = logging.getLogger(__name__)
 class SpoolSetInterpreter:
     """
     Interpreter for a set of spool files produced by a Zyla camera.
@@ -66,7 +67,11 @@ class SpoolSetInterpreter:
             self.spool_shape[2],
             self.spool_shape[0] * len(self.spool_files),
         )
-
+        self.raw_assembled_spool_shape = (
+            self.spool_shape[1],
+            self.spool_shape[2],
+            self.spool_shape[0] * len(self.spool_files),
+        )
     def _load_info_file(self, info_file: str | PathLike[str]) -> None:
         loaded_info = loadmat(info_file)
         info = loaded_info.get("info", None)
@@ -163,7 +168,7 @@ class SpoolSetInterpreter:
     def _load_spool_file(self, spool_file_name: str | PathLike[str]) -> np.ndarray:
         """Load a single spool file into a NumPy array."""
         file = self._make_filename_from_spool_set(spool_file_name)
-        print(f"Reading file {spool_file_name}")
+        logger.debug(f"Reading file {spool_file_name}")
         with open(file, "rb") as f:
             array = np.frombuffer(f.read(), dtype=self.dtype)
         return np.reshape(array, self.spool_shape)
@@ -250,15 +255,10 @@ class SpoolSetInterpreter:
         A NumPy array of shape (frames_total, rows, columns),
         where frames_total = images_per_file * number_of_files.
         """
-        axis_0_shape = self.spool_shape[0]
-        canvas = np.zeros(
-            (axis_0_shape * len(self), *self.spool_shape[1:]), dtype=self.dtype
-        )
-        for idx, spool_file in enumerate(self):
-            start = idx * axis_0_shape
-            stop = start + axis_0_shape
-            canvas[start:stop] = spool_file
-        return canvas
+        chunks = list(self)
+        if not chunks:
+            return np.zeros((0, *self.spool_shape[1:]), dtype=self.dtype)
+        return np.concatenate(chunks, axis=0).astype(self.dtype, copy=False)
 
     # this is the modified version for lsm pipeline
     def assemble_cropped(self) -> np.ndarray:

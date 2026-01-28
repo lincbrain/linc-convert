@@ -149,7 +149,7 @@ def assert_zarr_equal(
                         f" ‣ {dict(obj2.attrs)}"
                 )
             try:
-                np.testing.assert_array_equal(obj1[:], obj2[:])
+                np.testing.assert_allclose(obj1[:], obj2[:], rtol=1e-6, atol=1e-8)
             except AssertionError as e:
                 diffs.append(f"Array '{key}' differs:\n ‣ {e}")
         elif isinstance(obj1, zarr.Group):

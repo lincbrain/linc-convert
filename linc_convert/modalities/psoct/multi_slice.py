@@ -16,7 +16,7 @@ import numpy as np
 
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
-from linc_convert.utils.io.matlab import as_arraywrapper
+from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.nifti_header import build_nifti_header

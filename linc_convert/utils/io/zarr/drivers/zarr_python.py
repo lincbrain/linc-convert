@@ -93,6 +93,15 @@ class ZarrPythonArray(ZarrArray):
         raise AttributeError(
             f"'{self.__class__.__name__}' object has no attribute '{name}'"
         )
+    
+    @classmethod
+    def open(cls, *args, **kwargs) -> "ZarrPythonArray":
+        """Open a Zarr array."""
+        return cls(zarr.open_array(*args, **kwargs))
+    @classmethod
+    def open_array(cls, *args, **kwargs) -> "ZarrPythonArray":
+        """Open a Zarr array."""
+        return cls(zarr.open_array(*args, **kwargs))
 
 
 class ZarrPythonGroup(ZarrGroup):
@@ -116,10 +125,7 @@ class ZarrPythonGroup(ZarrGroup):
         cls, out: str | PathLike[str], zarr_config: ZarrConfig
         ) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
-        if out.startswith("/") or out.startswith("\\"):
-            store = zarr.storage.LocalStore(out)
-        else:
-            store = zarr.storage.FsspecStore(out)
+        store = zarr.storage.LocalStore(out)
         return cls(
             zarr.group(
                 store=store,
@@ -268,6 +274,17 @@ class ZarrPythonGroup(ZarrGroup):
         if data is not None:
             arr[:] = data
         return ZarrPythonArray(arr)
+
+    @classmethod
+    def open(cls, *args, **kwargs) -> "ZarrPythonGroup":
+        """Open a Zarr group."""
+        return cls(zarr.open_group(*args, **kwargs))
+    
+    @classmethod
+    def open_group(cls, *args, **kwargs) -> "ZarrPythonGroup":
+        """Open a Zarr group."""
+        return cls(zarr.open_group(*args, **kwargs))
+    
 
 
 def _make_compressor(
