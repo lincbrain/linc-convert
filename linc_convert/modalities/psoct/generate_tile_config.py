@@ -477,7 +477,8 @@ def generate_tile_config(
         Base directory path for the tiles (default: ./)
     naming_format : str
         Format string for tile filenames. Use {tile_number} or {tile_number:04d}
-        for tile number substitution (default: mosaic_001_tile_{tile_number:04d}_aip.nii)
+        for tile number substitution (default: mosaic_001_tile_{
+        tile_number:04d}_aip.nii)
     out : str
         Output YAML file path (default: tile_config.yaml)
     grid_type : str
@@ -490,7 +491,8 @@ def generate_tile_config(
         - snake-by-rows: Images arranged in a grid, snaking across rows
         - snake-by-columns: Images arranged in a grid, snaking down columns
     order : str, optional
-        Order direction. If not specified, defaults to "right-down" for row-by-row/snake-by-rows,
+        Order direction. If not specified, defaults to "right-down" for
+        row-by-row/snake-by-rows,
         or "down-right" for column-by-column/snake-by-columns.
 
         For row-by-row and snake-by-rows:
@@ -516,7 +518,8 @@ def generate_tile_config(
 
     Generate a 10x10 grid with snake-by-rows pattern:
     ```bash
-    linc-convert psoct generate_tile_config --columns 10 --rows 10 --grid-type snake-by-rows
+    linc-convert psoct generate_tile_config --columns 10 --rows 10 --grid-type
+    snake-by-rows
     ```
 
     Generate with custom tile size and overlap:
@@ -598,10 +601,12 @@ def generate_tile_config(
     print("\nFirst few tiles:")
     for tile in tiles[:5]:
         print(
-            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}"
+            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file="
+            f"{tile['filepath']}"
         )
     print("\nLast few tiles:")
     for tile in tiles[-5:]:
         print(
-            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file={tile['filepath']}"
+            f"Tile {tile['tile_number']}: x={tile['x']}, y={tile['y']}, file="
+            f"{tile['filepath']}"
         )

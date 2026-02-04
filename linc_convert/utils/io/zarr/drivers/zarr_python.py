@@ -95,11 +95,11 @@ class ZarrPythonArray(ZarrArray):
         )
     
     @classmethod
-    def open(cls, *args, **kwargs) -> "ZarrPythonArray":
+    def open(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
         """Open a Zarr array."""
         return cls(zarr.open_array(*args, **kwargs))
     @classmethod
-    def open_array(cls, *args, **kwargs) -> "ZarrPythonArray":
+    def open_array(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
         """Open a Zarr array."""
         return cls(zarr.open_array(*args, **kwargs))
 
@@ -276,12 +276,12 @@ class ZarrPythonGroup(ZarrGroup):
         return ZarrPythonArray(arr)
 
     @classmethod
-    def open(cls, *args, **kwargs) -> "ZarrPythonGroup":
+    def open(cls, *args: Any, **kwargs: Any) -> "ZarrPythonGroup":  # noqa: ANN401
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
     
     @classmethod
-    def open_group(cls, *args, **kwargs) -> "ZarrPythonGroup":
+    def open_group(cls, *args: Any, **kwargs: Any) -> "ZarrPythonGroup":  # noqa: ANN401
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
     

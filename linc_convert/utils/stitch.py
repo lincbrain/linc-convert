@@ -1,8 +1,10 @@
+"""Tile stitching utilities for creating mosaics from overlapping image tiles."""
+
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -11,6 +13,18 @@ from tqdm import tqdm
 
 @dataclass
 class TileInfo:
+    """Information about a single tile in a mosaic.
+
+    Attributes
+    ----------
+    x : int
+        X coordinate of the tile's top-left corner.
+    y : int
+        Y coordinate of the tile's top-left corner.
+    image : da.Array
+        The tile image data as a dask array.
+    """
+
     x: int
     y: int
     image: da.Array
@@ -37,10 +51,8 @@ class MosaicInfo:
         tile_overlap: Union[
             float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]] = "auto",
     ) -> "MosaicInfo":
-        """
-        Create MosaicInfo from tiles, extracting dimensions and coordinates
-        automatically.
-        
+        """Create MosaicInfo from tiles, extracting dimensions and coordinates.
+
         Parameters
         ----------
         tiles : List[TileInfo]
@@ -51,9 +63,11 @@ class MosaicInfo:
             Chunk size for dask arrays. If None, uses tile dimensions.
         circular_mean : bool
             Whether to use circular mean for blending.
-        tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]]
+        tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int],
+        Literal["auto"]]
             Overlap specification:
-            - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on each side)
+            - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on
+            each side)
             - int: number of pixels overlap on each side
             - Tuple[float, float]: percentiles for (x, y) dimensions
             - Tuple[int, int]: pixel counts for (x, y) dimensions
@@ -193,11 +207,6 @@ class MosaicInfo:
             chunks=(pw, ph, *no_chunk_dim),
             dtype=np.float32
         )
-        da.zeros(
-            self.full_shape[:2],
-            chunks=(pw, ph),
-            dtype=np.float32
-        )
 
         # Collect per-chunk pieces
         block_tiles = defaultdict(list)
@@ -285,20 +294,34 @@ class MosaicInfo:
         return canvas
 
     def normalize_tile_coordinates(self) -> None:
+        """Normalize tile coordinates to start from (0, 0).
+
+        Adjusts all tile coordinates so that the minimum x and y coordinates
+        become 0, and updates the full_shape accordingly.
+        """
         min_x = np.min([tile.x for tile in self.tiles])
         min_y = np.min([tile.y for tile in self.tiles])
         for tile in self.tiles:
             tile.x -= min_x
             tile.y -= min_y
         self.full_shape = (
-        self.full_shape[0] - min_x, self.full_shape[1] - min_y, *self.full_shape[2:])
+            self.full_shape[0] - min_x, self.full_shape[1] - min_y,
+            *self.full_shape[2:])
         return
 
 
 def _combine_block(
-    _, block_tiles, block_weights, circular_mean, *args, block_info=None, **kwargs
-):
+    _: da.Array,
+    block_tiles: Dict[Tuple[int, int], List[da.Array]],
+    block_weights: Dict[Tuple[int, int], List[da.Array]],
+    circular_mean: bool,
+    *args: Any,  # noqa: ANN401
+    block_info: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,  # noqa: ANN401
+) -> Union[da.Array, np.ndarray]:
     """Combine overlapping tile blocks with weighted averaging."""
+    if block_info is None:
+        raise ValueError("block_info is required")
     chunk_id = tuple(block_info[None]['chunk-location'][:2])
     paints = block_tiles[chunk_id]
     weights = block_weights[chunk_id]
@@ -308,7 +331,7 @@ def _combine_block(
         return np.broadcast_to(np.zeros((), dtype=np.float32), shape)
     total_paint = da.sum(da.stack(paints, axis=0), axis=0)
     total_weight = da.sum(da.stack(weights, axis=0), axis=0)
-    # For 3D data, total_weight should be broadcasted 
+    # For 3D data, total_weight should be broadcasted
     if len(total_paint.shape) > 2:
         expand_dim = len(total_paint.shape) - len(total_weight.shape)
         total_weight = total_weight.reshape(total_weight.shape + (1,) * expand_dim)
@@ -331,7 +354,8 @@ def _normalize_tile_overlap(
     ----------
     tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int]]
         Overlap specification:
-        - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on each side)
+        - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on each
+        side)
         - int: number of pixels overlap on each side
         - Tuple[float, float]: percentiles for (x, y) dimensions
         - Tuple[int, int]: pixel counts for (x, y) dimensions
@@ -388,7 +412,7 @@ def stitch_tiles(
     blend_ramp: Union[np.ndarray, da.Array],
     chunk_size: Optional[Tuple[int, int]] = None,
     circular_mean: bool = False,
-    **_
+    **_: Any,  # noqa: ANN401
 ) -> da.Array:
     """
     Stitch tiles into a mosaic (backward compatibility wrapper).
