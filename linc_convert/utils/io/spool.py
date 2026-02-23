@@ -20,7 +20,9 @@ from glob import glob
 from os import PathLike
 from typing import Iterator
 
+import dask.array as da
 import numpy as np
+from dask import delayed
 from scipy.io import loadmat
 
 from linc_convert.utils.math import ceildiv
@@ -246,28 +248,37 @@ class SpoolSetInterpreter:
             else:
                 warnings.warn(f"{tmp} not located in spool directory")
 
-    def assemble(self) -> np.ndarray:
+    def assemble(self) -> da.Array:
         """
-        Assemble all spool files into a single 3D volume.
+        Assemble all spool files into a single 3D volume (lazy Dask array).
 
         Returns
         -------
-        A NumPy array of shape (frames_total, rows, columns),
+        A Dask array of shape (frames_total, rows, columns),
         where frames_total = images_per_file * number_of_files.
         """
-        chunks = list(self)
-        if not chunks:
-            return np.zeros((0, *self.spool_shape[1:]), dtype=self.dtype)
-        return np.concatenate(chunks, axis=0).astype(self.dtype, copy=False)
+        if not self.spool_files:
+            empty = np.zeros((0, *self.spool_shape[1:]), dtype=self.dtype)
+            return da.from_array(empty)
+        delayed_chunks = [
+            da.from_delayed(
+                delayed(self._load_spool_file)(name),
+                shape=self.spool_shape,
+                dtype=self.dtype,
+            )
+            for name in self.spool_files
+        ]
+        return da.concatenate(delayed_chunks, axis=0)
 
     # this is the modified version for lsm pipeline
-    def assemble_cropped(self) -> np.ndarray:
+    def assemble_cropped(self) -> da.Array:
         """
-        Assemble and transpose the volume, then crop to original depth.
+        Assemble and transpose the volume, then crop to original depth (lazy Dask array).
 
         Returns
         -------
-        A NumPy array transposed to (height, width, frames)
+        A Dask array transposed to (height, width, frames)
         and cropped to self.numDepths along the first axis.
         """
-        return self.assemble().transpose(1, 2, 0)[: self.numDepths, :, :]
+        volume = self.assemble()
+        return volume.transpose(1, 2, 0)[: self.numDepths, :, :]

@@ -13,6 +13,7 @@ from typing import Optional
 
 # externals
 import cyclopts
+import dask.array as da
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -77,9 +78,8 @@ def convert(
     logger.info(general_config.out)
     result = reader.assemble()
     result = result.transpose(1, 2, 0)
-    array[:] = result[:]
     print("Write level 0 with shape", fullshape)
-
+    da.store(result, array, compute=True)
     voxel_size = list(map(float, reversed(voxel_size)))
     # Generate Zarr pyramid and metadata
     omz.generate_pyramid(levels=zarr_config.levels)
