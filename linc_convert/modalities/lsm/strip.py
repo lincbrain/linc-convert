@@ -78,6 +78,11 @@ def convert(
     logger.info(general_config.out)
     result = reader.assemble()
     result = result.transpose(1, 2, 0)
+    if array.shards:
+        result = da.rechunk(result, array.shards)
+    else:
+        result = da.rechunk(result, array.chunks)
+
     print("Write level 0 with shape", fullshape)
     da.store(result, array, compute=True)
     voxel_size = list(map(float, reversed(voxel_size)))
