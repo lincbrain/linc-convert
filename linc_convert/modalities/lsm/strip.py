@@ -14,7 +14,8 @@ from typing import Optional
 # externals
 import cyclopts
 import dask.array as da
-
+import numpy as np
+from PIL import Image
 # internals
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.spool import SpoolSetInterpreter
@@ -31,12 +32,20 @@ logger = logging.getLogger(__name__)
 strip = cyclopts.App(name="strip", help_format="markdown")
 lsm.command(strip)
 
+def _save_mip_image(result: da.Array, mip_image_output: str) -> None:
+    """Save the maximum intensity projection of the result as an image."""
+    mip = da.nanmax(result, axis=0)
+    mip = mip.compute()
+    mip = mip.astype(np.uint16)
+    Image.fromarray(mip).save(mip_image_output)
+
 
 @strip.default
 @autoconfig
 def convert(
     inp: str,
     info_file: Optional[str] = None,
+    mip_image_output: Optional[str] = None,
     *,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
@@ -85,6 +94,8 @@ def convert(
 
     print("Write level 0 with shape", fullshape)
     da.store(result, array, compute=True)
+    if mip_image_output:
+        _save_mip_image(result, mip_image_output)
     voxel_size = list(map(float, reversed(voxel_size)))
     # Generate Zarr pyramid and metadata
     omz.generate_pyramid(levels=zarr_config.levels)
