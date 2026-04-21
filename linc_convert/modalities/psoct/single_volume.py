@@ -16,7 +16,7 @@ import numpy as np
 from linc_convert.modalities.psoct._utils import make_json
 from linc_convert.modalities.psoct.cli import psoct
 from linc_convert.utils.chunk_processing import chunk_slice_generator
-from linc_convert.utils.io.matlab import as_arraywrapper
+from linc_convert.utils.io.matlab_array_wrapper import as_arraywrapper
 from linc_convert.utils.io.zarr import from_config
 from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.unit import to_ome_unit
@@ -94,7 +94,8 @@ def convert(
     inp_chunk = [min(x, general_config.max_load) for x in inp.shape]
 
     dataset = zgroup.create_array(
-        "0", shape=inp.shape, dtype=np.dtype(inp.dtype), zarr_config=zarr_config)
+        "0", shape=inp.shape, dtype=np.dtype(inp.dtype), zarr_config=zarr_config
+    )
 
     for idx, slc in chunk_slice_generator(inp.shape, inp_chunk):
         logger.info(

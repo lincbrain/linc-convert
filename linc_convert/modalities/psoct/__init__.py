@@ -4,8 +4,22 @@ try:
     import h5py as _h5py  # noqa: F401
     import scipy as _scipy  # noqa: F401
 
-    __all__ = ["cli", "multi_slice", "single_volume"]
+    __all__ = [
+        "cli",
+        "multi_slice",
+        "single_volume",
+        "mosaic",
+        "mosaic_complex",
+        "generate_tile_config",
+    ]
 
-    from . import cli, multi_slice, single_volume
+    from . import (
+        cli,
+        generate_tile_config,
+        mosaic,
+        mosaic_complex,
+        multi_slice,
+        single_volume,
+    )
 except ImportError:
     pass
