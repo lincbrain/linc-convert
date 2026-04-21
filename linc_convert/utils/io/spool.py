@@ -28,8 +28,6 @@ from scipy.io import loadmat
 from linc_convert.utils.math import ceildiv
 
 logger = logging.getLogger(__name__)
-
-
 class SpoolSetInterpreter:
     """
     Interpreter for a set of spool files produced by a Zyla camera.
@@ -51,8 +49,7 @@ class SpoolSetInterpreter:
             self.type = "dir"
             self.parent = spool_set_path
             self.file_list = glob(os.path.join(spool_set_path, "*"))
-            self.spool_set = tuple([os.path.split(x)[-1]
-                                   for x in self.file_list])
+            self.spool_set = tuple([os.path.split(x)[-1] for x in self.file_list])
         else:
             assert False, "The input data structure is not a ZIP file or Directory"
 
@@ -77,7 +74,6 @@ class SpoolSetInterpreter:
             self.spool_shape[2],
             self.spool_shape[0] * len(self.spool_files),
         )
-
     def _load_info_file(self, info_file: str | PathLike[str]) -> None:
         loaded_info = loadmat(info_file)
         info = loaded_info.get("info", None)
@@ -95,8 +91,7 @@ class SpoolSetInterpreter:
             return None
         num_frames_per_spool = int(self.config["multiimage"]["ImagesPerFile"])
         num_frames_to_load = num_total_frames - num_bg_frames
-        num_spool_files_to_load = ceildiv(
-            num_frames_to_load, num_frames_per_spool)
+        num_spool_files_to_load = ceildiv(num_frames_to_load, num_frames_per_spool)
         self.spool_files = self.spool_files[:num_spool_files_to_load]
 
     def _make_filename_from_spool_set(
@@ -278,7 +273,7 @@ class SpoolSetInterpreter:
     # this is the modified version for lsm pipeline
     def assemble_cropped(self) -> da.Array:
         """
-        Assemble and transpose the volume, crop to original depth (lazy Dask array).
+        Assemble and transpose the volume, then crop to original depth (lazy Dask array).
 
         Returns
         -------

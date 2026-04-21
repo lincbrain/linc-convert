@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -49,7 +49,7 @@ class MosaicInfo:
         chunk_size: Optional[Tuple[int, int]] = None,
         circular_mean: bool = False,
         tile_overlap: Union[
-            float, int, Tuple[float, float], Tuple[int, int]] = 0.2,
+            float, int, Tuple[float, float], Tuple[int, int], Literal["auto"]] = "auto",
     ) -> "MosaicInfo":
         """Create MosaicInfo from tiles, extracting dimensions and coordinates.
 
@@ -63,14 +63,16 @@ class MosaicInfo:
             Chunk size for dask arrays. If None, uses tile dimensions.
         circular_mean : bool
             Whether to use circular mean for blending.
-        tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int]
+        tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int],
+        Literal["auto"]]
             Overlap specification:
             - float in (0, 1): percentile of tile size (e.g., 0.2 = 20% overlap on
             each side)
             - int: number of pixels overlap on each side
             - Tuple[float, float]: percentiles for (x, y) dimensions
             - Tuple[int, int]: pixel counts for (x, y) dimensions
-
+            - "auto": compute maximum overlap from coordinates (default)
+        
         Returns
         -------
         MosaicInfo
@@ -130,7 +132,7 @@ class MosaicInfo:
     ) -> da.Array:
         """
         Compute blending ramp for tile stitching with explicit overlap values.
-
+        
         Parameters
         ----------
         tile_width : int
@@ -141,29 +143,29 @@ class MosaicInfo:
             Number of overlapping pixels in x dimension (on each side).
         y_overlap : int
             Number of overlapping pixels in y dimension (on each side).
-
+        
         Returns
         -------
         da.Array
             Blending ramp as a dask array.
-
+        
         Examples
         --------
         Example with tile_size=3 and overlap=1:
-
+        
         For the left edge (x_overlap=1):
         - Create ramp of size (overlap+2) = 3: [0.0, 0.5, 1.0]
         - Remove first and last: [0.5]
         - Result: edge weight = 0.5 (non-zero)
-
+        
         Visual diagram for tile_size=3, overlap=1:
-
+        
         Position:  0    1    2
         Weight:   0.5  1.0  0.5
                   ↑         ↑
                 edge      edge
               (non-zero) (non-zero)
-
+        
         The full tile weights would be:
         [0.5, 1.0, 0.5]  (left edge, center, right edge)
         """
@@ -171,14 +173,12 @@ class MosaicInfo:
         wx = np.ones(tile_width, dtype=np.float32)
         wy = np.ones(tile_height, dtype=np.float32)
         if x_overlap > 0:
-            ramp_full = np.linspace(
-                0, 1, x_overlap + 2, dtype=np.float32)[1:-1]
+            ramp_full = np.linspace(0, 1, x_overlap + 2, dtype=np.float32)[1:-1]
             wx[:x_overlap] = ramp_full
             wx[-x_overlap:] = ramp_full[::-1]
 
         if y_overlap > 0:
-            ramp_full = np.linspace(
-                0, 1, y_overlap + 2, dtype=np.float32)[1:-1]
+            ramp_full = np.linspace(0, 1, y_overlap + 2, dtype=np.float32)[1:-1]
             wy[:y_overlap] = ramp_full
             wy[-y_overlap:] = ramp_full[::-1]
 
@@ -188,7 +188,7 @@ class MosaicInfo:
     def stitch(self) -> da.Array:
         """
         Stitch tiles into a mosaic using lazy dask operations.
-
+        
         Returns
         -------
         da.Array
@@ -334,8 +334,7 @@ def _combine_block(
     # For 3D data, total_weight should be broadcasted
     if len(total_paint.shape) > 2:
         expand_dim = len(total_paint.shape) - len(total_weight.shape)
-        total_weight = total_weight.reshape(
-            total_weight.shape + (1,) * expand_dim)
+        total_weight = total_weight.reshape(total_weight.shape + (1,) * expand_dim)
     normalized = total_paint / total_weight
 
     if not circular_mean:
@@ -350,7 +349,7 @@ def _normalize_tile_overlap(
 ) -> Tuple[int, int]:
     """
     Normalize tile_overlap parameter to (x_overlap, y_overlap) in pixels.
-
+    
     Parameters
     ----------
     tile_overlap : Union[float, int, Tuple[float, float], Tuple[int, int]]
@@ -364,7 +363,11 @@ def _normalize_tile_overlap(
         Width of each tile.
     tile_height : int
         Height of each tile.
-
+    x_coords : Optional[np.ndarray]
+        X coordinates for auto computation.
+    y_coords : Optional[np.ndarray]
+        Y coordinates for auto computation.
+    
     Returns
     -------
     Tuple[int, int]
@@ -413,7 +416,7 @@ def stitch_tiles(
 ) -> da.Array:
     """
     Stitch tiles into a mosaic (backward compatibility wrapper).
-
+    
     This function is kept for backward compatibility. New code should use
     MosaicInfo.stitch() directly.
     """
