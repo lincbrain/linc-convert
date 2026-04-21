@@ -76,7 +76,8 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         except (ValueError, KeyError):
             # Try as array
             zarr_array_wrapper = open_array(file_path, mode="r")
-            data = da.from_array(zarr_array_wrapper, chunks=zarr_array_wrapper.chunks)
+            data = da.from_array(zarr_array_wrapper,
+                                 chunks=zarr_array_wrapper.chunks)
         return data
 
     # Check for NIfTI files
@@ -107,7 +108,8 @@ def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95) -> None:
     img_min = np.nanmin(image)
     img_max = np.nanmax(image)
     if img_max > img_min:
-        normalized = ((image - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+        normalized = ((image - img_min) / (img_max - img_min)
+                      * 255).astype(np.uint8)
     else:
         normalized = np.zeros_like(image, dtype=np.uint8)
 
@@ -238,9 +240,12 @@ def _apply_mask(result: da.Array, mask: da.Array) -> da.Array:
 def mosaic2d(
     tile_info_file: str,
     *,
-    jpeg_output: Annotated[Optional[str], Parameter(name=["--jpeg", "-j"])] = None,
-    tiff_output: Annotated[Optional[str], Parameter(name=["--tiff", "-t"])] = None,
-    nifti_output: Annotated[Optional[str], Parameter(name=["--nifti", "-n"])] = None,
+    jpeg_output: Annotated[Optional[str],
+                           Parameter(name=["--jpeg", "-j"])] = None,
+    tiff_output: Annotated[Optional[str],
+                           Parameter(name=["--tiff", "-t"])] = None,
+    nifti_output: Annotated[Optional[str],
+                            Parameter(name=["--nifti", "-n"])] = None,
     tile_overlap: float = 0.2,
     circular_mean: bool = False,
     clip_x: int = 0,
@@ -270,8 +275,8 @@ def mosaic2d(
         Path to save JPEG preview image.
     tiff_output : str, optional
         Path to save TIFF image.
-    tile_overlap : float | Literal["auto"]
-        Tile overlap in pixels. If "auto", compute from tile coordinates.
+    tile_overlap : float
+        Tile overlap as precentage
     circular_mean : bool
         Whether to use circular mean for blending.
     clip_x : int
@@ -453,6 +458,7 @@ def mosaic2d(
                     f"Mask shape {mask_array.shape} does not match result shape "
                     f"{result.shape}. "
                 )
+                raise
             result = _apply_mask(result, mask_array)
             logger.info("Mask applied successfully (optimized for Dask)")
 
@@ -464,7 +470,8 @@ def mosaic2d(
         with ProgressBar():
             result = np.array(result)
 
-    voxel_size_2d = voxel_size_xyz[:2] if len(voxel_size_xyz) >= 2 else [0.1, 0.1]
+    voxel_size_2d = voxel_size_xyz[:2] if len(
+        voxel_size_xyz) >= 2 else [0.1, 0.1]
     # Save NIfTI file if requested
     if nifti_output:
         logger.info(f"Saving NIfTI file: {nifti_output}")
@@ -495,7 +502,8 @@ def mosaic2d(
         logger.info(f"Saving to Zarr: {general_config.out}")
 
         # Compute zarr layout for 2D
-        chunk, shard = compute_zarr_layout(result.shape, np.float32, zarr_config)
+        chunk, shard = compute_zarr_layout(
+            result.shape, np.float32, zarr_config)
 
         # Prepare Zarr group (similar to single_volume.py)
         zgroup = from_config(general_config.out, zarr_config)

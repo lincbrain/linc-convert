@@ -78,8 +78,9 @@ def _shift_focus(tile: da.Array, focus_plane: np.ndarray, s_max: int) -> da.Arra
         # Get the spatial coordinates for this block
         # For simplicity, we'll shift the entire tile
         # pad the sources at the END so indices up to Nz-1 are valid
-        pad_width = ((0, 0), (0, 0), (s_max, s_max))
-        block_padded = np.pad(block, pad_width, mode="constant", constant_values=np.nan)
+        pad_width = ((0, 0), (0, 0), (0, s_max))
+        block_padded = np.pad(
+            block, pad_width, mode="constant", constant_values=np.nan)
         # build indices for the expanded depth
         z = np.arange(block.shape[-1] + s_max, dtype=np.int32)[None, None, :]
         # Use a subset of focus_plane corresponding to this block
@@ -235,7 +236,8 @@ def mosaic_complex(
             )
 
         # Process complex data to get dBI, R3D, O3D
-        dBI3D, R3D, O3D = process_complex3d(complex3d, offset=100, flip_phi=False)
+        dBI3D, R3D, O3D = process_complex3d(
+            complex3d, offset=100, flip_phi=False)
 
         # Apply transformations
         if flip_z:
@@ -264,13 +266,14 @@ def mosaic_complex(
     # Stitch tiles for each modality using MosaicInfo
     logger.info("Stitching tiles")
 
-    # Get tile_overlap from metadata (defaults to "auto")
+    # Get tile_overlap from metadata (defaults to 0.2)
     tile_overlap = metadata.get("tile_overlap", 0.2)
 
     # Create MosaicInfo for each modality - dimensions and coordinates extracted from
     # tiles
     dbi_mosaic = MosaicInfo.from_tiles(
-        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, dbi_tiles)],
+        tiles=[TileInfo(x=c[0], y=c[1], image=t)
+               for c, t in zip(coords, dbi_tiles)],
         depth=depth,
         chunk_size=None,  # Will use tile dimensions
         circular_mean=False,
@@ -278,7 +281,8 @@ def mosaic_complex(
     )
 
     r3d_mosaic = MosaicInfo.from_tiles(
-        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, r3d_tiles)],
+        tiles=[TileInfo(x=c[0], y=c[1], image=t)
+               for c, t in zip(coords, r3d_tiles)],
         depth=depth,
         chunk_size=None,  # Will use tile dimensions
         circular_mean=False,
@@ -286,7 +290,8 @@ def mosaic_complex(
     )
 
     o3d_mosaic = MosaicInfo.from_tiles(
-        tiles=[TileInfo(x=c[0], y=c[1], image=t) for c, t in zip(coords, o3d_tiles)],
+        tiles=[TileInfo(x=c[0], y=c[1], image=t)
+               for c, t in zip(coords, o3d_tiles)],
         depth=depth,
         chunk_size=None,  # Will use tile dimensions
         circular_mean=True,
@@ -309,7 +314,8 @@ def mosaic_complex(
     zgroups = []
 
     for out, res in zip(
-        [dbi_output, r3d_output, o3d_output], [dBI_result, R3D_result, O3D_result]
+        [dbi_output, r3d_output, o3d_output], [
+            dBI_result, R3D_result, O3D_result]
     ):
         if shard:
             res = da.rechunk(res, chunks=shard)
