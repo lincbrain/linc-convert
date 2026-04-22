@@ -1,5 +1,7 @@
 """ZarrIO Implementation using the zarr-python library."""
 
+import os
+from getpass import getpass
 from numbers import Number
 from os import PathLike
 from typing import (
@@ -15,8 +17,10 @@ from typing import (
 )
 
 import numpy as np
+import requests
 import zarr
 import zarr.codecs
+from dandi.dandiapi import DandiAPIClient
 from numpy.typing import ArrayLike, DTypeLike
 from zarr.core.array import CompressorsLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingLike, ChunkKeyEncodingParams
@@ -93,11 +97,12 @@ class ZarrPythonArray(ZarrArray):
         raise AttributeError(
             f"'{self.__class__.__name__}' object has no attribute '{name}'"
         )
-    
+
     @classmethod
     def open(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
         """Open a Zarr array."""
         return cls(zarr.open_array(*args, **kwargs))
+
     @classmethod
     def open_array(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
         """Open a Zarr array."""
@@ -123,7 +128,7 @@ class ZarrPythonGroup(ZarrGroup):
     @classmethod
     def from_config(
         cls, out: str | PathLike[str], zarr_config: ZarrConfig
-        ) -> "ZarrPythonGroup":
+    ) -> "ZarrPythonGroup":
         """Create a Zarr group from a configuration object."""
         store = zarr.storage.LocalStore(out)
         return cls(
@@ -151,7 +156,8 @@ class ZarrPythonGroup(ZarrGroup):
     def __getitem__(self, key: str) -> Union[ZarrPythonArray, "ZarrPythonGroup"]:
         """Get a subgroup or array by name within this group."""
         if key not in self._zgroup:
-            raise KeyError(f"Key '{key}' not found in group '{self.store_path}'")
+            raise KeyError(
+                f"Key '{key}' not found in group '{self.store_path}'")
         item = self._zgroup[key]
         if isinstance(item, zarr.Group):
             return ZarrPythonGroup(item)
@@ -200,7 +206,8 @@ class ZarrPythonGroup(ZarrGroup):
     ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
-            arr = self._zgroup.create_array(name, shape=shape, dtype=dtype, **kwargs)
+            arr = self._zgroup.create_array(
+                name, shape=shape, dtype=dtype, **kwargs)
             if data is not None:
                 arr[:] = data
             return ZarrPythonArray(arr)
@@ -250,7 +257,8 @@ class ZarrPythonGroup(ZarrGroup):
             fill_value=getattr(base_level._array, "fill_value", None),
             order=getattr(base_level._array, "order", None),
             attributes=getattr(
-                getattr(base_level._array, "metadata", None), "attributes", None
+                getattr(base_level._array, "metadata",
+                        None), "attributes", None
             ),
             overwrite=True,
         )
@@ -262,11 +270,13 @@ class ZarrPythonGroup(ZarrGroup):
                     meta.dimension_separator, 2
                 )
             if hasattr(meta, "chunk_key_encoding"):
-                opts["chunk_key_encoding"] = getattr(meta, "chunk_key_encoding", None)
+                opts["chunk_key_encoding"] = getattr(
+                    meta, "chunk_key_encoding", None)
             if hasattr(base_level, "serializer"):
                 opts["serializer"] = getattr(base_level, "serializer", None)
             if hasattr(meta, "dimension_names"):
-                opts["dimension_names"] = getattr(meta, "dimension_names", None)
+                opts["dimension_names"] = getattr(
+                    meta, "dimension_names", None)
         # Remove None values
         opts = {k: v for k, v in opts.items() if v is not None}
         opts.update(kwargs)
@@ -279,12 +289,45 @@ class ZarrPythonGroup(ZarrGroup):
     def open(cls, *args: Any, **kwargs: Any) -> "ZarrPythonGroup":  # noqa: ANN401
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
-    
+
     @classmethod
     def open_group(cls, *args: Any, **kwargs: Any) -> "ZarrPythonGroup":  # noqa: ANN401
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
-    
+
+    @classmethod
+    def open_dandi(cls, dandiset_id: str, asset_path: str, api_url: str = "https://api.lincbrain.org/api", dandiset_version: str = "draft") -> "ZarrPythonGroup":
+        dandi_api_key = os.environ.get("DANDI_API_KEY")
+        if not dandi_api_key:
+            dandi_api_key = getpass("Enter your DANDI API key: ")
+        with DandiAPIClient(
+            api_url=api_url,
+            token=dandi_api_key,
+        ) as client:
+            dandiset = client.get_dandiset(dandiset_id, dandiset_version)
+            asset = dandiset.get_asset_by_path(asset_path)
+            zarr_id = asset.zarr
+        if "lincbrain.org" in api_url:
+            # For LINC private data, get the CloudFront signed cookies
+            headers = {"Authorization": f"token {dandi_api_key}"}
+            session = requests.Session()
+            session.get(f"{api_url}/auth/token", headers=headers)
+            response = session.get(
+                f"{api_url}/permissions/s3/", headers=headers)
+            cookies = response.cookies.get_dict()
+            cf_url = f"https://neuroglancer.lincbrain.org/zarr/{zarr_id}/"
+            storage_options = {"client_kwargs": {"cookies": cookies}}
+            zarr_group = zarr.api.synchronous.open_group(cf_url,
+                                                         mode='r',
+                                                         zarr_format=3,
+                                                         storage_options=storage_options)
+
+        else:
+            # For DANDI public data
+            zarr_group = zarr.api.synchronous.open_group(
+                f"s3://dandiarchive/zarr/{zarr_id}/", mode='r')
+
+        return cls(zarr_group)
 
 
 def _make_compressor(
