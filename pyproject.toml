@@ -35,6 +35,7 @@ zarr = "^3.0.0"
 nifti-zarr = "*"
 tqdm = "*"
 dask = "*"
+dandi = "*"
 universal_pathlib = "*"
 
 # optionals
