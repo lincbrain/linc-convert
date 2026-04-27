@@ -78,7 +78,9 @@ def _discover_tile_paths(inp: str,
     if dandiset_id is None:
         paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
         if not paths:
-            raise ValueError("No tile folders found in input directory")
+            paths = sorted(glob(os.path.join(inp, "*_y*_HR.ome.zarr")))
+            if not paths:
+                raise ValueError("No tile folders found in input directory")
         return paths
 
     with DandiAPIClient(
