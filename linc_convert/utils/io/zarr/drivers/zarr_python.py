@@ -1,7 +1,5 @@
 """ZarrIO Implementation using the zarr-python library."""
 
-import os
-from getpass import getpass
 from numbers import Number
 from os import PathLike
 from typing import (
