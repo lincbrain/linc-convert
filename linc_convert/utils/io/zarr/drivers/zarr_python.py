@@ -16,16 +16,15 @@ from typing import (
     Unpack,
 )
 
+import dask.array as da
 import numpy as np
-import requests
 import zarr
-import zarr.codecs
-from dandi.dandiapi import DandiAPIClient
 from numpy.typing import ArrayLike, DTypeLike
 from zarr.core.array import CompressorsLike
 from zarr.core.chunk_key_encodings import ChunkKeyEncodingLike, ChunkKeyEncodingParams
 
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
+from linc_convert.utils.io.zarr.dandi import open_dandi_zarr_group
 from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
 from linc_convert.utils.zarr_config import ZarrConfig
 
@@ -209,7 +208,10 @@ class ZarrPythonGroup(ZarrGroup):
             arr = self._zgroup.create_array(
                 name, shape=shape, dtype=dtype, **kwargs)
             if data is not None:
-                arr[:] = data
+                if type(data) is da.Array:
+                    da.to_zarr(data, arr)
+                else:
+                    arr[:] = data
             return ZarrPythonArray(arr)
 
         compressor = zarr_config.compressor
@@ -235,7 +237,10 @@ class ZarrPythonGroup(ZarrGroup):
             opt["chunk_key_encoding"] = chunk_key_encoding
         arr = self._zgroup.create_array(name=name, shape=shape, **opt)
         if data:
-            arr[:] = data
+            if type(data) is da.Array:
+                da.to_zarr(data, arr)
+            else:
+                arr[:] = data
         return ZarrPythonArray(arr)
 
     def create_array_from_base(
@@ -296,38 +301,38 @@ class ZarrPythonGroup(ZarrGroup):
         return cls(zarr.open_group(*args, **kwargs))
 
     @classmethod
-    def open_dandi(cls, dandiset_id: str, asset_path: str, api_url: str = "https://api.lincbrain.org/api", dandiset_version: str = "draft") -> "ZarrPythonGroup":
-        dandi_api_key = os.environ.get("DANDI_API_KEY")
-        if not dandi_api_key:
-            dandi_api_key = getpass("Enter your DANDI API key: ")
-        with DandiAPIClient(
+    def open_dandi(
+        cls,
+        dandiset_id: str,
+        asset_path: str,
+        api_key: str,
+        *,
+        api_url: str = "https://api.lincbrain.org/api",
+        dandiset_version: str = "draft",
+    ) -> "ZarrPythonGroup":
+        """Open a Zarr group backed by a DANDI asset.
+
+        Parameters
+        ----------
+        dandiset_id : str
+            DANDI dataset identifier.
+        asset_path : str
+            Path to the Zarr asset within the dandiset.
+        api_key : str
+            API token used for authentication.
+        api_url : str, optional
+            Base URL of the DANDI/LINC Brain API.
+        dandiset_version : str, optional
+            Dandiset version to access (default: ``"draft"``).
+        """
+        zgroup = open_dandi_zarr_group(
+            dandiset_id=dandiset_id,
+            asset_path=asset_path,
+            api_key=api_key,
             api_url=api_url,
-            token=dandi_api_key,
-        ) as client:
-            dandiset = client.get_dandiset(dandiset_id, dandiset_version)
-            asset = dandiset.get_asset_by_path(asset_path)
-            zarr_id = asset.zarr
-        if "lincbrain.org" in api_url:
-            # For LINC private data, get the CloudFront signed cookies
-            headers = {"Authorization": f"token {dandi_api_key}"}
-            session = requests.Session()
-            session.get(f"{api_url}/auth/token", headers=headers)
-            response = session.get(
-                f"{api_url}/permissions/s3/", headers=headers)
-            cookies = response.cookies.get_dict()
-            cf_url = f"https://neuroglancer.lincbrain.org/zarr/{zarr_id}/"
-            storage_options = {"client_kwargs": {"cookies": cookies}}
-            zarr_group = zarr.api.synchronous.open_group(cf_url,
-                                                         mode='r',
-                                                         zarr_format=3,
-                                                         storage_options=storage_options)
-
-        else:
-            # For DANDI public data
-            zarr_group = zarr.api.synchronous.open_group(
-                f"s3://dandiarchive/zarr/{zarr_id}/", mode='r')
-
-        return cls(zarr_group)
+            version=dandiset_version,
+        )
+        return cls(zgroup)
 
 
 def _make_compressor(

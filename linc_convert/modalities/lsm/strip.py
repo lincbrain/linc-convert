@@ -16,6 +16,7 @@ import cyclopts
 import dask.array as da
 import numpy as np
 from PIL import Image
+
 # internals
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.spool import SpoolSetInterpreter
@@ -31,6 +32,7 @@ from linc_convert.utils.zarr_config import (
 logger = logging.getLogger(__name__)
 strip = cyclopts.App(name="strip", help_format="markdown")
 lsm.command(strip)
+
 
 def _save_mip_image(result: da.Array, mip_image_output: str) -> None:
     """Save the maximum intensity projection of the result as an image."""
