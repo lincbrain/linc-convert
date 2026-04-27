@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skimage
+import skimage.data
 import zarr
 
 DOWNLOAD_CMD = [
@@ -58,23 +59,32 @@ def spool_dat(tmp_path):
 
 @pytest.fixture
 def spool_dat_zarr(tmp_path):
+    """
+    Create multiple .ome.zarr directories using only python-zarr.
+    No ome-zarr helpers or NGFF validation.
+    """
     brain = skimage.data.brain()
     brain = brain.reshape(10, 4, 64, 256)  # (z, y, y_px, x_px)
 
-    y_chunk = 16  # chunk size along Y-pixel axis
+    for z in range(1, 11):
+        for y in range(1, 4):
+            out_path = tmp_path / \
+                f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
 
-    for y in range(1, 4):
-        out_path = tmp_path / f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
+            # Select one 2D image
+            image2d = brain[z - y, y - 1]  # (64, 256)
 
-        # Collect all Z planes for this Y
-        data = brain[5, y - 1][None, ...]
+            # Expand to (t, c, z, y, x)
+            data = image2d[None, None, None, :, :]  # (1, 1, 1, 64, 256)
 
-        root = zarr.open_group(out_path, mode="w")
+            # Create root zarr group
+            root = zarr.open_group(out_path, mode="w")
 
-        arr = root.create_array(
-            "0", shape=data.shape, dtype=data.dtype)
+            # Create dataset (conventionally named "0")
+            arr = root.create_array(
+                "0", shape=data.shape, dtype=data.dtype)
 
-        arr[:] = data
+            arr[:] = data
 
     return tmp_path
 
