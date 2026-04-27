@@ -13,7 +13,7 @@ import cyclopts
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.modalities.lsm.convert_spool import convert_spool_zarr
+from linc_convert.modalities.lsm.convert_spool_or_zarr import convert_spool_or_zarr
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
     NiftiConfig,
@@ -58,6 +58,6 @@ def convert(
     nii_config
         NIfTI header related configuration
     """
-    convert_spool_zarr(inp, overlap=overlap, voxel_size=voxel_size,
-                       general_config=general_config, zarr_config=zarr_config,
-                       nii_config=nii_config, use_runs=False)
+    convert_spool_or_zarr(inp, overlap=overlap, voxel_size=voxel_size,
+                          general_config=general_config, zarr_config=zarr_config,
+                          nii_config=nii_config, use_runs=False)
