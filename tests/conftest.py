@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skimage
+import zarr
 
 DOWNLOAD_CMD = [
     "dandi",
@@ -51,6 +52,45 @@ def spool_dat(tmp_path):
             image = brain[z - y, y - 1][None, ...]
 
             write_zyla_spool_set(image, out_path, images_per_file=128)
+
+    return tmp_path
+
+
+@pytest.fixture
+def spool_dat_zarr(tmp_path):
+    brain = skimage.data.brain()
+    brain = brain.reshape(10, 4, 64, 256)  # (z, y, y_px, x_px)
+
+    y_chunk = 16  # chunk size along Y-pixel axis
+
+    for y in range(1, 4):
+        out_path = tmp_path / f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
+
+        # Collect all Z planes for this Y
+        z_stack = brain[:, y - 1]  # (z=10, 64, 256)
+
+        # Expand to (t, c, z, y, x)
+        data = z_stack[None, None, :, :, :]  # (1, 1, 10, 64, 256)
+
+        root = zarr.open_group(out_path, mode="w")
+
+        root.create_dataset(
+            "0",
+            data=data,
+            shape=data.shape,
+            dtype=data.dtype,
+            # ✅ chunk ONLY along Y
+            chunks=(1, 1, 10, y_chunk, 256),
+            compressor=zarr.Blosc(
+                cname="zstd",
+                clevel=3,
+                shuffle=zarr.Blosc.SHUFFLE,
+            ),
+        )
+
+        # Optional, lightweight axis hints (not NGFF)
+        root["0"].attrs["axes"] = ["t", "c", "z", "y", "x"]
+        root.attrs["description"] = "One Zarr per Y; Z stacked; Y-only chunking"
 
     return tmp_path
 

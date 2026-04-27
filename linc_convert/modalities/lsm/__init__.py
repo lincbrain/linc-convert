@@ -10,7 +10,8 @@ try:
         "spool",
         "single_volume",
         "strip",
-        "stitch_strips"
+        "stitch",
+        "stitch_strips",
     ]
 
     from . import (
@@ -19,6 +20,7 @@ try:
         multi_slice,
         single_volume,
         spool,
+        stitch,
         stitch_strips,
         strip,
     )
