@@ -67,10 +67,7 @@ def spool_dat_zarr(tmp_path):
         out_path = tmp_path / f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
 
         # Collect all Z planes for this Y
-        z_stack = brain[:, y - 1]  # (z=10, 64, 256)
-
-        # Expand to (t, c, z, y, x)
-        data = z_stack[None, None, :, :, :]  # (1, 1, 10, 64, 256)
+        data = brain[:, y - 1][None, ...]
 
         root = zarr.open_group(out_path, mode="w")
 
