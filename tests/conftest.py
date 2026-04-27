@@ -74,23 +74,10 @@ def spool_dat_zarr(tmp_path):
 
         root = zarr.open_group(out_path, mode="w")
 
-        root.create_dataset(
-            "0",
-            data=data,
-            shape=data.shape,
-            dtype=data.dtype,
-            # ✅ chunk ONLY along Y
-            chunks=(1, 1, 10, y_chunk, 256),
-            compressor=zarr.Blosc(
-                cname="zstd",
-                clevel=3,
-                shuffle=zarr.Blosc.SHUFFLE,
-            ),
-        )
+        arr = root.create_array(
+            "0", shape=data.shape, dtype=data.dtype)
 
-        # Optional, lightweight axis hints (not NGFF)
-        root["0"].attrs["axes"] = ["t", "c", "z", "y", "x"]
-        root.attrs["description"] = "One Zarr per Y; Z stacked; Y-only chunking"
+        arr[:] = data
 
     return tmp_path
 

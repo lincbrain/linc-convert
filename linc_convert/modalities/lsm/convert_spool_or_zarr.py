@@ -101,7 +101,7 @@ def _discover_tile_paths(inp: str,
     return paths
 
 
-def convert_spool_zarr(
+def convert_spool_or_zarr(
     inp: str,
     *,
     overlap: int = 192,

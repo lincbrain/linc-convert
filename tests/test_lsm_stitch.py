@@ -8,7 +8,7 @@ from utils.compare_file import assert_zarr_equal
 from linc_convert.modalities.lsm import stitch
 
 
-def test_lsm_spool_convert(tmp_path, spool_dat_zarr, zarr_version):
+def test_lsm_stitch_convert(tmp_path, spool_dat_zarr, zarr_version):
     expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool.nii.zarr"
     stitch.convert(inp=spool_dat_zarr, out=str(
@@ -20,7 +20,7 @@ def test_lsm_spool_convert(tmp_path, spool_dat_zarr, zarr_version):
 
 
 @pytest.mark.golden
-def test_lsm_spool_regen_golden(tmp_path, spool_dat_zarr, zarr_version):
+def test_lsm_stitch_regen_golden(tmp_path, spool_dat_zarr, zarr_version):
     expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool_output.nii.zarr"
     stitch.convert(inp=spool_dat_zarr, out=str(
