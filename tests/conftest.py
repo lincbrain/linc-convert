@@ -66,25 +66,21 @@ def spool_dat_zarr(tmp_path):
     brain = skimage.data.brain()
     brain = brain.reshape(10, 4, 64, 256)  # (z, y, y_px, x_px)
 
-    for z in range(1, 11):
-        for y in range(1, 4):
-            out_path = tmp_path / \
-                f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
+    for y in range(1, 4):
+        out_path = tmp_path / \
+            f"test_run{y:02d}_y{1:02d}_HR.ome.zarr"
 
-            # Select one 2D image
-            image2d = brain[z - y, y - 1]  # (64, 256)
+        # Select one 2D image
+        data = brain[:, y - 1, :]
 
-            # Expand to (t, c, z, y, x)
-            data = image2d[None, None, None, :, :]  # (1, 1, 1, 64, 256)
+        # Create root zarr group
+        root = zarr.open_group(out_path, mode="w")
 
-            # Create root zarr group
-            root = zarr.open_group(out_path, mode="w")
+        # Create dataset (conventionally named "0")
+        arr = root.create_array(
+            "0", shape=data.shape, dtype=data.dtype)
 
-            # Create dataset (conventionally named "0")
-            arr = root.create_array(
-                "0", shape=data.shape, dtype=data.dtype)
-
-            arr[:] = data
+        arr[:] = data
 
     return tmp_path
 
