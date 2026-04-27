@@ -21,8 +21,6 @@ from linc_convert.utils.zarr_config import (
     autoconfig,
 )
 
-import warnings
-
 logger = logging.getLogger(__name__)
 spool = cyclopts.App(name="spool", help_format="markdown")
 lsm.command(spool)
@@ -63,5 +61,3 @@ def convert(
     convert_spool_zarr(inp, overlap=overlap, voxel_size=voxel_size,
                        general_config=general_config, zarr_config=zarr_config,
                        nii_config=nii_config, use_runs=False)
-    warnings.warn(
-        "this is an output statement to learn if this line is run in test cases")
