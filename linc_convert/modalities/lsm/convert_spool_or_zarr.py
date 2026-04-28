@@ -147,6 +147,8 @@ def convert_spool_or_zarr(
     max_x
         value to crop all x shapes to
     """
+    logger.info("Gathering files and metadata")
+
     api_key = _prompt_dandi_api_key() if dandiset_id else None
     tile_paths = _discover_tile_paths(
         inp, dandiset_id=dandiset_id, api_key=api_key)
@@ -232,7 +234,7 @@ def convert_spool_or_zarr(
 
     dtype = next(iter(dtypes))
 
-    # Ensure tiles's shapes are compatible
+    logger.info("Ensureing compatiable tile shapes")
     diff_sx = all_shapes[:, :, 2] != expected_sx
     if diff_sx.any():
         y_idxs, z_idxs = np.where(diff_sx)
@@ -267,25 +269,7 @@ def convert_spool_or_zarr(
 
     omz = ZarrPythonGroup.from_config(general_config.out, zarr_config)
 
-    logger.info("Writing level 0 array with shape %s", fullshape)
-
-    def load_and_crop(tile: TileInfo) -> da.Array:
-        reader = tile.reader
-        data = (
-            da.from_array(reader)
-            if isinstance(reader, ZarrPythonArray)
-            else reader.assemble_cropped()
-        )
-
-        if overlap and len(y_tiles) > 1:
-            if tile.y != min_y:
-                data = data[:, overlap // 2:, :]
-            if tile.y != max_y:
-                data = data[:, : -(overlap // 2 + overlap % 2), :]
-        if max_x is not None:
-            data = data[:, :, :min(data.shape[2], max_x)]
-
-        return data
+    logger.info("Merging tiles lazily")
 
     z_planes = []
 
@@ -297,18 +281,31 @@ def convert_spool_or_zarr(
 
             if key in tiles:
                 tile = tiles[key]
-                da_tile = load_and_crop(tile)
+                reader = tile.reader
+                data = (
+                    da.from_array(reader)
+                    if isinstance(reader, ZarrPythonArray)
+                    else reader.assemble_cropped()
+                )
+
+                if overlap and len(y_tiles) > 1:
+                    if tile.y != min_y:
+                        data = data[:, overlap // 2:, :]
+                    if tile.y != max_y:
+                        data = data[:, : -(overlap // 2 + overlap % 2), :]
+                if max_x is not None:
+                    data = data[:, :, :min(data.shape[2], max_x)]
 
             else:
                 raise ValueError(f"missing tile (z:{z}, y:{y})")
 
-            row_tiles.append(da_tile)
+            row_tiles.append(data)
 
         z_planes.append(da.concatenate(row_tiles, axis=1))
 
     output = da.concatenate(z_planes, axis=0)
 
-    logger.info(f"Storing conversion start on {len(tiles_list)} tiles")
+    logger.info("Writing level 0 array with shape %s", fullshape)
 
     omz.create_array(
         "0",
