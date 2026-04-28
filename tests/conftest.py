@@ -59,24 +59,16 @@ def spool_dat(tmp_path):
 
 @pytest.fixture
 def spool_dat_zarr(tmp_path):
-    """
-    Create OME-Zarr volumes that match the logical data produced by
-    SpoolSetInterpreter(...).assemble_cropped().
-    """
-
     brain = skimage.data.brain()
-    brain = brain.reshape(10, 4, 64, 256)  # (z, y, y_px, x_px)
+    brain = brain.reshape(10, 4, 64, 256)
 
     for y in range(1, 4):
         out_path = tmp_path / f"test_run{y:02d}_y{y:02d}_HR.ome.zarr"
 
-        # Match the actual data written to spools:
-        # spool_dat writes brain[z - y, y - 1]
-        # across all z values, so we reconstruct the same stack
         data = np.stack(
             [brain[z - y, y - 1] for z in range(1, 11)],
             axis=0,
-        )  # shape (10, 64, 256)
+        )
 
         root = zarr.open_group(out_path, mode="w")
 
@@ -84,7 +76,7 @@ def spool_dat_zarr(tmp_path):
             "0",
             shape=data.shape,
             dtype=data.dtype,
-            chunks=(1, 64, 256),  # matches per‑spool granularity
+            chunks=(1, 64, 256),
         )
 
         arr[:] = data
