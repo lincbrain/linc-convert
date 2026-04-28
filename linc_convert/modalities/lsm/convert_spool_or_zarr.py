@@ -258,7 +258,7 @@ def convert_spool_or_zarr(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
 
-    full_x = next(iter(shapes.values()))[0]
+    full_x = min(next(iter(shapes.values()))[0], max_x)
     full_y = sum(shapes[(y, z_tiles[0])][1]
                  for y in y_tiles) - (len(y_tiles) - 1) * overlap
     full_z = sum(shapes[(y_tiles[0], z)][2] for z in z_tiles)
@@ -282,7 +282,7 @@ def convert_spool_or_zarr(
             if tile.y != max_y:
                 data = data[:, : -(overlap // 2 + overlap % 2), :]
         if max_x is not None:
-            data = data[:, :, :max(data.shape[2], max_x)]
+            data = data[:, :, :min(data.shape[2], max_x)]
 
         return data
 
