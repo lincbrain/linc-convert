@@ -218,11 +218,11 @@ def convert_spool_or_zarr(
         if max_x is not None:
             sx = min(max_x, sx)
 
-        shapes[(y, z)] = (sx, sy, sz)
+        shapes[(y, z)] = (sz, sy, sx)
         dtypes[reader.dtype].append((y, z))
         # Collect shapes and dtypes.
         rel_y, rel_z = y - min_y, z - min_z
-        all_shapes[rel_y, rel_z] = sx, sy, sz
+        all_shapes[rel_y, rel_z] = sz, sy, sx
         expected_sx = sx
         expected_sy[y] = sy
         expected_sz[z] = sz
@@ -233,7 +233,7 @@ def convert_spool_or_zarr(
     dtype = next(iter(dtypes))
 
     # Ensure tiles's shapes are compatible
-    diff_sx = all_shapes[:, :, 0] != expected_sx
+    diff_sx = all_shapes[:, :, 2] != expected_sx
     if diff_sx.any():
         y_idxs, z_idxs = np.where(diff_sx)
         raise ValueError(
@@ -251,18 +251,18 @@ def convert_spool_or_zarr(
     for z_tile in range(min_z, max_z + 1):
         if z_tile not in expected_sz:
             raise ValueError(f"Missing z tile {z_tile}")
-        diff_sz = all_shapes[:, :, 2] != expected_sz[z_tile]
-        if diff_sy.any():
+        diff_sz = all_shapes[:, :, 0] != expected_sz[z_tile]
+        if diff_sz.any():
             y_idxs, z_idxs = np.where(diff_sz)
             raise ValueError(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
 
-    full_x = min(next(iter(shapes.values()))[0], max_x) if max_x else next(
-        iter(shapes.values()))[0]
+    full_x = min(next(iter(shapes.values()))[2], max_x) if max_x else next(
+        iter(shapes.values()))[2]
     full_y = sum(shapes[(y, z_tiles[0])][1]
                  for y in y_tiles) - (len(y_tiles) - 1) * overlap
-    full_z = sum(shapes[(y_tiles[0], z)][2] for z in z_tiles)
+    full_z = sum(shapes[(y_tiles[0], z)][0] for z in z_tiles)
     fullshape = (full_z, full_y, full_x)
 
     omz = ZarrPythonGroup.from_config(general_config.out, zarr_config)
@@ -307,6 +307,8 @@ def convert_spool_or_zarr(
         z_planes.append(da.concatenate(row_tiles, axis=1))
 
     output = da.concatenate(z_planes, axis=0)
+
+    logger.info(f"Storing conversion start on {len(tiles_list)} tiles")
 
     omz.create_array(
         "0",
