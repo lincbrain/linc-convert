@@ -270,59 +270,33 @@ def convert_spool_or_zarr(
 
     logger.info("Writing level 0 array with shape %s", fullshape)
 
-    max_threads = 5
-    semaphore = threading.BoundedSemaphore(max_threads)
+    for tile in tiles_list:
+        reader = tile.reader
+        data = \
+            reader \
+            if isinstance(reader, ZarrPythonArray) \
+            else reader.assemble_cropped()
 
-    def write_tile(tile: TileInfo) -> None:
-        with semaphore:
-            reader = tile.reader
-            data = \
-                reader \
-                if isinstance(reader, ZarrPythonArray) \
-                else reader.assemble_cropped()
+        if overlap and len(y_tiles) > 1:
+            if tile.y != min_y:
+                data = data[:, overlap // 2:, :]
+            if tile.y != max_y:
+                data = data[:, : -(overlap // 2 + overlap % 2), :]
 
-            if overlap and len(y_tiles) > 1:
-                if tile.y != min_y:
-                    data = data[:, overlap // 2:, :]
-                if tile.y != max_y:
-                    data = data[:, : -(overlap // 2 + overlap % 2), :]
+        y_offset = sum(
+            shapes[(y, tile.z)][1] - overlap for y in y_tiles if y < tile.y
+        )
+        z_offset = sum(
+            shapes[(tile.y, z)][2] for z in z_tiles if z < tile.z
+        )
 
-            y_offset = sum(
-                shapes[(y, tile.z)][1] - overlap for y in y_tiles if y < tile.y
-            )
-            z_offset = sum(
-                shapes[(tile.y, z)][2] for z in z_tiles if z < tile.z
-            )
+        slicer = (
+            slice(z_offset, z_offset + data.shape[0]),
+            slice(y_offset, y_offset + data.shape[1]),
+            slice(None),
+        )
 
-            slicer = (
-                slice(z_offset, z_offset + data.shape[0]),
-                slice(y_offset, y_offset + data.shape[1]),
-                slice(None),
-            )
-
-            array[slicer] = data
-
-    threads = []
-    for y in range(min_y, max_y):
-        for z in range(min_z + (y % 2), max_z, 2):
-            tile = write_tile(tiles[(y, z)])
-            thread = threading.Thread(target=write_tile, args=(tile, ))
-            thread.start()
-            threads.append(thread)
-
-    for thread in threads:
-        thread.join()
-
-    threads = []
-    for y in range(min_y, max_y):
-        for z in range(min_z + ((y+1) % 2), max_z, 2):
-            tile = write_tile(tiles[(y, z)])
-            thread = threading.Thread(target=write_tile, args=(tile, ))
-            thread.start()
-            threads.append(thread)
-
-    for thread in threads:
-        thread.join()
+        array[slicer] = data
 
     voxel_size = list(map(float, reversed(voxel_size)))
 
