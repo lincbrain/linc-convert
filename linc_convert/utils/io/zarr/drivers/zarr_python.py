@@ -204,12 +204,12 @@ class ZarrPythonGroup(ZarrGroup):
     ) -> ZarrPythonArray:
         """Create a new array within this group."""
         if zarr_config is None:
-            with ProgressBar():
-                arr = self._zgroup.create_array(
-                    name, shape=shape, dtype=dtype, **kwargs)
+            arr = self._zgroup.create_array(
+                name, shape=shape, dtype=dtype, **kwargs)
             if data is not None:
                 if type(data) is da.Array:
-                    da.to_zarr(data, arr)
+                    with ProgressBar():
+                        da.to_zarr(data, arr)
                 else:
                     arr[:] = data
             return ZarrPythonArray(arr)
