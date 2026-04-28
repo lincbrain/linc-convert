@@ -303,10 +303,23 @@ def convert_spool_or_zarr(
             array[slicer] = data
 
     threads = []
-    for tile in tiles_list:
-        thread = threading.Thread(target=write_tile, args=(tile, ))
-        thread.start()
-        threads.append(thread)
+    for y in range(min_y, max_y):
+        for z in range(min_z + (y % 2), max_z, 2):
+            tile = write_tile(tiles[(y, z)])
+            thread = threading.Thread(target=write_tile, args=(tile, ))
+            thread.start()
+            threads.append(thread)
+
+    for thread in threads:
+        thread.join()
+
+    threads = []
+    for y in range(min_y, max_y):
+        for z in range(min_z + ((y+1) % 2), max_z, 2):
+            tile = write_tile(tiles[(y, z)])
+            thread = threading.Thread(target=write_tile, args=(tile, ))
+            thread.start()
+            threads.append(thread)
 
     for thread in threads:
         thread.join()
