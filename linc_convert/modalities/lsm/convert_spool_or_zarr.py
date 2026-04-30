@@ -5,7 +5,6 @@ import getpass
 import logging
 import os
 import re
-import threading
 import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
@@ -16,6 +15,7 @@ from typing import List, Optional
 import dask.array as da
 import numpy as np
 from dandi.dandiapi import DandiAPIClient
+from dask.delayed import delayed
 
 # internals
 from linc_convert.utils.io.spool import SpoolSetInterpreter
@@ -269,57 +269,60 @@ def convert_spool_or_zarr(
     fullshape = (full_z, full_y, full_x)
 
     omz = ZarrPythonGroup.from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape,
-                             zarr_config=zarr_config, dtype=dtype)
 
     logger.info("Merging tiles lazily")
 
-    tile_lock = threading.Lock()
+    @delayed
+    def read_tile(reader: ZarrPythonArray) -> np.ndarray:
+        return reader[:]
 
-    async def write_tile(i: int) -> None:
-        tile_info = tiles_list[i]
-        rel_y, rel_z = tile_info.y - min_y, tile_info.z - min_z
+    z_planes = []
 
-        if isinstance(tile_info.reader, ZarrPythonArray):
-            dat = da.from_array(tile_info.reader)
-        else:
-            dat = tile_info.reader.assemble_cropped()
+    for z in z_tiles:
+        row_tiles = []
 
-        if num_y != 1 and overlap:
-            if tile_info.y != min_y:
-                dat = dat[:, overlap // 2:, :]
-            if tile_info.y != max_y:
-                dat = dat[:, :-(overlap // 2 + overlap % 2), :]
+        for y in y_tiles:
+            key = (y, z)
 
-        if max_x is not None:
-            dat = dat[:, :, :min(dat.shape[2], max_x)]
+            if key in tiles:
+                tile = tiles[key]
+                reader = tile.reader
+                data = (
+                    da.from_delayed(
+                        read_tile(reader),
+                        shape=reader.shape,
+                        dtype=reader.dtype,
+                    )
+                    if isinstance(reader, ZarrPythonArray)
+                    else reader.assemble_cropped()
+                )
 
-        ystart = sum(expected_sy[min_y + y] - overlap for y in range(rel_y))
-        zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
-        if rel_y != 0:
-            ystart += overlap // 2
+                if overlap and len(y_tiles) > 1:
+                    if tile.y != min_y:
+                        data = data[:, overlap // 2:, :]
+                    if tile.y != max_y:
+                        data = data[:, : -(overlap // 2 + overlap % 2), :]
+                if max_x is not None:
+                    data = data[:, :, :min(data.shape[2], max_x)]
 
-        slicer = (
-            slice(zstart, zstart + dat.shape[0]),
-            slice(ystart, ystart + dat.shape[1]),
-            slice(None),
-        )
-        with tile_lock:
-            if isinstance(tile_info.reader, ZarrPythonArray):
-                array[slicer] = await dat
             else:
-                array[slicer] = dat
-            tiles_list[i] = None
+                raise ValueError(f"missing tile (z:{z}, y:{y})")
+
+            row_tiles.append(data)
+
+        z_planes.append(da.concatenate(row_tiles, axis=1))
+
+    output = da.concatenate(z_planes, axis=0)
 
     logger.info("Writing level 0 array with shape %s", fullshape)
-    threads = []
-    for i in range(len(tiles_list)):
-        thread = threading.Thread(target=write_tile, args=(i, ))
-        thread.start()
-        threads.append(thread)
 
-    for thread in threads:
-        thread.join()
+    omz.create_array(
+        "0",
+        shape=fullshape,
+        dtype=dtype,
+        zarr_config=zarr_config,
+        data=output
+    )
 
     voxel_size = list(map(float, reversed(voxel_size)))
 
