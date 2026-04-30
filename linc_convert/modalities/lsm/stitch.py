@@ -38,7 +38,8 @@ def convert(
     nii_config: NiftiConfig = None,
     use_runs: bool = True,
     dandiset_id: Optional[str] = None,
-    max_x: Optional[int] = None
+    max_x: Optional[int] = None,
+    allow_padding: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -74,4 +75,5 @@ def convert(
                           nii_config=nii_config,
                           use_runs=use_runs,
                           dandiset_id=dandiset_id,
-                          max_x=max_x)
+                          max_x=max_x,
+                          allow_padding=allow_padding)

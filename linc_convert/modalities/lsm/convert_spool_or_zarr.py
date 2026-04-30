@@ -113,7 +113,8 @@ def convert_spool_or_zarr(
     nii_config: NiftiConfig = None,
     use_runs: bool = False,
     dandiset_id: Optional[str] = None,
-    max_x: Optional[int] = None
+    max_x: Optional[int] = None,
+    allow_padding: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -237,6 +238,8 @@ def convert_spool_or_zarr(
 
     logger.info("Ensureing compatiable tile shapes")
     diff_sx = all_shapes[:, :, 2] != expected_sx
+    if allow_padding:
+        diff_sx = all_shapes[:, :, 2] > expected_sx
     if diff_sx.any():
         y_idxs, z_idxs = np.where(diff_sx)
         raise ValueError(
@@ -296,6 +299,15 @@ def convert_spool_or_zarr(
                         data = data[:, overlap // 2:, :]
                     if tile.y != max_y:
                         data = data[:, : -(overlap // 2 + overlap % 2), :]
+                if allow_padding and data.shape[2] < expected_sx:
+                    pad_width = expected_sx - data.shape[2]
+
+                    data = da.pad(
+                        data,
+                        pad_width=((0, 0), (0, 0), (0, pad_width)),
+                        mode="constant",
+                        constant_values=0,
+                    )
                 if max_x is not None:
                     data = data[:, :, :min(data.shape[2], max_x)]
 
