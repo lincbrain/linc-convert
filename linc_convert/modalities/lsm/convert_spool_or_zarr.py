@@ -279,6 +279,7 @@ def convert_spool_or_zarr(
 
             if key in tiles:
                 tile = tiles[key]
+                rel_y, rel_z = tile.y - min_y, tile.z - min_z
                 reader = tile.reader
                 data = (
                     da.array(_open_tile_reader(
