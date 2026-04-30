@@ -279,41 +279,41 @@ def convert_spool_or_zarr(
     async def write_tile(i: int) -> None:
         tile_info = tiles_list[i]
         rel_y, rel_z = tile_info.y - min_y, tile_info.z - min_z
-        if type(tile_info.reader) is ZarrPythonArray:
-            dat = da.arry(tile_info.reader)
+
+        if isinstance(tile_info.reader, ZarrPythonArray):
+            dat = da.from_array(tile_info.reader)
         else:
             dat = tile_info.reader.assemble_cropped()
-        if num_y != 1 and overlap != 0:
-            # if not first y tile, crop half overlapped rows at the beginning
+
+        if num_y != 1 and overlap:
             if tile_info.y != min_y:
                 dat = dat[:, overlap // 2:, :]
-            # if not last y tile, crop half overlapped rows at the end
-            # if overlap is odd, we need to crop an extra column
             if tile_info.y != max_y:
-                dat = dat[:, : -overlap // 2 - (overlap % 2), :]
-        ystart = sum(
-            expected_sy[min_y + y_idx] - overlap for y_idx in range(rel_y)
-        )
-        zstart = sum(expected_sz[min_z + z_idx]
-                     for z_idx in range(rel_z))
+                dat = dat[:, :-(overlap // 2 + overlap % 2), :]
+
+        if max_x is not None:
+            dat = dat[:, :, :min(dat.shape[2], max_x)]
+
+        ystart = sum(expected_sy[min_y + y] - overlap for y in range(rel_y))
+        zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
         if rel_y != 0:
             ystart += overlap // 2
+
         slicer = (
             slice(zstart, zstart + dat.shape[0]),
             slice(ystart, ystart + dat.shape[1]),
             slice(None),
         )
         with tile_lock:
-            logger.info(
-                f"starting writing for location z:{tile_info.z}, y:{tile_info.y}")
-            array[slicer] = await dat
+            if isinstance(tile_info.reader, ZarrPythonArray):
+                array[slicer] = await dat
+            else:
+                array[slicer] = dat
             tiles_list[i] = None
-            logger.info(
-                f"finished writing for location z:{tile_info.z}, y:{tile_info.y}")
 
     logger.info("Writing level 0 array with shape %s", fullshape)
     threads = []
-    for i in range(0, len(tiles_list)):
+    for i in range(len(tiles_list)):
         thread = threading.Thread(target=write_tile, args=(i, ))
         thread.start()
         threads.append(thread)
