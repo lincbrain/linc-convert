@@ -11,7 +11,6 @@ try:
         "single_volume",
         "strip",
         "stitch",
-        "stitch_strips",
     ]
 
     from . import (
@@ -21,7 +20,6 @@ try:
         single_volume,
         spool,
         stitch,
-        stitch_strips,
         strip,
     )
 except ImportError:
