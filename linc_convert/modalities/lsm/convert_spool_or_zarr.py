@@ -115,7 +115,9 @@ def convert_spool_or_zarr(
     nii_config: NiftiConfig = None,
     use_runs: bool = False,
     dandiset_id: Optional[str] = None,
-    max_x: Optional[int] = None,
+    x_end: Optional[int] = None,
+    z_start: Optional[int] = None,
+    z_end: Optional[int] = None,
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1
@@ -148,10 +150,20 @@ def convert_spool_or_zarr(
     use_runs
         If True will use the run id instead of the y id for y value
     dandiset_id
-        dandiset_id that contains the ome.zarr files for inp
+        Dandiset_id that contains the ome.zarr files for inp
         (leave none if inp is local)
-    max_x
-        value to crop all x shapes to
+    x_end
+        Max x values to crop or pad all tiles to
+    z_start
+        The minimum z value that should be read in each tile
+    z_end
+        The maximum z value that should be read in each tile
+    allow_padding
+        If true bad tiles with 0s along the x axis if any are too small
+    number_workers
+        The number of workers for dask.to_zarr
+    threads_per_worker
+        The number of threads each worker gets (only used if number_workers is set)
     """
     logger.info("Gathering files and metadata")
 
@@ -223,15 +235,19 @@ def convert_spool_or_zarr(
             sz, sy, sx = reader.shape
         else:
             sz, sy, sx = reader.assembled_spool_shape
-        if max_x is not None:
-            sx = min(max_x, sx)
+        if x_end is not None:
+            sx = min(x_end, sx)
+        if z_end is not None:
+            sz = min(z_end, sz)
+        if z_start is not None:
+            sz -= min(z_start, sz)
 
         shapes[(y, z)] = (sz, sy, sx)
         dtypes[reader.dtype].append((y, z))
         # Collect shapes and dtypes.
         rel_y, rel_z = y - min_y, z - min_z
         all_shapes[rel_y, rel_z] = sz, sy, sx
-        expected_sx = sx
+        expected_sx = max(sx, expected_sx)
         expected_sy[y] = sy
         expected_sz[z] = sz
 
@@ -268,7 +284,7 @@ def convert_spool_or_zarr(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
 
-    full_x = min(next(iter(shapes.values()))[2], max_x) if max_x else next(
+    full_x = min(next(iter(shapes.values()))[2], x_end) if x_end else next(
         iter(shapes.values()))[2]
     full_y = sum(shapes[(y, z_tiles[0])][1]
                  for y in y_tiles) - (len(y_tiles) - 1) * overlap
@@ -279,11 +295,10 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
+    logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
-
         for y in y_tiles:
             key = (y, z)
-
             if key in tiles:
                 tile = tiles[key]
                 rel_y, rel_z = tile.y - min_y, tile.z - min_z
@@ -312,8 +327,12 @@ def convert_spool_or_zarr(
                         mode="constant",
                         constant_values=0,
                     )
-                if max_x is not None:
-                    data = data[:, :, :min(data.shape[2], max_x)]
+                if x_end is not None:
+                    data = data[:, :, :min(data.shape[2], x_end)]
+                if z_end is not None:
+                    data = data[:z_end, :, :]
+                if z_start is not None:
+                    data = data[z_start:, :, :]
 
                 ystart = sum(
                     expected_sy[min_y + y] - overlap for y in range(rel_y))
@@ -338,8 +357,6 @@ def convert_spool_or_zarr(
 
             else:
                 raise ValueError(f"missing tile (z:{z}, y:{y})")
-
-    logger.info("Writing level 0 array with shape %s", fullshape)
 
     voxel_size = list(map(float, reversed(voxel_size)))
 

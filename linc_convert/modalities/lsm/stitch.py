@@ -38,7 +38,9 @@ def convert(
     nii_config: NiftiConfig = None,
     use_runs: bool = True,
     dandiset_id: Optional[str] = None,
-    max_x: Optional[int] = None,
+    x_end: Optional[int] = None,
+    z_start: Optional[int] = None,
+    z_end: Optional[int] = None,
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
@@ -65,10 +67,20 @@ def convert(
     use_runs
         If True will use the run id instead of the y id for y value
     dandiset_id
-        dandiset_id that contains the ome.zarr files for inp 
+        Dandiset_id that contains the ome.zarr files for inp
         (leave none if inp is local)
-    max_x
-        value to crop all x shapes to
+    x_end
+        Max x values to crop or pad all tiles to
+    z_start
+        The minimum z value that should be read in each tile
+    z_end
+        The maximum z value that should be read in each tile
+    allow_padding
+        If true bad tiles with 0s along the x axis if any are too small
+    number_workers
+        The number of workers for dask.to_zarr
+    threads_per_worker
+        The number of threads each worker gets (only used if number_workers is set)
     """
     convert_spool_or_zarr(inp, overlap=overlap,
                           voxel_size=voxel_size,
@@ -77,7 +89,9 @@ def convert(
                           nii_config=nii_config,
                           use_runs=use_runs,
                           dandiset_id=dandiset_id,
-                          max_x=max_x,
+                          x_end=x_end,
+                          z_start=z_start,
+                          z_end=z_end,
                           allow_padding=allow_padding,
                           number_workers=number_workers,
                           threads_per_worker=threads_per_worker)
