@@ -273,8 +273,8 @@ def convert_spool_or_zarr(
     logger.info("Merging tiles lazily")
 
     @delayed
-    def read_tile(reader: ZarrPythonArray) -> np.ndarray:
-        return reader[:]
+    def read_tile(store_path: str | os.PathLike) -> np.ndarray:
+        return ZarrPythonArray.open(store_path)[:]
 
     z_planes = []
 
@@ -289,7 +289,7 @@ def convert_spool_or_zarr(
                 reader = tile.reader
                 data = (
                     da.from_delayed(
-                        read_tile(reader),
+                        read_tile(reader.store_path),
                         shape=reader.shape,
                         dtype=reader.dtype,
                     )
