@@ -15,7 +15,7 @@ from typing import List, Optional
 import dask.array as da
 import numpy as np
 from dandi.dandiapi import DandiAPIClient
-from dask.delayed import delayed
+from dask.diagnostics import ProgressBar
 
 # internals
 from linc_convert.utils.io.spool import SpoolSetInterpreter
@@ -269,17 +269,10 @@ def convert_spool_or_zarr(
     fullshape = (full_z, full_y, full_x)
 
     omz = ZarrPythonGroup.from_config(general_config.out, zarr_config)
-
-    logger.info("Merging tiles lazily")
-
-    @delayed
-    def read_tile(store_path: str | os.PathLike) -> np.ndarray:
-        return ZarrPythonArray.open(store_path)[:]
-
-    z_planes = []
+    array = omz.create_array("0", shape=fullshape,
+                             zarr_config=zarr_config, dtype=dtype)
 
     for z in z_tiles:
-        row_tiles = []
 
         for y in y_tiles:
             key = (y, z)
@@ -288,11 +281,11 @@ def convert_spool_or_zarr(
                 tile = tiles[key]
                 reader = tile.reader
                 data = (
-                    da.from_delayed(
-                        read_tile(reader.store_path),
-                        shape=reader.shape,
-                        dtype=reader.dtype,
-                    )
+                    da.array(_open_tile_reader(
+                        tile.filename,
+                        dandiset_id=dandiset_id,
+                        api_key=api_key,
+                    ))
                     if isinstance(reader, ZarrPythonArray)
                     else reader.assemble_cropped()
                 )
@@ -305,24 +298,26 @@ def convert_spool_or_zarr(
                 if max_x is not None:
                     data = data[:, :, :min(data.shape[2], max_x)]
 
+                ystart = sum(
+                    expected_sy[min_y + y] - overlap for y in range(rel_y))
+                zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
+                if rel_y != 0:
+                    ystart += overlap // 2
+
+                slicer = (
+                    slice(zstart, zstart + data.shape[0]),
+                    slice(ystart, ystart + data.shape[1]),
+                    slice(None),
+                )
+                logger.info(f"Storing Tile z:{z}, y:{y}")
+
+                with ProgressBar():
+                    da.to_zarr(data, array._array, region=slicer)
+
             else:
                 raise ValueError(f"missing tile (z:{z}, y:{y})")
 
-            row_tiles.append(data)
-
-        z_planes.append(da.concatenate(row_tiles, axis=1))
-
-    output = da.concatenate(z_planes, axis=0)
-
     logger.info("Writing level 0 array with shape %s", fullshape)
-
-    omz.create_array(
-        "0",
-        shape=fullshape,
-        dtype=dtype,
-        zarr_config=zarr_config,
-        data=output
-    )
 
     voxel_size = list(map(float, reversed(voxel_size)))
 
