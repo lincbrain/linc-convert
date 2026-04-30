@@ -39,7 +39,9 @@ def convert(
     use_runs: bool = True,
     dandiset_id: Optional[str] = None,
     max_x: Optional[int] = None,
-    allow_padding: bool = False
+    allow_padding: bool = False,
+    number_workers: Optional[int] = None,
+    threads_per_worker: int = 1,
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -76,4 +78,6 @@ def convert(
                           use_runs=use_runs,
                           dandiset_id=dandiset_id,
                           max_x=max_x,
-                          allow_padding=allow_padding)
+                          allow_padding=allow_padding,
+                          number_workers=number_workers,
+                          threads_per_worker=threads_per_worker)

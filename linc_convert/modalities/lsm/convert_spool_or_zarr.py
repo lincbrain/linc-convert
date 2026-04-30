@@ -11,6 +11,8 @@ from glob import glob
 from pathlib import PurePosixPath
 from typing import List, Optional
 
+import dask
+
 # externals
 import dask.array as da
 import numpy as np
@@ -114,7 +116,9 @@ def convert_spool_or_zarr(
     use_runs: bool = False,
     dandiset_id: Optional[str] = None,
     max_x: Optional[int] = None,
-    allow_padding: bool = False
+    allow_padding: bool = False,
+    number_workers: Optional[int] = None,
+    threads_per_worker: int = 1
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -323,9 +327,14 @@ def convert_spool_or_zarr(
                     slice(None),
                 )
                 logger.info(f"Storing Tile z:{z}, y:{y}")
-
-                with ProgressBar():
-                    da.to_zarr(data, array._array, region=slicer)
+                if number_workers is not None:
+                    with dask.config.set(number_workers=number_workers,
+                                         threads_per_worker=threads_per_worker):
+                        with ProgressBar():
+                            da.to_zarr(data, array._array, region=slicer)
+                else:
+                    with ProgressBar():
+                        da.to_zarr(data, array._array, region=slicer)
 
             else:
                 raise ValueError(f"missing tile (z:{z}, y:{y})")
