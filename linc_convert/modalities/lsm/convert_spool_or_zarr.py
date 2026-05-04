@@ -233,6 +233,10 @@ class DeskewedSCAPE_ZYX:
     def ndim(self):
         return self.raw.ndim
 
+    @property
+    def chunks(self):
+        return self.raw.chunks
+
     def __getitem__(self, key):
         if not isinstance(key, tuple):
             key = (key,)
@@ -253,88 +257,52 @@ class DeskewedSCAPE_ZYX:
         Y_src = Yg
         Z_src = Zg
 
-        if self.has_time:
-            t_key = key[3]
-            t_idx = self._key_to_idx(
-                t_key, self.raw.shape[3]
-            )
+        # Interpolation margin (cubic)
+        margin = 2
 
-            Zm, Ym, Xm, Tm = np.meshgrid(
-                Z_src, Y_src, X_src, t_idx, indexing="ij"
-            )
+        # Compute required bounds in raw coordinates
+        z0 = int(np.floor(Z_src.min())) - margin
+        z1 = int(np.ceil(Z_src.max())) + margin + 1
 
-            coords = np.vstack([
-                Zm.ravel(),
-                Ym.ravel(),
-                Xm.ravel(),
-                Tm.ravel(),
-            ])
+        y0 = int(np.floor(Y_src.min())) - margin
+        y1 = int(np.ceil(Y_src.max())) + margin + 1
 
-            sampled = map_coordinates(
-                self._as_numpy(self.raw),
-                coords,
-                order=self.order,
-                mode="constant",
-                cval=self.bg_value,
-            )
+        x0 = int(np.floor(X_src.min())) - margin
+        x1 = int(np.ceil(X_src.max())) + margin + 1
 
-            return sampled.reshape(
-                Zg.shape + (len(t_idx),)
-            )
+        # Clamp to raw array bounds
+        z0 = max(z0, 0)
+        y0 = max(y0, 0)
+        x0 = max(x0, 0)
 
-        else:
+        z1 = min(z1, self.raw.shape[0])
+        y1 = min(y1, self.raw.shape[1])
+        x1 = min(x1, self.raw.shape[2])
 
-            # Compute source coordinates
-            X_src = Xg - Zg * self.shps
-            Y_src = Yg
-            Z_src = Zg
+        # Slice raw data
+        raw_slice = self._as_numpy(self.raw[z0:z1, y0:y1, x0:x1])
 
-            # Interpolation margin (cubic)
-            margin = 2
+        # Shift coordinates into sliced array space
+        Zs = Z_src - z0
+        Ys = Y_src - y0
+        Xs = X_src - x0
 
-            # Compute required bounds in raw coordinates
-            z0 = int(np.floor(Z_src.min())) - margin
-            z1 = int(np.ceil(Z_src.max())) + margin + 1
+        coords = np.vstack([
+            Zs.ravel(),
+            Ys.ravel(),
+            Xs.ravel(),
+        ])
 
-            y0 = int(np.floor(Y_src.min())) - margin
-            y1 = int(np.ceil(Y_src.max())) + margin + 1
+        # Interpolate
+        sampled = map_coordinates(
+            raw_slice,
+            coords,
+            order=self.order,
+            mode="constant",
+            cval=self.bg_value,
+        )
 
-            x0 = int(np.floor(X_src.min())) - margin
-            x1 = int(np.ceil(X_src.max())) + margin + 1
-
-            # Clamp to raw array bounds
-            z0 = max(z0, 0)
-            y0 = max(y0, 0)
-            x0 = max(x0, 0)
-
-            z1 = min(z1, self.raw.shape[0])
-            y1 = min(y1, self.raw.shape[1])
-            x1 = min(x1, self.raw.shape[2])
-
-            # Slice raw data
-            raw_slice = self._as_numpy(self.raw[z0:z1, y0:y1, x0:x1])
-
-            # Shift coordinates into sliced array space
-            Zs = Z_src - z0
-            Ys = Y_src - y0
-            Xs = X_src - x0
-
-            coords = np.vstack([
-                Zs.ravel(),
-                Ys.ravel(),
-                Xs.ravel(),
-            ])
-
-            # Interpolate
-            sampled = map_coordinates(
-                raw_slice,
-                coords,
-                order=self.order,
-                mode="constant",
-                cval=self.bg_value,
-            )
-
-            return sampled.reshape(Zg.shape)
+        return sampled.reshape(Zg.shape)
 
     @staticmethod
     def _key_to_idx(key, size):
@@ -347,31 +315,8 @@ class DeskewedSCAPE_ZYX:
 
     @staticmethod
     def _as_numpy(arr):
-        try:
-            import dask.array as da
-            if isinstance(arr, da.Array):
-                return arr.compute()
-        except ImportError:
-            pass
-        return np.asarray(arr)
-
-    @staticmethod
-    def _key_to_idx(key, size):
-        if isinstance(key, slice):
-            return np.arange(*key.indices(size))
-        elif np.isscalar(key):
-            return np.array([key])
-        else:
-            return np.asarray(key)
-
-    @staticmethod
-    def _as_numpy(arr):
-        try:
-            import dask.array as da
-            if isinstance(arr, da.Array):
-                return arr.compute()
-        except ImportError:
-            pass
+        if isinstance(arr, da.Array):
+            return arr.compute()
         return np.asarray(arr)
 
 
@@ -726,13 +671,13 @@ def convert_spool_or_zarr(
                 rel_y, rel_z = tile.y - min_y, tile.z - min_z
                 reader = tile.reader
                 data = (
-                    da.array(_open_tile_reader(
+                    da.from_array(_open_tile_reader(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
                         voxel_sizes=voxel_size,
                         delta_deg=skew_delta
-                    ))
+                    ), chunks=array._array.chunks)
                     if isinstance(reader, ZarrPythonArray) or isinstance(reader, DeskewedSCAPE_ZYX)
                     else reader.assemble_cropped()
                 )
@@ -769,7 +714,7 @@ def convert_spool_or_zarr(
 
                 print(data.shape)
 
-                data = da.from_array(data.compute(), chunks=(256, 256, 256))
+                # data = da.from_array(data.compute(), chunks=(256, 256, 256))
 
                 slicer = (
                     slice(zstart, zstart + data.shape[0]),
