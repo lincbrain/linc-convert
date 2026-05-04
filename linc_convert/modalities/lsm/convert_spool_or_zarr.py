@@ -67,12 +67,12 @@ def _open_tile_reader(
 ) -> SpoolSetInterpreter:
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX(ZarrPythonGroup.open(path)["0"], voxel_sizes, delta_deg, 0.0)
-        return DeskewedSCAPE_ZYX(ZarrPythonGroup.open_dandi(
+            return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open(path)["0"]), voxel_sizes, delta_deg, 0.0)
+        return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], voxel_sizes, delta_deg, 0.0)
+        )["0"]), voxel_sizes, delta_deg, 0.0)
 
     return SpoolSetInterpreter(path, f"{path}_info.mat")
 
@@ -283,14 +283,51 @@ class DeskewedSCAPE_ZYX:
             )
 
         else:
+
+            # Compute source coordinates
+            X_src = Xg - Zg * self.shps
+            Y_src = Yg
+            Z_src = Zg
+
+            # Interpolation margin (cubic)
+            margin = 2
+
+            # Compute required bounds in raw coordinates
+            z0 = int(np.floor(Z_src.min())) - margin
+            z1 = int(np.ceil(Z_src.max())) + margin + 1
+
+            y0 = int(np.floor(Y_src.min())) - margin
+            y1 = int(np.ceil(Y_src.max())) + margin + 1
+
+            x0 = int(np.floor(X_src.min())) - margin
+            x1 = int(np.ceil(X_src.max())) + margin + 1
+
+            # Clamp to raw array bounds
+            z0 = max(z0, 0)
+            y0 = max(y0, 0)
+            x0 = max(x0, 0)
+
+            z1 = min(z1, self.raw.shape[0])
+            y1 = min(y1, self.raw.shape[1])
+            x1 = min(x1, self.raw.shape[2])
+
+            # Slice raw data
+            raw_slice = self._as_numpy(self.raw[z0:z1, y0:y1, x0:x1])
+
+            # Shift coordinates into sliced array space
+            Zs = Z_src - z0
+            Ys = Y_src - y0
+            Xs = X_src - x0
+
             coords = np.vstack([
-                Z_src.ravel(),
-                Y_src.ravel(),
-                X_src.ravel(),
+                Zs.ravel(),
+                Ys.ravel(),
+                Xs.ravel(),
             ])
 
+            # Interpolate
             sampled = map_coordinates(
-                self._as_numpy(self.raw),
+                raw_slice,
                 coords,
                 order=self.order,
                 mode="constant",
@@ -693,6 +730,8 @@ def convert_spool_or_zarr(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
+                        voxel_sizes=voxel_size,
+                        delta_deg=skew_delta
                     ))
                     if isinstance(reader, ZarrPythonArray) or isinstance(reader, DeskewedSCAPE_ZYX)
                     else reader.assemble_cropped()
