@@ -466,15 +466,15 @@ def convert_spool_or_zarr(
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
                     reader = tile.reader
                     data = (
-                        da.array(_open_tile_reader(
+                        da.from_array(_open_tile_reader(
                             tile.filename,
                             dandiset_id=dandiset_id,
                             api_key=api_key,
                             voxel_sizes=voxel_size,
                             skew_angle=skew_angle
-                        ))
+                        ), chunks=array._array.chunks)
                         if tile.filename.endswith(".ome.zarr")
-                        else da.array(reader)
+                        else da.from_array(reader, chunks=array._array.chunks)
                     )
 
                     if overlap and len(y_tiles) > 1:
