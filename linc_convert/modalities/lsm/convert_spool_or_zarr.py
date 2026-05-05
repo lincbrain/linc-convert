@@ -67,12 +67,12 @@ def _open_tile_reader(
 ) -> "DeskewedSCAPE_ZYX":
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open(path)["0"]), voxel_sizes, skew_angle, 0.0)
-        return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open_dandi(
+            return DeskewedSCAPE_ZYX(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle, 0.0)
+        return DeskewedSCAPE_ZYX(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"]), voxel_sizes, skew_angle, 0.0)
+        )["0"], voxel_sizes, skew_angle, 0.0)
 
     return DeskewedSCAPE_ZYX(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
