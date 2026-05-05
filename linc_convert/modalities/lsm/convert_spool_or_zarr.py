@@ -453,80 +453,85 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
+    X_CHUNKS = 10000
     logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
         for y in y_tiles:
             key = (y, z)
             if key in tiles:
-                tile = tiles[key]
-                rel_y, rel_z = tile.y - min_y, tile.z - min_z
-                reader = tile.reader
-                data = (
-                    da.array(_open_tile_reader(
-                        tile.filename,
-                        dandiset_id=dandiset_id,
-                        api_key=api_key,
-                        voxel_sizes=voxel_size,
-                        skew_angle=skew_angle
-                    )[:, :, :])
-                    if tile.filename.endswith(".ome.zarr")
-                    else da.array(reader[:, :, :])
-                )
+                for x in range(0, expected_sx, X_CHUNKS):
+                    x2 = min(expected_sx, x+X_CHUNKS)
 
-                if overlap and len(y_tiles) > 1:
-                    if tile.y != min_y:
-                        data = data[:, overlap // 2:, :]
-                    if tile.y != max_y:
-                        data = data[:, : -(overlap // 2 + overlap % 2), :]
-                if allow_padding and data.shape[2] < expected_sx:
-                    pad_width = expected_sx - data.shape[2]
-
-                    data = da.pad(
-                        data,
-                        pad_width=((0, 0), (0, 0), (0, pad_width)),
-                        mode="constant",
-                        constant_values=0,
+                    tile = tiles[key]
+                    rel_y, rel_z = tile.y - min_y, tile.z - min_z
+                    reader = tile.reader
+                    data = (
+                        da.array(_open_tile_reader(
+                            tile.filename,
+                            dandiset_id=dandiset_id,
+                            api_key=api_key,
+                            voxel_sizes=voxel_size,
+                            skew_angle=skew_angle
+                        ))
+                        if tile.filename.endswith(".ome.zarr")
+                        else da.array(reader)
                     )
-                if x_end is not None:
-                    data = data[:, :, :min(data.shape[2], x_end)]
-                if z_end is not None:
-                    data = data[:z_end, :, :]
-                if z_start is not None:
-                    data = data[z_start:, :, :]
 
-                ystart = sum(
-                    expected_sy[min_y + y] - overlap for y in range(rel_y))
-                zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
-                if rel_y != 0:
-                    ystart += overlap // 2
+                    if overlap and len(y_tiles) > 1:
+                        if tile.y != min_y:
+                            data = data[:, overlap // 2:, :]
+                        if tile.y != max_y:
+                            data = data[:, : -(overlap // 2 + overlap % 2), :]
+                    if allow_padding and data.shape[2] < expected_sx:
+                        pad_width = expected_sx - data.shape[2]
 
-                # data = skew_correction_shift_dask(
-                #    data, 0.0, voxel_size, skew_angle)
+                        data = da.pad(
+                            data,
+                            pad_width=((0, 0), (0, 0), (0, pad_width)),
+                            mode="constant",
+                            constant_values=0,
+                        )
+                    if x_end is not None:
+                        data = data[:, :, :min(data.shape[2], x_end)]
+                    if z_end is not None:
+                        data = data[:z_end, :, :]
+                    if z_start is not None:
+                        data = data[z_start:, :, :]
 
-                print(data.shape)
+                    ystart = sum(
+                        expected_sy[min_y + y] - overlap for y in range(rel_y))
+                    zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
+                    if rel_y != 0:
+                        ystart += overlap // 2
 
-                # data = da.from_array(data.compute(), chunks=(256, 256, 256))
+                    data = data[:, :, x:x2]
 
-                slicer = (
-                    slice(zstart, zstart + data.shape[0]),
-                    slice(ystart, ystart + data.shape[1]),
-                    slice(None),
-                )
-                logger.info(f"Storing Tile z:{z}, y:{y}")
+                    # data = skew_correction_shift_dask(
+                    #    data, 0.0, voxel_size, skew_angle)
 
-                print("Dask shape:", data.shape)
-                print("Dask chunks:", data.chunks)
-                print("Zarr chunks:", array._array.chunks)
-                data = data.rechunk(array._array.chunks)
+                    print(data.shape)
 
-                if number_workers is not None:
-                    with dask.config.set(number_workers=number_workers,
-                                         threads_per_worker=threads_per_worker):
+                    # data = da.from_array(data.compute(), chunks=(256, 256, 256))
+
+                    slicer = (
+                        slice(zstart, zstart + data.shape[0]),
+                        slice(ystart, ystart + data.shape[1]),
+                        slice(x, x2),
+                    )
+                    logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
+
+                    print("Dask shape:", data.shape)
+                    print("Dask chunks:", data.chunks)
+                    print("Zarr chunks:", array._array.chunks)
+                    data = data.rechunk(array._array.chunks)
+                    if number_workers is not None:
+                        with dask.config.set(number_workers=number_workers,
+                                             threads_per_worker=threads_per_worker):
+                            with ProgressBar():
+                                da.to_zarr(data, array._array, region=slicer)
+                    else:
                         with ProgressBar():
                             da.to_zarr(data, array._array, region=slicer)
-                else:
-                    with ProgressBar():
-                        da.to_zarr(data, array._array, region=slicer)
 
             else:
                 raise ValueError(f"missing tile (z:{z}, y:{y})")
