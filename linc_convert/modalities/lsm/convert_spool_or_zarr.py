@@ -453,7 +453,7 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
-    X_CHUNKS = array._array.chunks[2]*40
+    X_CHUNKS = array._array.chunks[2]*80
     logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
         for y in y_tiles:
@@ -472,9 +472,9 @@ def convert_spool_or_zarr(
                             api_key=api_key,
                             voxel_sizes=voxel_size,
                             skew_angle=skew_angle
-                        ), chunks=array._array.chunks)
+                        ))
                         if tile.filename.endswith(".ome.zarr")
-                        else da.from_array(reader, chunks=array._array.chunks)
+                        else da.from_array(reader)
                     )
 
                     if overlap and len(y_tiles) > 1:
@@ -519,9 +519,6 @@ def convert_spool_or_zarr(
                         slice(x, x2),
                     )
                     logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
-
-                    data = da.from_array(
-                        data.compute(), chunks=array._array.chunks)
 
                     if number_workers is not None:
                         with dask.config.set(number_workers=number_workers,
