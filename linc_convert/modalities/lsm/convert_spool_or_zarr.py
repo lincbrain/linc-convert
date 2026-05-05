@@ -9,7 +9,7 @@ import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
 from pathlib import PurePosixPath
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import dask
 
@@ -63,122 +63,22 @@ def _open_tile_reader(
     dandiset_id: Optional[str],
     api_key: Optional[str],
     voxel_sizes: Tuple[float] = (1.0, 1.0, 1.0),
-    delta_deg: float = 0.0
-) -> SpoolSetInterpreter:
+    skew_angle: float = 0.0
+) -> "DeskewedSCAPE_ZYX":
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open(path)["0"]), voxel_sizes, delta_deg, 0.0)
+            return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open(path)["0"]), voxel_sizes, skew_angle, 0.0)
         return DeskewedSCAPE_ZYX(da.array(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"]), voxel_sizes, delta_deg, 0.0)
+        )["0"]), voxel_sizes, skew_angle, 0.0)
 
-    return SpoolSetInterpreter(path, f"{path}_info.mat")
-
-
-def deskew_single_x_slice_zyx(block, *,
-                              x_index,
-                              shps,
-                              output_z,
-                              bg_value):
-    """
-    block shape:
-      3D: (Z, Y, 1)
-      4D: (Z, Y, 1, T)
-    """
-
-    block = np.squeeze(block, axis=2)  # remove X dimension
-
-    Z = block.shape[0]
-    Y = block.shape[1]
-
-    z = np.arange(Z)
-    y = np.arange(Y)
-
-    bba = int(np.floor((x_index + 1) * shps))
-    z_new = z - (x_index + 1) * shps + bba
-
-    if block.ndim == 3:  # (Z, Y, T)
-        T = block.shape[2]
-        t = np.arange(T)
-
-        interp = RegularGridInterpolator(
-            (z, y, t),
-            block,
-            method="cubic",
-            bounds_error=False,
-            fill_value=1,
-        )
-
-        Zg, Yg, Tg = np.meshgrid(z_new, y, t, indexing="ij")
-        pts = np.stack([Zg, Yg, Tg], axis=-1)
-        temp = interp(pts)
-
-        out = np.full((output_z, Y, T), bg_value, dtype=np.float32)
-        out[1 + bba: 1 + bba + Z - 1, :, :] = temp[1:, :, :]
-
-    else:  # 3D case: (Z, Y)
-        interp = RegularGridInterpolator(
-            (z, y),
-            block,
-            method="cubic",
-            bounds_error=False,
-            fill_value=1,
-        )
-
-        Zg, Yg = np.meshgrid(z_new, y, indexing="ij")
-        pts = np.stack([Zg, Yg], axis=-1)
-        temp = interp(pts)
-
-        out = np.full((output_z, Y), bg_value, dtype=np.float32)
-        out[1 + bba: 1 + bba + Z - 1, :] = temp[1:, :]
-
-    return out
-
-
-def skew_correction_shift_dask(
-    SCAPE_dask: np.ndarray,
-    BG_bias,
-    conversionFactors,
-    delta: float,
-):
-    """
-    SCAPE_dask shape:
-      3D: (Z, Y, X)
-      4D: (Z, Y, X, T)
-    """
-
-    sn = SCAPE_dask.shape
-
-    # shear per X pixel
-    shps = conversionFactors[2] * \
-        np.tan(np.deg2rad(delta)) / conversionFactors[0]
-
-    extra_z = int(np.ceil(sn[2] * shps))
-    output_z = sn[0] + extra_z
-
-    slices = []
-
-    for i in range(sn[2]):  # iterate over X
-        x_block = SCAPE_dask[:, :, i:i+1, ...]  # keep X chunk size = 1
-
-        slice_out = da.map_blocks(
-            deskew_single_x_slice_zyx,
-            x_block,
-            dtype=np.float32,
-            chunks=(output_z, sn[1], 1),   # <-- THIS is critical
-            drop_axis=2,
-            new_axis=2,
-            x_index=i,
-            shps=shps,
-            output_z=output_z,
-            bg_value=BG_bias,
-        )
-
-        slices.append(slice_out)
-
-    return da.concatenate(slices, axis=2)
+    return DeskewedSCAPE_ZYX(
+        SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
+        voxel_sizes,
+        skew_angle,
+        0.0)
 
 
 class DeskewedSCAPE_ZYX:
@@ -192,17 +92,15 @@ class DeskewedSCAPE_ZYX:
 
     def __init__(
         self,
-        raw_data,
-        voxel_sizes,
-        delta_deg,
-        bg_value=0.0,
-        order=3,
-    ):
+        raw_data: da.Array,
+        voxel_sizes: Tuple[float],
+        skew_angle: float,
+        bg_value: float = 0.0,
+    ) -> None:
         self.raw = raw_data
         self.z_size, self.y_size, self.x_size = voxel_sizes
-        self.delta = delta_deg
+        self.delta = skew_angle
         self.bg_value = bg_value
-        self.order = order
 
         self.shps = (
             self.z_size
@@ -222,22 +120,32 @@ class DeskewedSCAPE_ZYX:
             self._shape = (Z, Y, X + self.extra_x)
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[int]:
+        """Return shape after descewing is performed."""
         return self._shape
 
     @property
-    def dtype(self):
+    def dtype(self) -> type:
+        """Returns raw data data type."""
         return self.raw.dtype
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
+        """Returns raw data number of demensions."""
         return self.raw.ndim
 
     @property
-    def chunks(self):
+    def chunks(self) -> Tuple[int]:
+        """Returns raw data chunks."""
         return self.raw.chunks
 
-    def __getitem__(self, key):
+    def __getitem__(self,
+                    key: Union[Tuple[Union[int, slice]], int, slice]
+                    ) -> np.ndarray:
+        """Get a slice of the deskewed data."""
+        if self.delta == 0.0:
+            return self.raw[key]
+
         if not isinstance(key, tuple):
             key = (key,)
         while len(key) < len(self.shape):
@@ -297,7 +205,7 @@ class DeskewedSCAPE_ZYX:
         sampled = map_coordinates(
             raw_slice,
             coords,
-            order=self.order,
+            order=3,
             mode="constant",
             cval=self.bg_value,
         )
@@ -305,7 +213,9 @@ class DeskewedSCAPE_ZYX:
         return sampled.reshape(Zg.shape)
 
     @staticmethod
-    def _key_to_idx(key, size):
+    def _key_to_idx(key: Union[Tuple[Union[int, slice]], int, slice],
+                    size: int
+                    ) -> np.ndarray:
         if isinstance(key, slice):
             return np.arange(*key.indices(size))
         elif np.isscalar(key):
@@ -314,127 +224,10 @@ class DeskewedSCAPE_ZYX:
             return np.asarray(key)
 
     @staticmethod
-    def _as_numpy(arr):
+    def _as_numpy(arr: Union[da.Array, np.ndarray]) -> np.ndarray:
         if isinstance(arr, da.Array):
             return arr.compute()
         return np.asarray(arr)
-
-
-"""
-def _skew_correction_shift(SCAPE_data: np.ndarray,
-                           BG_bias: float,
-                           conversionFactors: Tuple[float],
-                           delta: float) -> np.ndarray:
-
-    zx skew correction based on Emine Ozen's matlab script.
-
-    Parameters
-    ----------
-    SCAPE_data : np.ndarray
-        3D (Z, Y, X) or 4D (Z, Y, X, T) array
-    BG_bias : float
-        Background value used for padding
-    conversionFactors : sequence
-        Conversion factors (index 0 = dz, index 2 = dx)
-    delta : float
-        Skew angle in degrees
-
-    Returns
-    -------
-    SCAPE_data_skew3 : np.ndarray
-        Skew-corrected data, shape (Z + ΔZ, Y, X[, T])
-
-    sn = SCAPE_data.shape
-    ndim = SCAPE_data.ndim
-
-    # Shear per X pixel (Z pixels per X pixel)
-    shps = conversionFactors[2] * \
-        np.tan(np.deg2rad(delta)) / conversionFactors[0]
-
-    # Output Z padding
-    extra_z = int(np.ceil(sn[2] * shps))
-    out_z = sn[0] + extra_z
-
-    # Allocate output
-    if ndim == 4:
-        SCAPE_data_skew3 = (
-            BG_bias
-            * np.ones((out_z, sn[1], sn[2], sn[3]), dtype=np.float32)
-        )
-    else:
-        SCAPE_data_skew3 = (
-            BG_bias
-            * np.ones((out_z, sn[1], sn[2]), dtype=np.float32)
-        )
-
-    # Coordinate grids (0-based, Python)
-    z = np.arange(sn[0])
-    y = np.arange(sn[1])
-
-    logger.info("Skew correction...")
-
-    # Loop over X (matches MATLAB for-loop)
-    for i in range(sn[2]):
-        # MATLAB: bba = floor(i * shps)   with i starting at 1
-        bba = int(np.floor((i + 1) * shps))
-
-        # Shifted Z coordinates
-        z_new = z - (i + 1) * shps + bba
-
-        if ndim == 4:
-            # (Z, Y, T) slab
-            slab = SCAPE_data[:, :, i, :].astype(np.float32)
-            t = np.arange(sn[3])
-
-            interp = RegularGridInterpolator(
-                (z, y, t),
-                slab,
-                method="cubic",
-                bounds_error=False,
-                fill_value=1,
-            )
-
-            Zg, Yg, Tg = np.meshgrid(z_new, y, t, indexing="ij")
-            pts = np.stack([Zg, Yg, Tg], axis=-1)
-
-            temp = interp(pts)
-
-            # MATLAB: [2:sn(3)] + bba   → Python: [1:sn[0]] + bba
-            SCAPE_data_skew3[
-                1 + bba: 1 + bba + sn[0] - 1,
-                :,
-                i,
-                :
-            ] = temp[1:, :, :]
-
-        else:
-            # (Z, Y) slab
-            slab = SCAPE_data[:, :, i].astype(np.float32)
-
-            interp = RegularGridInterpolator(
-                (z, y),
-                slab,
-                method="cubic",
-                bounds_error=False,
-                fill_value=1,
-            )
-
-            Zg, Yg = np.meshgrid(z_new, y, indexing="ij")
-            pts = np.stack([Zg, Yg], axis=-1)
-
-            temp = interp(pts)
-
-            SCAPE_data_skew3[
-                1 + bba: 1 + bba + sn[0] - 1,
-                :,
-                i
-            ] = temp[1:, :]
-
-        if (i + 1) % max(1, sn[2] // 10) == 0:
-            logger.info(f"  {i + 1}/{sn[2]} X-slices processed")
-
-    return SCAPE_data_skew3
-"""
 
 
 def _discover_tile_paths(inp: str,
@@ -485,7 +278,8 @@ def convert_spool_or_zarr(
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
-    skew_delta: Optional[float] = 0.42,
+    skew_angle: Optional[float] = 42.0,
+    background_removal: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -554,7 +348,7 @@ def convert_spool_or_zarr(
             dandiset_id=dandiset_id,
             api_key=api_key,
             voxel_sizes=voxel_size,
-            delta_deg=skew_delta
+            skew_angle=skew_angle
         )
 
         tile = TileInfo(
@@ -598,10 +392,7 @@ def convert_spool_or_zarr(
 
     for (y, z), tile in tiles.items():
         reader = tile.reader
-        if isinstance(reader, ZarrPythonArray) or isinstance(reader, DeskewedSCAPE_ZYX):
-            sz, sy, sx = reader.shape
-        else:
-            sz, sy, sx = reader.assembled_spool_shape
+        sz, sy, sx = reader.shape
         if x_end is not None:
             sx = min(x_end, sx)
         if z_end is not None:
@@ -671,15 +462,15 @@ def convert_spool_or_zarr(
                 rel_y, rel_z = tile.y - min_y, tile.z - min_z
                 reader = tile.reader
                 data = (
-                    da.from_array(_open_tile_reader(
+                    da.array(_open_tile_reader(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
                         voxel_sizes=voxel_size,
-                        delta_deg=skew_delta
-                    ), chunks=array._array.chunks)
-                    if isinstance(reader, ZarrPythonArray) or isinstance(reader, DeskewedSCAPE_ZYX)
-                    else reader.assemble_cropped()
+                        skew_angle=skew_angle
+                    )[:, :, :])
+                    if tile.filename.endswith(".ome.zarr")
+                    else da.array(reader[:, :, :])
                 )
 
                 if overlap and len(y_tiles) > 1:
@@ -710,7 +501,7 @@ def convert_spool_or_zarr(
                     ystart += overlap // 2
 
                 # data = skew_correction_shift_dask(
-                #    data, 0.0, voxel_size, skew_delta)
+                #    data, 0.0, voxel_size, skew_angle)
 
                 print(data.shape)
 
