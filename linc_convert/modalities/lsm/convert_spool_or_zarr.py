@@ -205,7 +205,7 @@ class DeskewedSCAPE_ZYX:
         sampled = map_coordinates(
             raw_slice,
             coords,
-            order=3,
+            order=1,
             mode="constant",
             cval=self.bg_value,
         )
@@ -453,7 +453,7 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
-    X_CHUNKS = array._array.chunks[2]*80
+    X_CHUNKS = array._array.chunks[2]*16
     logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
         for y in y_tiles:
