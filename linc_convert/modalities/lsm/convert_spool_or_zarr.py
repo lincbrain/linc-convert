@@ -9,7 +9,7 @@ import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
 from pathlib import PurePosixPath
-from typing import List, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import dask
 
@@ -279,7 +279,7 @@ def convert_spool_or_zarr(
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
     skew_angle: Optional[float] = 42.0,
-    background_removal: bool = False
+    background_removal: Union[float, Literal["auto"]] = 0.0
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -459,22 +459,25 @@ def convert_spool_or_zarr(
         for y in y_tiles:
             key = (y, z)
             if key in tiles:
+                if background_removal == "auto":
+                    data = _open_tile_reader(
+                        tile.filename, dandiset_id=dandiset_id, api_key=api_key)
+                    threshold = np.max(data[:, :, :-300])
+                else:
+                    threshold = background_removal
+
                 for x in range(0, expected_sx, X_CHUNKS):
                     x2 = min(expected_sx, x+X_CHUNKS)
 
                     tile = tiles[key]
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
-                    data = (
-                        da.from_array(_open_tile_reader(
-                            tile.filename,
-                            dandiset_id=dandiset_id,
-                            api_key=api_key,
-                            voxel_sizes=voxel_size,
-                            skew_angle=skew_angle
-                        ), chunks=array._array.chunks)
-                        if tile.filename.endswith(".ome.zarr")
-                        else da.from_array(tile.reader, chunks=array._array.chunks)
-                    )
+                    data = da.from_array(_open_tile_reader(
+                        tile.filename,
+                        dandiset_id=dandiset_id,
+                        api_key=api_key,
+                        voxel_sizes=voxel_size,
+                        skew_angle=skew_angle
+                    ), chunks=array._array.chunks)
 
                     if overlap and len(y_tiles) > 1:
                         if tile.y != min_y:
@@ -511,12 +514,13 @@ def convert_spool_or_zarr(
                     print(data.shape)
 
                     # data = da.from_array(data.compute(), chunks=(256, 256, 256))
-
+                    data = da.where(data <= threshold, data, 0)
                     slicer = (
                         slice(zstart, zstart + data.shape[0]),
                         slice(ystart, ystart + data.shape[1]),
                         slice(x, x2),
                     )
+
                     logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
 
                     if number_workers is not None:

@@ -6,7 +6,7 @@ https://lincbrain.org/dandiset/000056/draft/files?location=derivatives%2Fcompres
 """
 
 import logging
-from typing import Optional
+from typing import Literal, Optional, Union
 
 # externals
 import cyclopts
@@ -44,6 +44,8 @@ def convert(
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
+    skew_angle: float = 0,
+    background_removal: Union[float, Literal["auto"]] = 0.0
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -94,4 +96,7 @@ def convert(
                           z_end=z_end,
                           allow_padding=allow_padding,
                           number_workers=number_workers,
-                          threads_per_worker=threads_per_worker)
+                          threads_per_worker=threads_per_worker,
+                          skew_angle=skew_angle,
+                          background_removal=background_removal
+                          )
