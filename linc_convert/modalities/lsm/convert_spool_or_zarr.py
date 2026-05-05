@@ -453,7 +453,7 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
-    X_CHUNKS = 10000
+    X_CHUNKS = array._array.chunks[2]*40
     logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
         for y in y_tiles:
@@ -520,10 +520,9 @@ def convert_spool_or_zarr(
                     )
                     logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
 
-                    print("Dask shape:", data.shape)
-                    print("Dask chunks:", data.chunks)
-                    print("Zarr chunks:", array._array.chunks)
-                    data = data.rechunk(array._array.chunks)
+                    data = da.from_array(
+                        data.compute(), chunks=array._array.chunks)
+
                     if number_workers is not None:
                         with dask.config.set(number_workers=number_workers,
                                              threads_per_worker=threads_per_worker):
