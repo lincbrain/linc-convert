@@ -471,9 +471,9 @@ def convert_spool_or_zarr(
                             api_key=api_key,
                             voxel_sizes=voxel_size,
                             skew_angle=skew_angle
-                        ), chunks=tile.reader.chunks)
+                        ), chunks=array._array.chunks)
                         if tile.filename.endswith(".ome.zarr")
-                        else da.from_array(tile.reader, chunks=tile.reader.chunks)
+                        else da.from_array(tile.reader, chunks=array._array.chunks)
                     )
 
                     if overlap and len(y_tiles) > 1:
