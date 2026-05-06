@@ -46,7 +46,8 @@ def convert(
     threads_per_worker: int = 1,
     skew_angle: float = 0,
     background_removal: Union[float, Literal["auto"]] = 0.0,
-    chunks_processed: int = 0
+    chunks_processed: int = 0,
+    blend: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -100,5 +101,6 @@ def convert(
                           threads_per_worker=threads_per_worker,
                           skew_angle=skew_angle,
                           background_removal=background_removal,
-                          chunks_processed=chunks_processed
+                          chunks_processed=chunks_processed,
+                          blend=blend
                           )
