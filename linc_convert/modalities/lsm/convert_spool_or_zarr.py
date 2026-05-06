@@ -5,6 +5,7 @@ import getpass
 import logging
 import os
 import re
+import time
 import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
@@ -23,6 +24,7 @@ from scipy.ndimage import map_coordinates
 
 # internals
 from linc_convert.utils.io.spool import SpoolSetInterpreter
+from linc_convert.utils.io.zarr.abc import ZarrArray
 from linc_convert.utils.io.zarr.drivers.zarr_python import (
     ZarrPythonArray,
     ZarrPythonGroup,
@@ -67,18 +69,17 @@ def _open_tile_reader(
 ) -> "DeskewedSCAPE_ZYX":
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle, 0.0)
-        return DeskewedSCAPE_ZYX(ZarrPythonGroup.open_dandi(
+            return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle)
+        return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], voxel_sizes, skew_angle, 0.0)
+        )["0"], voxel_sizes, skew_angle)
 
-    return DeskewedSCAPE_ZYX(
+    return DeskewedSCAPE_ZYX.wrap(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
         voxel_sizes,
-        skew_angle,
-        0.0)
+        skew_angle)
 
 
 class DeskewedSCAPE_ZYX:
@@ -229,6 +230,12 @@ class DeskewedSCAPE_ZYX:
             return arr.compute()
         return np.asarray(arr)
 
+    @classmethod
+    def wrap(cls, arr: Union[da.Array, np.ndarray, ZarrArray], voxel_sizes: Tuple[float, ...], skew_angle: float) -> Union[da.Array, np.ndarray, ZarrArray, "DeskewedSCAPE_ZYX"]:
+        if skew_angle == 0:
+            return arr
+        return cls(arr, voxel_sizes, skew_angle)
+
 
 def _discover_tile_paths(inp: str,
                          *,
@@ -279,7 +286,8 @@ def convert_spool_or_zarr(
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
     skew_angle: Optional[float] = 42.0,
-    background_removal: Union[float, Literal["auto"]] = 0.0
+    background_removal: Union[float, Literal["auto"]] = 0.0,
+    chunks_processed: int = 0,
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -324,6 +332,8 @@ def convert_spool_or_zarr(
     threads_per_worker
         The number of threads each worker gets (only used if number_workers is set)
     """
+    start = time.time()
+
     logger.info("Gathering files and metadata")
 
     api_key = _prompt_dandi_api_key() if dandiset_id else None
@@ -453,7 +463,9 @@ def convert_spool_or_zarr(
     array = omz.create_array("0", shape=fullshape,
                              zarr_config=zarr_config, dtype=dtype)
 
-    X_CHUNKS = array._array.chunks[2]*16
+    x_chunks = array._array.chunks[2]*chunks_processed
+    if x_chunks == 0:
+        x_chunks = expected_sx
     logger.info("Writing level 0 array with shape %s", fullshape)
     for z in z_tiles:
         for y in y_tiles:
@@ -466,8 +478,8 @@ def convert_spool_or_zarr(
                 else:
                     threshold = background_removal
 
-                for x in range(0, expected_sx, X_CHUNKS):
-                    x2 = min(expected_sx, x+X_CHUNKS)
+                for x in range(0, expected_sx, x_chunks):
+                    x2 = min(expected_sx, x+x_chunks)
 
                     tile = tiles[key]
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
@@ -514,7 +526,8 @@ def convert_spool_or_zarr(
                     print(data.shape)
 
                     # data = da.from_array(data.compute(), chunks=(256, 256, 256))
-                    data = da.where(data <= threshold, data, 0)
+                    if threshold > 0:
+                        data = da.where(data <= threshold, data, 0)
                     slicer = (
                         slice(zstart, zstart + data.shape[0]),
                         slice(ystart, ystart + data.shape[1]),
@@ -551,5 +564,6 @@ def convert_spool_or_zarr(
             nii_config=nii_config,
         )
         omz.write_nifti_header(header)
-
-    logger.info("Conversion complete.")
+    end = time.time()
+    length = end - start
+    logger.info(f"Conversion completed in {length/60} minutes.")
