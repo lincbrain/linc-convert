@@ -14,13 +14,14 @@ from typing import List, Literal, Optional, Tuple, Union
 
 import dask
 
+from dask_image.ndinterp import map_coordinates
+
 # externals
 import dask.array as da
 import numpy as np
 from dandi.dandiapi import DandiAPIClient
 from dask.diagnostics import ProgressBar
 from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import map_coordinates
 
 # internals
 from linc_convert.utils.io.spool import SpoolSetInterpreter
@@ -59,6 +60,60 @@ def _prompt_dandi_api_key() -> str:
     return key if key else getpass.getpass("Enter your DANDI API key: ")
 
 
+def apply_skew(arr, voxel_sizes, skew_angle):
+    if not isinstance(arr, da.Array):
+        arr = da.array(arr)
+
+    if skew_angle == 0:
+        return arr
+
+    z_size, y_size, x_size = voxel_sizes
+
+    shps = (
+        z_size
+        * np.tan(np.deg2rad(skew_angle))
+        / x_size
+    )
+
+    Z, Y, X = arr.shape[:3]
+    extra_x = int(np.ceil(Z * shps))
+
+    shape = (Z, Y, X + extra_x)
+
+    # Full output indices
+    z_idx = da.arange(Z)
+    y_idx = da.arange(Y)
+    x_idx = da.arange(X + extra_x)
+
+    # Full output grid
+    Zg, Yg, Xg = da.meshgrid(
+        z_idx, y_idx, x_idx, indexing="ij"
+    )
+
+    # Deskew mapping (X <- X - Z * shear)
+    X_src = Xg - Zg * shps
+    Y_src = Yg
+    Z_src = Zg
+
+    # Prepare coordinates for scipy
+    coords = np.vstack([
+        Z_src.ravel(),
+        Y_src.ravel(),
+        X_src.ravel(),
+    ])
+
+    # Interpolate
+    sampled = map_coordinates(
+        arr,
+        coords,
+        order=1,
+        mode="constant",
+        cval=0,
+    )
+
+    return sampled.reshape(shape)
+
+
 def _open_tile_reader(
     path: str,
     *,
@@ -69,14 +124,14 @@ def _open_tile_reader(
 ) -> "DeskewedSCAPE_ZYX":
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle)
-        return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open_dandi(
+            return apply_skew(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle)
+        return apply_skew(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
         )["0"], voxel_sizes, skew_angle)
 
-    return DeskewedSCAPE_ZYX.wrap(
+    return apply_skew(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
         voxel_sizes,
         skew_angle)
@@ -483,13 +538,13 @@ def convert_spool_or_zarr(
 
                     tile = tiles[key]
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
-                    data = da.from_array(_open_tile_reader(
+                    data = _open_tile_reader(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
                         voxel_sizes=voxel_size,
                         skew_angle=skew_angle
-                    ), chunks=array._array.chunks)
+                    )
 
                     if overlap and len(y_tiles) > 1:
                         if tile.y != min_y:
