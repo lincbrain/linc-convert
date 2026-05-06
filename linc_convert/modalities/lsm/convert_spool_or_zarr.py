@@ -285,9 +285,10 @@ def convert_spool_or_zarr(
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
-    skew_angle: Optional[float] = 42.0,
+    skew_angle: float = 0.0,
     background_removal: Union[float, Literal["auto"]] = 0.0,
     chunks_processed: int = 0,
+    blend: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -333,6 +334,8 @@ def convert_spool_or_zarr(
         The number of threads each worker gets (only used if number_workers is set)
     """
     start = time.time()
+
+    voxel_size = list(map(float, reversed(voxel_size)))
 
     logger.info("Gathering files and metadata")
 
@@ -467,19 +470,24 @@ def convert_spool_or_zarr(
     if x_chunks == 0:
         x_chunks = expected_sx
     logger.info("Writing level 0 array with shape %s", fullshape)
+    t = np.linspace(0, 1, overlap)
+    ramp = (1 - np.cos(np.pi * t)) / 2        # 0 → 1 (smooth)
+    ramp_inverse = (1 + np.cos(np.pi * t)) / 2  # 1 → 0 (smooth)
+    ramp = ramp[None, :, None]
+    ramp_inverse = ramp_inverse[None, :, None]
+    bottom_overlap = None
     for z in z_tiles:
-        for y in y_tiles:
-            key = (y, z)
-            if key in tiles:
-                if background_removal == "auto":
-                    data = _open_tile_reader(
-                        tile.filename, dandiset_id=dandiset_id, api_key=api_key)
-                    threshold = np.max(data[:, :, :-300])
-                else:
-                    threshold = background_removal
-
-                for x in range(0, expected_sx, x_chunks):
-                    x2 = min(expected_sx, x+x_chunks)
+        for x in range(0, expected_sx, x_chunks):
+            x2 = min(expected_sx, x+x_chunks)
+            for y in y_tiles:
+                key = (y, z)
+                if key in tiles:
+                    if background_removal == "auto":
+                        data = _open_tile_reader(
+                            tile.filename, dandiset_id=dandiset_id, api_key=api_key)
+                        threshold = np.max(data[:, :, :-300])
+                    else:
+                        threshold = background_removal
 
                     tile = tiles[key]
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
@@ -492,10 +500,31 @@ def convert_spool_or_zarr(
                     ), chunks=array._array.chunks)
 
                     if overlap and len(y_tiles) > 1:
-                        if tile.y != min_y:
-                            data = data[:, overlap // 2:, :]
-                        if tile.y != max_y:
-                            data = data[:, : -(overlap // 2 + overlap % 2), :]
+
+                        if blend:
+                            if tile.y != max_y:
+                                # Save bottom overlap BEFORE modifying data
+                                bottom_overlap = data[:, -overlap:, :]
+                                data = data[:, :-overlap, :]
+                                print("bottom_overlap set")
+                            # else:
+                            #    bottom_overlap = None
+
+                            if tile.y != min_y:
+                                top_overlap = data[:, :overlap, :]
+                                data = data[:, overlap:, :]
+
+                                # Blend with previous tile
+                                blended = bottom_overlap * ramp_inverse + top_overlap * ramp
+
+                                data = da.concatenate([blended, data], axis=1)
+
+                        else:
+                            if tile.y != min_y:
+                                data = data[:, overlap // 2:, :]
+                            if tile.y != max_y:
+                                data = data[:, : -
+                                            (overlap // 2 + overlap % 2), :]
                     if allow_padding and data.shape[2] < expected_sx:
                         pad_width = expected_sx - data.shape[2]
 
@@ -515,7 +544,7 @@ def convert_spool_or_zarr(
                     ystart = sum(
                         expected_sy[min_y + y] - overlap for y in range(rel_y))
                     zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
-                    if rel_y != 0:
+                    if rel_y != 0 and not blend:
                         ystart += overlap // 2
 
                     data = data[:, :, x:x2]
@@ -545,10 +574,8 @@ def convert_spool_or_zarr(
                         with ProgressBar():
                             da.to_zarr(data, array._array, region=slicer)
 
-            else:
-                raise ValueError(f"missing tile (z:{z}, y:{y})")
-
-    voxel_size = list(map(float, reversed(voxel_size)))
+                else:
+                    raise ValueError(f"missing tile (z:{z}, y:{y})")
 
     omz.generate_pyramid(levels=zarr_config.levels)
     omz.write_ome_metadata(
