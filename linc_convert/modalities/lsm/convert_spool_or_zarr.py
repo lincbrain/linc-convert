@@ -64,21 +64,23 @@ def open_tile_reader(
     dandiset_id: Optional[str],
     api_key: Optional[str],
     voxel_sizes: Tuple[float] = (1.0, 1.0, 1.0),
-    skew_angle: float = 0.0
+    skew_angle: float = 0.0,
+    chunks: Optional[Tuple[int, ...]] = None
 ) -> "DeskewedSCAPE_ZYX":
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle)
+            return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open(path)["0"], voxel_sizes, skew_angle, chunks)
         return DeskewedSCAPE_ZYX.wrap(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], voxel_sizes, skew_angle)
+        )["0"], voxel_sizes, skew_angle, chunks)
 
     return DeskewedSCAPE_ZYX.wrap(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
         voxel_sizes,
-        skew_angle)
+        skew_angle,
+        chunks)
 
 
 class DeskewedSCAPE_ZYX:
@@ -230,13 +232,13 @@ class DeskewedSCAPE_ZYX:
         return np.asarray(arr)
 
     @classmethod
-    def wrap(cls, arr: Union[da.Array, np.ndarray, ZarrArray], voxel_sizes: Tuple[float, ...], skew_angle: float) -> Union[da.Array, np.ndarray, ZarrArray, "DeskewedSCAPE_ZYX"]:
+    def wrap(cls, arr: Union[da.Array, np.ndarray, ZarrArray], voxel_sizes: Tuple[float, ...], skew_angle: float, chunks: Optional[Tuple[int, ...]] = None) -> Union[da.Array, np.ndarray, ZarrArray, "DeskewedSCAPE_ZYX"]:
         if skew_angle == 0:
             if not isinstance(arr, da.Array):
-                return da.array(arr)
-            return arr
+                arr = da.array(arr)
+            return da.rechunk(arr, chunks=chunks)
 
-        return da.from_array(cls(arr, voxel_sizes, skew_angle), chunks=arr.chunks)
+        return da.from_array(cls(arr, voxel_sizes, skew_angle), chunks=(arr.chunks if chunks is None else chunks))
 
 
 def discover_tile_paths(inp: str,
@@ -274,7 +276,7 @@ def discover_tile_paths(inp: str,
 def convert_spool_or_zarr(
     inp: str,
     *,
-    overlap: int = 192,
+    overlap: Union[int, str] = 192,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
@@ -500,8 +502,26 @@ def convert_spool_or_zarr(
                         dandiset_id=dandiset_id,
                         api_key=api_key,
                         voxel_sizes=voxel_size,
-                        skew_angle=skew_angle
+                        skew_angle=skew_angle,
+                        chunks=array._array.chunks
                     )
+
+                    if stripes is not None:
+
+                        name = os.path.basename(
+                            tile.filename.rstrip("/").replace(".ome.zarr", ""))
+
+                        correction = tiff.imread(
+                            f"{stripes}/{name}.tiff")   # shape (z, y)
+                        correction[correction == 0.0] = 1.0
+
+                        correction = da.from_array(
+                            correction, chunks="auto")
+
+                        # expand to (z, y, 1) so it broadcasts over x
+                        correction = correction[:, :, None]
+
+                        data = (data/correction)*white_matter_intensity
 
                     if overlap and len(y_tiles) > 1:
 
@@ -552,23 +572,6 @@ def convert_spool_or_zarr(
                         ystart += overlap // 2
 
                     data = data[:, :, x:x2]
-
-                    if stripes is not None:
-
-                        name = os.path.basename(
-                            tile.filename.rstrip("/").replace(".ome.zarr", ""))
-
-                        correction = tiff.imread(
-                            f"{stripes}/{name}.tif")   # shape (z, y)
-                        correction[correction == 0.0] = 1.0
-
-                        correction = da.from_array(
-                            correction, chunks="auto")
-
-                        # expand to (z, y, 1) so it broadcasts over x
-                        correction = correction[:, :, None]
-
-                        data = (data/correction)*white_matter_intensity
 
                     # data = skew_correction_shift_dask(
                     #    data, 0.0, voxel_size, skew_angle)

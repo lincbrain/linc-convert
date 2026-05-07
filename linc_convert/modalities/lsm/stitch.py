@@ -47,7 +47,9 @@ def convert(
     skew_angle: float = 0,
     background_removal: Union[float, Literal["auto"]] = 0.0,
     chunks_processed: int = 0,
-    blend: bool = False
+    blend: bool = False,
+    stripes: Optional[str] = None,
+    white_matter_intensity: float = 1000.0
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -102,5 +104,7 @@ def convert(
                           skew_angle=skew_angle,
                           background_removal=background_removal,
                           chunks_processed=chunks_processed,
-                          blend=blend
+                          blend=blend,
+                          stripes=stripes,
+                          white_matter_intensity=white_matter_intensity
                           )

@@ -60,4 +60,4 @@ def convert(
             reader = reader[:z_end, :, :]
 
         tiff.imwrite(f"{general_config.out}/{name}.tiff",
-                     da.median(reader, axis=2).compute())
+                     da.percentile(reader, 80.0, axis=2).compute())
