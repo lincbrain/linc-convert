@@ -5,6 +5,7 @@ try:
 
     __all__ = [
         "cli",
+        "stripes",
         "mosaic",
         "multi_slice",
         "spool",
@@ -21,6 +22,7 @@ try:
         spool,
         stitch,
         strip,
+        stripes,
     )
 except ImportError:
     pass

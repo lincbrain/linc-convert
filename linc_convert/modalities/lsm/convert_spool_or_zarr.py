@@ -19,14 +19,12 @@ import dask.array as da
 import numpy as np
 from dandi.dandiapi import DandiAPIClient
 from dask.diagnostics import ProgressBar
-from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
 # internals
 from linc_convert.utils.io.spool import SpoolSetInterpreter
 from linc_convert.utils.io.zarr.abc import ZarrArray
 from linc_convert.utils.io.zarr.drivers.zarr_python import (
-    ZarrPythonArray,
     ZarrPythonGroup,
 )
 from linc_convert.utils.nifti_header import build_nifti_header
@@ -54,12 +52,12 @@ TileInfo = namedtuple(
 )
 
 
-def _prompt_dandi_api_key() -> str:
+def prompt_dandi_api_key() -> str:
     key = os.environ.get("DANDI_API_KEY")
     return key if key else getpass.getpass("Enter your DANDI API key: ")
 
 
-def _open_tile_reader(
+def open_tile_reader(
     path: str,
     *,
     dandiset_id: Optional[str],
@@ -233,14 +231,17 @@ class DeskewedSCAPE_ZYX:
     @classmethod
     def wrap(cls, arr: Union[da.Array, np.ndarray, ZarrArray], voxel_sizes: Tuple[float, ...], skew_angle: float) -> Union[da.Array, np.ndarray, ZarrArray, "DeskewedSCAPE_ZYX"]:
         if skew_angle == 0:
+            if not isinstance(arr, da.Array):
+                return da.array(arr)
             return arr
-        return cls(arr, voxel_sizes, skew_angle)
+
+        return da.from_array(cls(arr, voxel_sizes, skew_angle), chunks=arr.chunks)
 
 
-def _discover_tile_paths(inp: str,
-                         *,
-                         dandiset_id: Optional[str],
-                         api_key: Optional[str]) -> List[str]:
+def discover_tile_paths(inp: str,
+                        *,
+                        dandiset_id: Optional[str],
+                        api_key: Optional[str]) -> List[str]:
     if dandiset_id is None:
         paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
         if not paths:
@@ -339,8 +340,8 @@ def convert_spool_or_zarr(
 
     logger.info("Gathering files and metadata")
 
-    api_key = _prompt_dandi_api_key() if dandiset_id else None
-    tile_paths = _discover_tile_paths(
+    api_key = prompt_dandi_api_key() if dandiset_id else None
+    tile_paths = discover_tile_paths(
         inp, dandiset_id=dandiset_id, api_key=api_key)
 
     tiles = {}
@@ -356,7 +357,7 @@ def convert_spool_or_zarr(
         y_val = int(match.group("run") if use_runs else match.group("y"))
         z_val = int(match.group("z") or 1)
 
-        reader = _open_tile_reader(
+        reader = open_tile_reader(
             path,
             dandiset_id=dandiset_id,
             api_key=api_key,
@@ -483,7 +484,7 @@ def convert_spool_or_zarr(
                 key = (y, z)
                 if key in tiles:
                     if background_removal == "auto":
-                        data = _open_tile_reader(
+                        data = open_tile_reader(
                             tile.filename, dandiset_id=dandiset_id, api_key=api_key)
                         threshold = np.max(data[:, :, :-300])
                     else:
@@ -491,13 +492,13 @@ def convert_spool_or_zarr(
 
                     tile = tiles[key]
                     rel_y, rel_z = tile.y - min_y, tile.z - min_z
-                    data = da.from_array(_open_tile_reader(
+                    data = open_tile_reader(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
                         voxel_sizes=voxel_size,
                         skew_angle=skew_angle
-                    ), chunks=array._array.chunks)
+                    )
 
                     if overlap and len(y_tiles) > 1:
 
