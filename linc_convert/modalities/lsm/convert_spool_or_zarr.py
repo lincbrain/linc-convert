@@ -49,7 +49,8 @@ _TILE_PATTERN = re.compile(
 
 TileInfo = namedtuple(
     "TileInfo",
-    ["prefix", "run", "y", "z", "suffix", "filename", "reader"],
+    ["prefix", "run", "y", "z", "suffix",
+        "filename", "reader", "overlap", "delta_x"],
 )
 
 
@@ -236,7 +237,9 @@ class DeskewedSCAPE_ZYX:
         if skew_angle == 0:
             if not isinstance(arr, da.Array):
                 arr = da.array(arr)
-            return da.rechunk(arr, chunks=chunks)
+            if chunks is not None:
+                arr = da.rechunk(arr, chunks=chunks)
+            return arr
 
         return da.from_array(cls(arr, voxel_sizes, skew_angle), chunks=(arr.chunks if chunks is None else chunks))
 
@@ -370,6 +373,15 @@ def convert_spool_or_zarr(
             skew_angle=skew_angle
         )
 
+        current_overlap = overlap
+        delta_x = 0
+
+        if isinstance(overlap, str):
+            if re.match(r'^[+-]?[0-9]+$', current_overlap):
+                current_overlap = int(current_overlap)
+            else:
+                ...
+
         tile = TileInfo(
             match.group("prefix"),
             int(match.group("run")),
@@ -378,6 +390,8 @@ def convert_spool_or_zarr(
             match.group("suffix"),
             path,
             reader,
+            current_overlap,
+            delta_x
         )
 
         key = (y_val, z_val)
@@ -401,13 +415,16 @@ def convert_spool_or_zarr(
     num_y, num_z = len(y_tiles), len(z_tiles)
 
     shapes = {}
+    overlaps = {}
     dtypes = defaultdict(list)
 
     expected_sx = 0
     expected_sy = {}
+    expected_overlap = {}
     expected_sz = {}
     # TODO: as it is zero, if a tile is missing, it will make dimension mismatch
     all_shapes = np.zeros((num_y, num_z, 3), dtype=int)
+    all_overlaps = np.zeros((num_y, num_z), dtype=int)
 
     for (y, z), tile in tiles.items():
         reader = tile.reader
@@ -420,12 +437,15 @@ def convert_spool_or_zarr(
             sz -= min(z_start, sz)
 
         shapes[(y, z)] = (sz, sy, sx)
+        overlaps[(y, z)] = tile.overlap
         dtypes[reader.dtype].append((y, z))
         # Collect shapes and dtypes.
         rel_y, rel_z = y - min_y, z - min_z
         all_shapes[rel_y, rel_z] = sz, sy, sx
+        all_overlaps[rel_y, rel_z] = tile.overlap
         expected_sx = max(sx, expected_sx)
         expected_sy[y] = sy
+        expected_overlap[y] = tile.overlap
         expected_sz[z] = sz
 
     if len(dtypes) != 1:
@@ -451,6 +471,14 @@ def convert_spool_or_zarr(
             raise ValueError(
                 f"Inconsistent y shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
+        diff_overlap = all_overlaps[y_tile -
+                                    min_y, :] != expected_overlap[y_tile]
+        if diff_overlap.any():
+            y_idxs, z_idxs = np.where(diff_overlap)
+            raise ValueError(
+                f"Inconsistent y overlaps at tiles: {list(zip(y_idxs, z_idxs))}"
+            )
+
     for z_tile in range(min_z, max_z + 1):
         if z_tile not in expected_sz:
             raise ValueError(f"Missing z tile {z_tile}")
@@ -464,7 +492,8 @@ def convert_spool_or_zarr(
     full_x = min(next(iter(shapes.values()))[2], x_end) if x_end else next(
         iter(shapes.values()))[2]
     full_y = sum(shapes[(y, z_tiles[0])][1]
-                 for y in y_tiles) - (len(y_tiles) - 1) * overlap
+                 for y in y_tiles) - sum(0 if y == min_y else overlaps[(y, z_tiles[0])]
+                                         for y in y_tiles)
     full_z = sum(shapes[(y_tiles[0], z)][0] for z in z_tiles)
     fullshape = (full_z, full_y, full_x)
 
@@ -476,11 +505,6 @@ def convert_spool_or_zarr(
     if x_chunks == 0:
         x_chunks = expected_sx
     logger.info("Writing level 0 array with shape %s", fullshape)
-    t = np.linspace(0, 1, overlap)
-    ramp = (1 - np.cos(np.pi * t)) / 2        # 0 → 1 (smooth)
-    ramp_inverse = (1 + np.cos(np.pi * t)) / 2  # 1 → 0 (smooth)
-    ramp = ramp[None, :, None]
-    ramp_inverse = ramp_inverse[None, :, None]
     bottom_overlap = None
     for z in z_tiles:
         for x in range(0, expected_sx, x_chunks):
@@ -527,21 +551,31 @@ def convert_spool_or_zarr(
                         # expand to (z, y, 1) so it broadcasts over x
 
                         data = data * correction
+                    next_overlap = 0
+                    if (y+1, z) in tiles:
+                        next_overlap = tiles[(y+1, z)].overlap
 
-                    if overlap and len(y_tiles) > 1:
+                    if (tile.overlap or next_overlap) and len(y_tiles) > 1:
 
                         if blend:
                             if tile.y != max_y:
                                 # Save bottom overlap BEFORE modifying data
-                                bottom_overlap = data[:, -overlap:, :]
-                                data = data[:, :-overlap, :]
+                                bottom_overlap = data[:, -next_overlap:, :]
+                                data = data[:, :-next_overlap, :]
                                 print("bottom_overlap set")
                             # else:
                             #    bottom_overlap = None
 
                             if tile.y != min_y:
-                                top_overlap = data[:, :overlap, :]
-                                data = data[:, overlap:, :]
+                                t = np.linspace(0, 1, tile.overlap)
+                                ramp = (1 - np.cos(np.pi * t)) / \
+                                    2        # 0 → 1 (smooth)
+                                # 1 → 0 (smooth)
+                                ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                                ramp = ramp[None, :, None]
+                                ramp_inverse = ramp_inverse[None, :, None]
+                                top_overlap = data[:, :tile.overlap, :]
+                                data = data[:, tile.overlap:, :]
 
                                 # Blend with previous tile
                                 blended = bottom_overlap * ramp_inverse + top_overlap * ramp
@@ -550,10 +584,10 @@ def convert_spool_or_zarr(
 
                         else:
                             if tile.y != min_y:
-                                data = data[:, overlap // 2:, :]
+                                data = data[:, tile.overlap // 2:, :]
                             if tile.y != max_y:
                                 data = data[:, : -
-                                            (overlap // 2 + overlap % 2), :]
+                                            (next_overlap // 2 + next_overlap % 2), :]
                     if allow_padding and data.shape[2] < expected_sx:
                         pad_width = expected_sx - data.shape[2]
 
@@ -567,12 +601,33 @@ def convert_spool_or_zarr(
                         data = data[:, :, :min(data.shape[2], x_end)]
 
                     ystart = sum(
-                        expected_sy[min_y + y] - overlap for y in range(rel_y))
+                        expected_sy[min_y + y] - tile.overlap for y in range(rel_y))
                     zstart = sum(expected_sz[min_z + z] for z in range(rel_z))
                     if rel_y != 0 and not blend:
-                        ystart += overlap // 2
+                        ystart += tile.overlap // 2
 
-                    data = data[:, :, x:x2]
+                    data_x = x-tile.delta_x
+                    data_x2 = x2-tile.delta_x
+                    if data_x2 < expected_sx:
+                        data = data[:, :, :data_x2]
+                    elif data_x2 > expected_sx:
+                        data = da.pad(
+                            data,
+                            pad_width=((0, 0), (0, 0),
+                                       (0, data_x2 - expected_sx)),
+                            mode="constant",
+                            constant_values=0,
+                        )
+
+                    if data_x > 0:
+                        data = data[:, :, data_x:]
+                    elif data_x < 0:
+                        data = da.pad(
+                            data,
+                            pad_width=((0, 0), (0, 0), (-data_x, 0)),
+                            mode="constant",
+                            constant_values=0,
+                        )
 
                     # data = skew_correction_shift_dask(
                     #    data, 0.0, voxel_size, skew_angle)
