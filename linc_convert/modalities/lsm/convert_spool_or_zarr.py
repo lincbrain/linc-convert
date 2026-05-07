@@ -524,9 +524,6 @@ def convert_spool_or_zarr(
 
                         correction = correction[:, :, None]
 
-                        correction = da.from_array(
-                            correction, chunks=(data.chunks[0], data.chunks[1], 1))
-
                         # expand to (z, y, 1) so it broadcasts over x
 
                         data = data * correction
