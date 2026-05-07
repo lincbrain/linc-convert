@@ -17,6 +17,7 @@ import dask
 # externals
 import dask.array as da
 import numpy as np
+import tifffile as tiff
 from dandi.dandiapi import DandiAPIClient
 from dask.diagnostics import ProgressBar
 from scipy.ndimage import map_coordinates
@@ -289,7 +290,9 @@ def convert_spool_or_zarr(
     skew_angle: float = 0.0,
     background_removal: Union[float, Literal["auto"]] = 0.0,
     chunks_processed: int = 0,
-    blend: bool = False
+    blend: bool = False,
+    stripes: Optional[str] = None,
+    white_matter_intensity: float = 1000.0
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -549,6 +552,23 @@ def convert_spool_or_zarr(
                         ystart += overlap // 2
 
                     data = data[:, :, x:x2]
+
+                    if stripes is not None:
+
+                        name = os.path.basename(
+                            tile.filename.rstrip("/").replace(".ome.zarr", ""))
+
+                        correction = tiff.imread(
+                            f"{stripes}/{name}.tif")   # shape (z, y)
+                        correction[correction == 0.0] = 1.0
+
+                        correction = da.from_array(
+                            correction, chunks="auto")
+
+                        # expand to (z, y, 1) so it broadcasts over x
+                        correction = correction[:, :, None]
+
+                        data = (data/correction)*white_matter_intensity
 
                     # data = skew_correction_shift_dask(
                     #    data, 0.0, voxel_size, skew_angle)

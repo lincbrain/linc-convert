@@ -12,10 +12,12 @@ try:
         "single_volume",
         "strip",
         "stitch",
+        "mip"
     ]
 
     from . import (
         cli,
+        mip,
         mosaic,
         multi_slice,
         single_volume,
