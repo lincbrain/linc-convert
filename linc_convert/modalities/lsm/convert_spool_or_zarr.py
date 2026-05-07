@@ -506,6 +506,11 @@ def convert_spool_or_zarr(
                         chunks=array._array.chunks
                     )
 
+                    if z_end is not None:
+                        data = data[:z_end, :, :]
+                    if z_start is not None:
+                        data = data[z_start:, :, :]
+
                     if stripes is not None:
 
                         name = os.path.basename(
@@ -560,10 +565,6 @@ def convert_spool_or_zarr(
                         )
                     if x_end is not None:
                         data = data[:, :, :min(data.shape[2], x_end)]
-                    if z_end is not None:
-                        data = data[:z_end, :, :]
-                    if z_start is not None:
-                        data = data[z_start:, :, :]
 
                     ystart = sum(
                         expected_sy[min_y + y] - overlap for y in range(rel_y))
