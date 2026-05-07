@@ -520,13 +520,16 @@ def convert_spool_or_zarr(
                             f"{stripes}/{name}.tiff")   # shape (z, y)
                         correction[correction == 0.0] = 1.0
 
-                        correction = da.from_array(
-                            correction, chunks="auto")
+                        correction = white_matter_intensity / correction
 
-                        # expand to (z, y, 1) so it broadcasts over x
                         correction = correction[:, :, None]
 
-                        data = (data/correction)*white_matter_intensity
+                        correction = da.from_array(
+                            correction, chunks=(data.chunks[0], data.chunks[1], 1))
+
+                        # expand to (z, y, 1) so it broadcasts over x
+
+                        data = data * correction
 
                     if overlap and len(y_tiles) > 1:
 
