@@ -59,10 +59,8 @@ def convert(
         if z_end is not None:
             reader = reader[:z_end, :, :]
 
-        reader = da.where(reader <= 110, reader, 0)
-
         np_reader = da.percentile(reader, 80.0, axis=2).compute()
-        np_reader[np_reader == 0] = 99999.0
+        np_reader[np_reader <= 115] = 99999.0
 
         tiff.imwrite(f"{general_config.out}/{name}.tiff",
                      np_reader)
