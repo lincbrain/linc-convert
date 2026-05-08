@@ -578,6 +578,19 @@ def convert_spool_or_zarr(
                         correction = correction[:, :, None]
 
                         data = data * correction
+
+                    if allow_padding and data.shape[2] < expected_sx:
+                        pad_width = expected_sx - data.shape[2]
+
+                        data = da.pad(
+                            data,
+                            pad_width=((0, 0), (0, 0), (0, pad_width)),
+                            mode="constant",
+                            constant_values=0,
+                        )
+                    if x_end is not None:
+                        data = data[:, :, :min(data.shape[2], x_end)]
+
                     next_overlap = 0
                     if (y+1, z) in tiles:
                         next_overlap = overlaps[(y+1, z)]
@@ -610,17 +623,6 @@ def convert_spool_or_zarr(
                             if tile.y != max_y:
                                 data = data[:, : -
                                             (next_overlap // 2 + next_overlap % 2), :]
-                    if allow_padding and data.shape[2] < expected_sx:
-                        pad_width = expected_sx - data.shape[2]
-
-                        data = da.pad(
-                            data,
-                            pad_width=((0, 0), (0, 0), (0, pad_width)),
-                            mode="constant",
-                            constant_values=0,
-                        )
-                    if x_end is not None:
-                        data = data[:, :, :min(data.shape[2], x_end)]
 
                     ystart = sum(
                         expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
