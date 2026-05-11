@@ -47,11 +47,11 @@ def convert(
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
     skew_angle: float = 0,
-    background_removal: Union[float, Literal["auto"]] = 0.0,
     chunks_processed: int = 0,
     blend: bool = False,
     stripes: Optional[str] = None,
-    white_matter_intensity: float = 1000.0
+    white_matter_intensity: float = 1000.0,
+    skip_first_layer: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -89,6 +89,19 @@ def convert(
         The number of workers for dask.to_zarr
     threads_per_worker
         The number of threads each worker gets (only used if number_workers is set)
+    skew_angle
+        Angle that data is skewed and needs to be corrected
+    chunks_processed
+        The amount of chunks processed all at once
+    blend
+        Will blending be used across y layers
+    stripes
+        Directory that contains stripe correction files
+    white_matter_intensity
+        What the white matter intensity should be set to after stripe correction
+    skip_first_layer
+        Only do pyramid calculation and skip first layer
+
     """
     convert_spool_or_zarr(inp, overlap=overlap,
                           voxel_size=voxel_size,
@@ -106,9 +119,9 @@ def convert(
                           number_workers=number_workers,
                           threads_per_worker=threads_per_worker,
                           skew_angle=skew_angle,
-                          background_removal=background_removal,
                           chunks_processed=chunks_processed,
                           blend=blend,
                           stripes=stripes,
-                          white_matter_intensity=white_matter_intensity
+                          white_matter_intensity=white_matter_intensity,
+                          skip_first_layer=skip_first_layer
                           )

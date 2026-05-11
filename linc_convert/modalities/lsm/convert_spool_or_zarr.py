@@ -309,11 +309,11 @@ def convert_spool_or_zarr(
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
     skew_angle: float = 0.0,
-    background_removal: Union[float, Literal["auto"]] = 0.0,
     chunks_processed: int = 0,
     blend: bool = False,
     stripes: Optional[str] = None,
-    white_matter_intensity: float = 1000.0
+    white_matter_intensity: float = 1000.0,
+    skip_first_layer: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -357,6 +357,18 @@ def convert_spool_or_zarr(
         The number of workers for dask.to_zarr
     threads_per_worker
         The number of threads each worker gets (only used if number_workers is set)
+    skew_angle
+        Angle that data is skewed and needs to be corrected
+    chunks_processed
+        The amount of chunks processed all at once
+    blend
+        Will blending be used across y layers
+    stripes
+        Directory that contains stripe correction files
+    white_matter_intensity
+        What the white matter intensity should be set to after stripe correction
+    skip_first_layer
+        Only do pyramid calculation and skip first layer
     """
     start = time.time()
 
@@ -521,168 +533,170 @@ def convert_spool_or_zarr(
     full_z = sum(shapes[(y_tiles[0], z)][0] for z in z_tiles)
     fullshape = (full_z, full_y, full_x)
 
+    chunks = zarr_config.chunk
+    if len(chunks) == 1:
+        chunks = [chunks[0]]*3
+
     omz = ZarrPythonGroup.from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape,
-                             zarr_config=zarr_config, dtype=dtype)
-
-    x_chunks = array._array.chunks[2]*chunks_processed
-    if x_chunks == 0:
-        x_chunks = expected_sx
-    logger.info("Writing level 0 array with shape %s", fullshape)
-    bottom_overlap = None
     start = 0 if x_chunk_start is None else x_chunk_start * \
-        array._array.chunks[2]
+        chunks[2]
     end = min(expected_sx, x_chunk_end *
-              array._array.chunks[2] if x_chunk_end else expected_sx)
-    for z in z_tiles:
-        for x in range(start, end,
-                       x_chunks):
-            x2 = min(expected_sx, x+x_chunks)
-            for y in y_tiles:
-                key = (y, z)
-                if key in tiles:
-                    if background_removal == "auto":
+              chunks[2] if x_chunk_end else expected_sx)
+    if not skip_first_layer:
+        array = omz.create_array("0", shape=fullshape,
+                                 zarr_config=zarr_config, dtype=dtype)
+
+        x_chunks = array._array.chunks[2]*chunks_processed
+        if x_chunks == 0:
+            x_chunks = expected_sx
+        logger.info("Writing level 0 array with shape %s", fullshape)
+        bottom_overlap = None
+        for z in z_tiles:
+            for x in range(start, end,
+                           x_chunks):
+                x2 = min(expected_sx, x+x_chunks)
+                for y in range(min_y, max_y):
+                    key = (y, z)
+                    if key in tiles:
+
+                        tile = tiles[key]
+                        rel_y, rel_z = tile.y - min_y, tile.z - min_z
                         data = open_tile_reader(
-                            tile.filename, dandiset_id=dandiset_id, api_key=api_key)
-                        threshold = np.max(data[:, :, :-300])
-                    else:
-                        threshold = background_removal
-
-                    tile = tiles[key]
-                    rel_y, rel_z = tile.y - min_y, tile.z - min_z
-                    data = open_tile_reader(
-                        tile.filename,
-                        dandiset_id=dandiset_id,
-                        api_key=api_key,
-                        voxel_sizes=voxel_size,
-                        skew_angle=skew_angle,
-                        chunks=array._array.chunks
-                    )
-
-                    if z_end is not None:
-                        data = data[:z_end, :, :]
-                    if z_start is not None:
-                        data = data[z_start:, :, :]
-
-                    if stripes is not None:
-
-                        name = os.path.basename(
-                            tile.filename.rstrip("/").replace(".ome.zarr", ""))
-
-                        correction = tiff.imread(
-                            f"{stripes}/{name}.tiff")
-                        correction[correction == 0.0] = 1.0
-
-                        correction = white_matter_intensity / correction
-
-                        correction = correction[:, :, None]
-
-                        data = data * correction
-
-                    if allow_padding and data.shape[2] < expected_sx:
-                        pad_width = expected_sx - data.shape[2]
-
-                        data = da.pad(
-                            data,
-                            pad_width=((0, 0), (0, 0), (0, pad_width)),
-                            mode="constant",
-                            constant_values=0,
+                            tile.filename,
+                            dandiset_id=dandiset_id,
+                            api_key=api_key,
+                            voxel_sizes=voxel_size,
+                            skew_angle=skew_angle,
+                            chunks=array._array.chunks
                         )
-                    if x_end is not None:
-                        data = data[:, :, :min(data.shape[2], x_end)]
 
-                    next_overlap = 0
-                    if (y+1, z) in tiles:
-                        next_overlap = overlaps[(y+1, z)]
+                        if z_end is not None:
+                            data = data[:z_end, :, :]
+                        if z_start is not None:
+                            data = data[z_start:, :, :]
 
-                    if (overlaps[y, z] or next_overlap) and len(y_tiles) > 1:
+                        if stripes is not None:
 
-                        if blend:
-                            if tile.y != max_y:
-                                bottom_overlap = data[:, -next_overlap:, :]
-                                data = data[:, :-next_overlap, :]
-                                print("bottom_overlap set")
+                            name = os.path.basename(
+                                tile.filename.rstrip("/").replace(".ome.zarr", ""))
 
-                            if tile.y != min_y:
-                                t = np.linspace(0, 1, overlaps[y, z])
-                                ramp = (1 - np.cos(np.pi * t)) / 2
-                                ramp_inverse = (1 + np.cos(np.pi * t)) / 2
-                                ramp = ramp[None, :, None]
-                                ramp_inverse = ramp_inverse[None, :, None]
-                                top_overlap = data[:, :overlaps[y, z], :]
-                                data = data[:, overlaps[y, z]:, :]
+                            correction = tiff.imread(
+                                f"{stripes}/{name}.tiff")
+                            correction[correction == 0.0] = 1.0
 
-                                blended = bottom_overlap * ramp_inverse + \
-                                    top_overlap * ramp
+                            correction = white_matter_intensity / correction
 
-                                data = da.concatenate([blended, data], axis=1)
+                            correction = correction[:, :, None]
 
+                            data = data * correction
+
+                        if allow_padding and data.shape[2] < expected_sx:
+                            pad_width = expected_sx - data.shape[2]
+
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0), (0, pad_width)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+                        if x_end is not None:
+                            data = data[:, :, :min(data.shape[2], x_end)]
+
+                        next_overlap = 0
+                        if (y+1, z) in tiles:
+                            next_overlap = overlaps[(y+1, z)]
+
+                        if (overlaps[y, z] or next_overlap) and len(y_tiles) > 1:
+
+                            if blend:
+                                if tile.y != max_y:
+                                    bottom_overlap = data[:, -next_overlap:, :]
+                                    data = data[:, :-next_overlap, :]
+                                    print("bottom_overlap set")
+
+                                if tile.y != min_y:
+                                    t = np.linspace(0, 1, overlaps[y, z])
+                                    ramp = (1 - np.cos(np.pi * t)) / 2
+                                    ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                                    ramp = ramp[None, :, None]
+                                    ramp_inverse = ramp_inverse[None, :, None]
+                                    top_overlap = data[:, :overlaps[y, z], :]
+                                    data = data[:, overlaps[y, z]:, :]
+
+                                    blended = bottom_overlap * ramp_inverse + \
+                                        top_overlap * ramp
+
+                                    data = da.concatenate(
+                                        [blended, data], axis=1)
+
+                            else:
+                                if tile.y != min_y:
+                                    data = data[:, overlaps[y, z] // 2:, :]
+                                if tile.y != max_y:
+                                    data = data[:, : -
+                                                (next_overlap // 2 + next_overlap % 2), :]
+
+                        ystart = sum(
+                            expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
+                            sum(expected_overlap[y_inner + min_y]
+                                for y_inner in range(min(rel_y+1, max_y)))
+                        zstart = sum(expected_sz[min_z + z_inner]
+                                     for z_inner in range(rel_z))
+                        if rel_y != 0 and not blend:
+                            ystart += overlaps[y, z] // 2
+
+                        data_x = x-tile.delta_x
+                        data_x2 = x2-tile.delta_x
+                        if data_x2 < expected_sx:
+                            data = data[:, :, :data_x2]
+                        elif data_x2 > expected_sx:
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0),
+                                           (0, data_x2 - expected_sx)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+
+                        if data_x > 0:
+                            data = data[:, :, data_x:]
+                        elif data_x < 0:
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0), (-data_x, 0)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+
+                        print(data.shape)
+
+                        slicer = (
+                            slice(zstart, zstart + data.shape[0]),
+                            slice(ystart, ystart + data.shape[1]),
+                            slice(x, x2),
+                        )
+
+                        logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
+
+                        data = da.rechunk(data, array._array.chunks)
+
+                        if number_workers is not None:
+                            with dask.config.set(number_workers=number_workers,
+                                                 threads_per_worker=threads_per_worker):
+                                with ProgressBar():
+                                    da.to_zarr(data, array._array,
+                                               region=slicer)
                         else:
-                            if tile.y != min_y:
-                                data = data[:, overlaps[y, z] // 2:, :]
-                            if tile.y != max_y:
-                                data = data[:, : -
-                                            (next_overlap // 2 + next_overlap % 2), :]
-
-                    ystart = sum(
-                        expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
-                        sum(expected_overlap[y_inner + min_y]
-                            for y_inner in range(min(rel_y+1, max_y)))
-                    zstart = sum(expected_sz[min_z + z_inner]
-                                 for z_inner in range(rel_z))
-                    if rel_y != 0 and not blend:
-                        ystart += overlaps[y, z] // 2
-
-                    data_x = x-tile.delta_x
-                    data_x2 = x2-tile.delta_x
-                    if data_x2 < expected_sx:
-                        data = data[:, :, :data_x2]
-                    elif data_x2 > expected_sx:
-                        data = da.pad(
-                            data,
-                            pad_width=((0, 0), (0, 0),
-                                       (0, data_x2 - expected_sx)),
-                            mode="constant",
-                            constant_values=0,
-                        )
-
-                    if data_x > 0:
-                        data = data[:, :, data_x:]
-                    elif data_x < 0:
-                        data = da.pad(
-                            data,
-                            pad_width=((0, 0), (0, 0), (-data_x, 0)),
-                            mode="constant",
-                            constant_values=0,
-                        )
-
-                    print(data.shape)
-
-                    if threshold > 0:
-                        data = da.where(data <= threshold, data, 0)
-                    slicer = (
-                        slice(zstart, zstart + data.shape[0]),
-                        slice(ystart, ystart + data.shape[1]),
-                        slice(x, x2),
-                    )
-
-                    logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
-
-                    data = da.rechunk(data, array._array.chunks)
-
-                    if number_workers is not None:
-                        with dask.config.set(number_workers=number_workers,
-                                             threads_per_worker=threads_per_worker):
                             with ProgressBar():
                                 da.to_zarr(data, array._array, region=slicer)
+
                     else:
-                        with ProgressBar():
-                            da.to_zarr(data, array._array, region=slicer)
-
-                else:
-                    raise ValueError(f"missing tile (z:{z}, y:{y})")
-
-    omz.generate_pyramid(levels=zarr_config.levels)
+                        raise ValueError(f"missing tile (z:{z}, y:{y})")
+    omz.generate_pyramid(levels=zarr_config.levels,
+                         copy_config=general_config,
+                         copy_zarr_config=zarr_config,
+                         x_min=start,
+                         x_max=end)
     omz.write_ome_metadata(
         axes=["z", "y", "x"],
         space_scale=voxel_size,
