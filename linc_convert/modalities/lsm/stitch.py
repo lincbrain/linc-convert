@@ -52,7 +52,8 @@ def convert(
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
     skip_first_layer: bool = False,
-    background_threshold: Optional[Union[float, Literal["auto"]]] = None
+    background_threshold: Optional[Union[float, Literal["auto"]]] = None,
+    checkpoint_file: Optional[str] = None,
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -125,5 +126,6 @@ def convert(
                           stripes=stripes,
                           white_matter_intensity=white_matter_intensity,
                           skip_first_layer=skip_first_layer,
-                          background_threshold=background_threshold
+                          background_threshold=background_threshold,
+                          checkpoint_file=checkpoint_file
                           )

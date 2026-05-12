@@ -55,9 +55,30 @@ TileInfo = namedtuple(
 )
 
 
+def write_checkpoint(filename: str, value: int) -> None:
+    """
+    Write a single integer to a checkpoint file.
+
+    Parameters:
+        filename (str): Path to checkpoint file
+        value (int): Integer to save
+    """
+    with open(filename, "w") as f:
+        f.write(f"{value}\n")
+
+
+def read_checkpoint(filename: str, default: int) -> int:
+    try:
+        with open(filename, "r") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return default
+
+
 def prompt_dandi_api_key() -> str:
     """Check for dandi api key and prompt user if key not found."""
     key = os.environ.get("DANDI_API_KEY")
+    print(key)
     return key if key else getpass.getpass("Enter your DANDI API key: ")
 
 
@@ -104,7 +125,7 @@ def discover_tile_paths(inp: str,
         return paths
 
     with DandiAPIClient(
-        api_url="https://api.lincbrain.org/api",
+        api_url="https://api.dandiarchive.org/api",
         token=api_key,
     ) as client:
         dandiset = client.get_dandiset(dandiset_id, "draft")
@@ -314,7 +335,8 @@ def convert_spool_or_zarr(
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
     skip_first_layer: bool = False,
-    background_threshold: Optional[Union[float, Literal["auto"]]] = None
+    background_threshold: Optional[Union[float, Literal["auto"]]] = None,
+    checkpoint_file: Optional[str] = None,
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -544,8 +566,14 @@ def convert_spool_or_zarr(
     end = min(expected_sx, x_chunk_end *
               chunks[2] if x_chunk_end else expected_sx)
     if not skip_first_layer:
-        array = omz.create_array("0", shape=fullshape,
-                                 zarr_config=zarr_config, dtype=dtype)
+        checkpoint = min_y
+        if checkpoint_file is not None:
+            checkpoint = read_checkpoint(checkpoint_file, min_y)
+        if checkpoint == min_y:
+            array = omz.create_array("0", shape=fullshape,
+                                     zarr_config=zarr_config, dtype=dtype)
+        else:
+            array = omz["0"]
 
         x_chunks = array._array.chunks[2]*chunks_processed
         if x_chunks == 0:
@@ -557,6 +585,8 @@ def convert_spool_or_zarr(
                            x_chunks):
                 x2 = min(expected_sx, x+x_chunks)
                 for y in range(min_y, max_y+1):
+                    if checkpoint_file is not None:
+                        write_checkpoint(checkpoint_file, y)
                     key = (y, z)
                     if key in tiles:
 
@@ -684,16 +714,17 @@ def convert_spool_or_zarr(
                         logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
 
                         data = da.rechunk(data, array._array.chunks)
-
-                        if number_workers is not None:
-                            with dask.config.set(number_workers=number_workers,
-                                                 threads_per_worker=threads_per_worker):
+                        if y >= checkpoint:
+                            if number_workers is not None:
+                                with dask.config.set(number_workers=number_workers,
+                                                     threads_per_worker=threads_per_worker):
+                                    with ProgressBar():
+                                        da.to_zarr(data, array._array,
+                                                   region=slicer)
+                            else:
                                 with ProgressBar():
                                     da.to_zarr(data, array._array,
                                                region=slicer)
-                        else:
-                            with ProgressBar():
-                                da.to_zarr(data, array._array, region=slicer)
 
                     else:
                         raise ValueError(f"missing tile (z:{z}, y:{y})")
