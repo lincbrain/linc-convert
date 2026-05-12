@@ -12,6 +12,7 @@ from typing import Optional
 # externals
 import cyclopts
 import dask.array as da
+import numpy as np
 import tifffile as tiff
 
 # internals
@@ -58,9 +59,10 @@ def convert(
             reader = reader[z_start:, :, :]
         if z_end is not None:
             reader = reader[:z_end, :, :]
+        reader = da.where(reader >= 130, reader, da.nan)
 
-        np_reader = da.percentile(reader, 80.0, axis=2).compute()
-        np_reader[np_reader <= 115] = 99999.0
+        np_reader = da.nanmedian(reader, axis=2).compute()
+        np_reader = np.nan_to_num(np_reader, nan=999999)
 
         tiff.imwrite(f"{general_config.out}/{name}.tiff",
                      np_reader)
