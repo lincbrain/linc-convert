@@ -313,7 +313,8 @@ def convert_spool_or_zarr(
     blend: bool = False,
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
-    skip_first_layer: bool = False
+    skip_first_layer: bool = False,
+    background_threshold: Optional[Union[float, Literal["auto"]]] = None
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -370,7 +371,7 @@ def convert_spool_or_zarr(
     skip_first_layer
         Only do pyramid calculation and skip first layer
     """
-    start = time.time()
+    start_timer = time.time()
 
     voxel_size = list(map(float, reversed(voxel_size)))
 
@@ -570,10 +571,51 @@ def convert_spool_or_zarr(
                             chunks=array._array.chunks
                         )
 
+                        threshold = background_threshold
+                        if background_threshold == "auto":
+                            threshold = data[:, :, -300:].max().compute()
+
                         if z_end is not None:
                             data = data[:z_end, :, :]
                         if z_start is not None:
                             data = data[z_start:, :, :]
+
+                        if allow_padding and data.shape[2] < expected_sx:
+                            pad_width = expected_sx - data.shape[2]
+
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0), (0, pad_width)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+                        if x_end is not None:
+                            data = data[:, :, :min(data.shape[2], x_end)]
+
+                        data_x = x-tile.delta_x
+                        data_x2 = x2-tile.delta_x
+                        if data_x2 < expected_sx:
+                            data = data[:, :, :data_x2]
+                        elif data_x2 > expected_sx:
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0),
+                                           (0, data_x2 - expected_sx)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+
+                        if data_x > 0:
+                            data = data[:, :, data_x:]
+                        elif data_x < 0:
+                            data = da.pad(
+                                data,
+                                pad_width=((0, 0), (0, 0), (-data_x, 0)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+                        if threshold is not None:
+                            data = data*(data < threshold)
 
                         if stripes is not None:
 
@@ -589,18 +631,6 @@ def convert_spool_or_zarr(
                             correction = correction[:, :, None]
 
                             data = data * correction
-
-                        if allow_padding and data.shape[2] < expected_sx:
-                            pad_width = expected_sx - data.shape[2]
-
-                            data = da.pad(
-                                data,
-                                pad_width=((0, 0), (0, 0), (0, pad_width)),
-                                mode="constant",
-                                constant_values=0,
-                            )
-                        if x_end is not None:
-                            data = data[:, :, :min(data.shape[2], x_end)]
 
                         next_overlap = 0
                         if (y+1, z) in tiles:
@@ -642,29 +672,6 @@ def convert_spool_or_zarr(
                                      for z_inner in range(rel_z))
                         if rel_y != 0 and not blend:
                             ystart += overlaps[y, z] // 2
-
-                        data_x = x-tile.delta_x
-                        data_x2 = x2-tile.delta_x
-                        if data_x2 < expected_sx:
-                            data = data[:, :, :data_x2]
-                        elif data_x2 > expected_sx:
-                            data = da.pad(
-                                data,
-                                pad_width=((0, 0), (0, 0),
-                                           (0, data_x2 - expected_sx)),
-                                mode="constant",
-                                constant_values=0,
-                            )
-
-                        if data_x > 0:
-                            data = data[:, :, data_x:]
-                        elif data_x < 0:
-                            data = da.pad(
-                                data,
-                                pad_width=((0, 0), (0, 0), (-data_x, 0)),
-                                mode="constant",
-                                constant_values=0,
-                            )
 
                         print(data.shape)
 
@@ -708,6 +715,6 @@ def convert_spool_or_zarr(
             nii_config=nii_config,
         )
         omz.write_nifti_header(header)
-    end = time.time()
-    length = end - start
+    end_timer = time.time()
+    length = end_timer - start_timer
     logger.info(f"Conversion completed in {length/60} minutes.")

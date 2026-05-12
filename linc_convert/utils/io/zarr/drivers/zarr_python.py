@@ -378,13 +378,13 @@ class ZarrPythonGroup(ZarrGroup):
                     chunks[1] = chunks[1][0]
                 if isinstance(dat.chunks[0], Tuple):
                     chunks[0] = chunks[0][0]
-                for x in range(x_min, x_max, chunks[2]*16):
-                    for y in range(0, dat.shape[1], chunks[1]*4):
+                for x in range(x_min, x_max, chunks[2]*32):
+                    for y in range(0, dat.shape[1], chunks[1]*16):
                         for z in range(0, dat.shape[0], chunks[0]*4):
                             logger.info(
                                 f"writting pyramid level {lvl}, chunks starting at {z} {y} {x}")
-                            x2 = min(x_max, x + chunks[2]*16)
-                            y2 = min(dat.shape[1], y + chunks[1]*4)
+                            x2 = min(x_max, x + chunks[2]*32)
+                            y2 = min(dat.shape[1], y + chunks[1]*16)
                             z2 = min(dat.shape[0], z + chunks[0]*4)
                             dat2 = da.from_array(ZarrPythonGroup.from_config(
                                 copy_config.out, copy_zarr_config)[str(lvl - 1)],

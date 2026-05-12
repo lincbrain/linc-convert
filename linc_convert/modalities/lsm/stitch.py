@@ -51,7 +51,8 @@ def convert(
     blend: bool = False,
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
-    skip_first_layer: bool = False
+    skip_first_layer: bool = False,
+    background_threshold: Optional[Union[float, Literal["auto"]]] = None
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -123,5 +124,6 @@ def convert(
                           blend=blend,
                           stripes=stripes,
                           white_matter_intensity=white_matter_intensity,
-                          skip_first_layer=skip_first_layer
+                          skip_first_layer=skip_first_layer,
+                          background_threshold=background_threshold
                           )
