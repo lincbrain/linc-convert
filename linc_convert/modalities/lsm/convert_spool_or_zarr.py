@@ -555,7 +555,7 @@ def convert_spool_or_zarr(
             for x in range(start, end,
                            x_chunks):
                 x2 = min(expected_sx, x+x_chunks)
-                for y in range(min_y, max_y):
+                for y in range(min_y, max_y+1):
                     key = (y, z)
                     if key in tiles:
 
