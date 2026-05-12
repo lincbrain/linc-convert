@@ -609,11 +609,6 @@ def convert_spool_or_zarr(
                         if (overlaps[y, z] or next_overlap) and len(y_tiles) > 1:
 
                             if blend:
-                                if tile.y != max_y:
-                                    bottom_overlap = data[:, -next_overlap:, :]
-                                    data = data[:, :-next_overlap, :]
-                                    print("bottom_overlap set")
-
                                 if tile.y != min_y:
                                     t = np.linspace(0, 1, overlaps[y, z])
                                     ramp = (1 - np.cos(np.pi * t)) / 2
@@ -628,6 +623,9 @@ def convert_spool_or_zarr(
 
                                     data = da.concatenate(
                                         [blended, data], axis=1)
+                                if tile.y != max_y:
+                                    bottom_overlap = data[:, -next_overlap:, :]
+                                    data = data[:, :-next_overlap, :]
 
                             else:
                                 if tile.y != min_y:
