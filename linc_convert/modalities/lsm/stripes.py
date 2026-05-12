@@ -7,6 +7,7 @@ https://lincbrain.org/dandiset/000056/draft/files?location=derivatives%2Fcompres
 
 import logging
 import os
+import time
 from typing import Optional
 
 # externals
@@ -44,10 +45,15 @@ def convert(
 ) -> None:
     ...
     api_key = prompt_dandi_api_key() if dandiset_id else None
+
     tile_paths = discover_tile_paths(
         inp, dandiset_id=dandiset_id, api_key=api_key)
-
+    index = 0
     for path in tile_paths:
+        logger.info(path)
+        logger.info(index)
+        index += 1
+        start_time = time.time()
         name = os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
 
         reader = open_tile_reader(
@@ -60,9 +66,12 @@ def convert(
         if z_end is not None:
             reader = reader[:z_end, :, :]
         reader = da.where(reader >= 130, reader, da.nan)
-
         np_reader = da.nanmedian(reader, axis=2).compute()
         np_reader = np.nan_to_num(np_reader, nan=999999)
 
-        tiff.imwrite(f"{general_config.out}/{name}.tiff",
-                     np_reader)
+        output_name = f"{general_config.out}/{name}.tiff"
+        if not os.path.exists(output_name):
+            tiff.imwrite(output_name + ".tmp",
+                         np_reader)
+            os.replace(output_name + ".tmp", output_name)
+        print("--- %s secs ---" % (time.time() - start_time))
