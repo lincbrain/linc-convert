@@ -712,8 +712,6 @@ def convert_spool_or_zarr(
                         )
 
                         logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
-
-                        data = da.rechunk(data, array._array.chunks)
                         if y >= checkpoint:
                             if number_workers is not None:
                                 with dask.config.set(number_workers=number_workers,

@@ -13,6 +13,7 @@ try:
         "strip",
         "stitch",
         "mip"
+        "pyramid"
     ]
 
     from . import (
@@ -20,6 +21,7 @@ try:
         mip,
         mosaic,
         multi_slice,
+        pyramid,
         single_volume,
         spool,
         stitch,
