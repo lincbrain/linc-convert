@@ -319,7 +319,8 @@ class ZarrPythonGroup(ZarrGroup):
         copy_config: Optional[GeneralConfig] = None,
         copy_zarr_config: Optional[ZarrConfig] = None,
         x_min: Optional[int] = None,
-        x_max: Optional[int] = None
+        x_max: Optional[int] = None,
+        level_start: int = 1
     ) -> list[list[int]]:
         """
         Generate the levels of a pyramid in an existing Zarr.
@@ -361,7 +362,12 @@ class ZarrPythonGroup(ZarrGroup):
         if levels == -1:
             levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
 
-        for lvl in tqdm.tqdm(range(1, levels + 1)):
+        if copy_config is not None:
+            for lvl in range(1, level_start):
+                x_max = ceil(x_max/2)
+                x_min = ceil(x_min/2)
+
+        for lvl in tqdm.tqdm(range(level_start, levels + 1)):
             spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
             all_shapes.append(spatial_shape)
             logger.info(f"Compute level {lvl} with shape {spatial_shape}")
@@ -420,7 +426,7 @@ class ZarrPythonGroup(ZarrGroup):
         asset_path: str,
         api_key: str,
         *,
-        api_url: str = "https://api.lincbrain.org/api",
+        api_url: str = "https://api.dandiarchive.org/api",
         dandiset_version: str = "draft",
     ) -> "ZarrPythonGroup":
         """Open a Zarr group backed by a DANDI asset.
