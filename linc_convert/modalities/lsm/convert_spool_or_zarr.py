@@ -548,8 +548,7 @@ def convert_spool_or_zarr(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
 
-    full_x = min(next(iter(shapes.values()))[2], x_end) if x_end else next(
-        iter(shapes.values()))[2]
+    full_x = min(expected_sx, x_end) if x_end else expected_sx
     full_y = sum(shapes[(y, z_tiles[0])][1]
                  for y in y_tiles) - sum(0 if y == min_y else overlaps[(y, z_tiles[0])]
                                          for y in y_tiles)
@@ -702,6 +701,8 @@ def convert_spool_or_zarr(
                                      for z_inner in range(rel_z))
                         if rel_y != 0 and not blend:
                             ystart += overlaps[y, z] // 2
+
+                        data = da.rechunk(data, array._array.chunks)
 
                         print(data.shape)
 
