@@ -362,10 +362,11 @@ class ZarrPythonGroup(ZarrGroup):
         if levels == -1:
             levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
 
-        if copy_config is not None:
-            for lvl in range(1, level_start):
+        for lvl in range(1, level_start):
+            if copy_config is not None:
                 x_max = ceil(x_max/2)
                 x_min = ceil(x_min/2)
+            spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
 
         for lvl in tqdm.tqdm(range(level_start, levels + 1)):
             spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
