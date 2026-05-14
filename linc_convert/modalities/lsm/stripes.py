@@ -42,6 +42,8 @@ def convert(
     dandiset_id: Optional[str] = None,
     z_start: Optional[int] = None,
     z_end: Optional[int] = None,
+    y_start: Optional[int] = None,
+    y_end: Optional[int] = None,
 ) -> None:
     ...
     api_key = prompt_dandi_api_key() if dandiset_id else None
@@ -65,12 +67,16 @@ def convert(
             reader = reader[z_start:, :, :]
         if z_end is not None:
             reader = reader[:z_end, :, :]
-        reader = da.where(reader >= 130, reader, da.nan)
-        np_reader = da.nanmedian(reader, axis=2).compute()
-        np_reader = np.nan_to_num(np_reader, nan=999999)
-
+        if y_start is not None:
+            reader = reader[:, y_start:, :]
+        if y_end is not None:
+            reader = reader[:, :y_end, :]
         output_name = f"{general_config.out}/{name}.tiff"
         if not os.path.exists(output_name):
+            reader = da.where(reader >= 130, reader, da.nan)
+            np_reader = da.nanmedian(reader, axis=2).compute()
+            np_reader = np.nan_to_num(np_reader, nan=999999)
+
             tiff.imwrite(output_name + ".tmp",
                          np_reader)
             os.replace(output_name + ".tmp", output_name)
