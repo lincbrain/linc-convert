@@ -440,7 +440,7 @@ def convert_spool_or_zarr(
 
         y_val = int(match.group("y"))
         if use_runs:
-            y_val = match.group("run")
+            y_val = int(match.group("run"))
         z_val = int(match.group("z") or 1)
 
         reader = open_tile_reader(
