@@ -36,7 +36,7 @@ def convert(
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
     nii_config: NiftiConfig = None,
-    use_runs: bool = True,
+    use_runs: bool = False,
     dandiset_id: Optional[str] = None,
     x_chunk_start: Optional[int] = None,
     x_chunk_end: Optional[int] = None,
