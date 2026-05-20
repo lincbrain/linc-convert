@@ -47,11 +47,17 @@ _TILE_PATTERN = re.compile(
     r"(?P<suffix>\w*)$"
 )
 
+_TILE_PATTERN2 = re.compile(
+    r"^(?P<prefix>\w*)"
+    r"_chunk-(?P<y>[0-9]+)"
+    r"(?:_z(?P<z>[0-9]+))?"
+    r"(?P<suffix>\w*)$"
+)
+
 
 TileInfo = namedtuple(
     "TileInfo",
-    ["prefix", "run", "y", "z", "suffix",
-        "filename", "reader", "delta_y", "delta_x"],
+    ["y", "z", "filename", "reader", "delta_y", "delta_x"],
 )
 
 
@@ -119,9 +125,9 @@ def discover_tile_paths(inp: str,
     if dandiset_id is None:
         paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
         if not paths:
-            paths = sorted(glob(os.path.join(inp, "*_y*.ome.zarr")))
+            paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
             if not paths:
-                paths = sorted(glob(os.path.join(inp, "*_y*_HR*/")))
+                paths = sorted(glob(os.path.join(inp, "*_y*/")))
                 if not paths:
                     raise ValueError(
                         "No tile folders found in input directory")
@@ -329,6 +335,8 @@ def convert_spool_or_zarr(
     x_end: Optional[int] = None,
     z_start: Optional[int] = None,
     z_end: Optional[int] = None,
+    y_start: Optional[int] = None,
+    y_end: Optional[int] = None,
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
@@ -340,6 +348,7 @@ def convert_spool_or_zarr(
     skip_first_layer: bool = False,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
+    alternate_pattern: False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -411,7 +420,8 @@ def convert_spool_or_zarr(
 
     for path in tile_paths:
         name = os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
-        match = _TILE_PATTERN.fullmatch(name)
+        match = (
+            _TILE_PATTERN2 if alternate_pattern else _TILE_PATTERN).fullmatch(name)
         if not match:
             warnings.warn(f"Skipping unrecognized tile name: {name}")
             continue
@@ -436,11 +446,8 @@ def convert_spool_or_zarr(
                 delta_y = yaml_file["coordinates"][y_val]["y"]
 
         tile = TileInfo(
-            match.group("prefix"),
-            int(match.group("run")),
             y_val,
             z_val,
-            match.group("suffix"),
             path,
             reader,
             delta_y,
@@ -485,10 +492,16 @@ def convert_spool_or_zarr(
             sz, sy, sx = reader.shape
             if x_end is not None:
                 sx = min(x_end, sx)
+
             if z_end is not None:
                 sz = min(z_end, sz)
             if z_start is not None:
                 sz -= min(z_start, sz)
+
+            if y_end is not None:
+                sy = min(y_end, sy)
+            if y_start is not None:
+                sy -= min(y_start, sy)
 
             shapes[(y, z)] = (sz, sy, sx)
 
@@ -611,6 +624,11 @@ def convert_spool_or_zarr(
                             data = data[:z_end, :, :]
                         if z_start is not None:
                             data = data[z_start:, :, :]
+
+                        if y_end is not None:
+                            data = data[:, :y_end, :]
+                        if y_start is not None:
+                            data = data[:, y_start:, :]
 
                         if allow_padding and data.shape[2] < expected_sx:
                             pad_width = expected_sx - data.shape[2]

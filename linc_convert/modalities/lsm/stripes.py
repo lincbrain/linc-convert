@@ -63,14 +63,14 @@ def convert(
             dandiset_id=dandiset_id,
             api_key=api_key,
         )
-        if z_start is not None:
-            reader = reader[z_start:, :, :]
         if z_end is not None:
             reader = reader[:z_end, :, :]
-        if y_start is not None:
-            reader = reader[:, y_start:, :]
+        if z_start is not None:
+            reader = reader[z_start:, :, :]
         if y_end is not None:
             reader = reader[:, :y_end, :]
+        if y_start is not None:
+            reader = reader[:, y_start:, :]
         output_name = f"{general_config.out}/{name}.tiff"
         if not os.path.exists(output_name):
             reader = da.where(reader >= 130, reader, da.nan)

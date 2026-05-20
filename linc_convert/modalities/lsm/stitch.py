@@ -43,6 +43,8 @@ def convert(
     x_end: Optional[int] = None,
     z_start: Optional[int] = None,
     z_end: Optional[int] = None,
+    y_start: Optional[int] = None,
+    y_end: Optional[int] = None,
     allow_padding: bool = False,
     number_workers: Optional[int] = None,
     threads_per_worker: int = 1,
@@ -54,6 +56,7 @@ def convert(
     skip_first_layer: bool = False,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
+    alternate_pattern: False,
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -117,6 +120,8 @@ def convert(
                           x_end=x_end,
                           z_start=z_start,
                           z_end=z_end,
+                          y_start=y_start,
+                          y_end=y_end,
                           allow_padding=allow_padding,
                           number_workers=number_workers,
                           threads_per_worker=threads_per_worker,
@@ -127,5 +132,6 @@ def convert(
                           white_matter_intensity=white_matter_intensity,
                           skip_first_layer=skip_first_layer,
                           background_threshold=background_threshold,
-                          checkpoint_file=checkpoint_file
+                          checkpoint_file=checkpoint_file,
+                          alternate_pattern=alternate_pattern
                           )
