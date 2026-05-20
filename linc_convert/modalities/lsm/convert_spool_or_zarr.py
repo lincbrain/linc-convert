@@ -95,7 +95,8 @@ def open_tile_reader(
     api_key: Optional[str],
     voxel_sizes: Tuple[float] = (1.0, 1.0, 1.0),
     skew_angle: float = 0.0,
-    chunks: Optional[Tuple[int, ...]] = None
+    chunks: Optional[Tuple[int, ...]] = None,
+    flip_vertically: bool = False,
 ) -> "Deskewed_Tile":
     """Read a tile from the path and apply skew if needed."""
     if path.endswith(".ome.zarr"):
@@ -103,12 +104,13 @@ def open_tile_reader(
             return Deskewed_Tile.wrap(ZarrPythonGroup.open(path)["0"],
                                       voxel_sizes,
                                       skew_angle,
-                                      chunks)
+                                      chunks,
+                                      flip_vertically)
         return Deskewed_Tile.wrap(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], voxel_sizes, skew_angle, chunks)
+        )["0"], voxel_sizes, skew_angle, chunks, flip_vertically)
 
     return Deskewed_Tile.wrap(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
@@ -168,11 +170,13 @@ class Deskewed_Tile:
         voxel_sizes: Tuple[float],
         skew_angle: float,
         bg_value: float = 0.0,
+        flip_vertically: bool = False
     ) -> None:
         self.raw = raw_data
         self.z_size, self.y_size, self.x_size = voxel_sizes
         self.delta = skew_angle
         self.bg_value = bg_value
+        self.flip_z = flip_vertically
 
         self.shps = (
             self.z_size
@@ -233,9 +237,14 @@ class Deskewed_Tile:
             z_idx, y_idx, x_idx, indexing="ij"
         )
 
-        X_src = Xg - Zg * self.shps
+        if self.flip_z:
+            Z_eff = self._shape[0] - Zg
+        else:
+            Z_eff = Zg
+
+        X_src = Xg - Z_eff * self.shps
         Y_src = Yg
-        Z_src = Zg
+        Z_src = Z_eff
 
         # Interpolation margin (cubic)
         margin = 2
@@ -306,7 +315,8 @@ class Deskewed_Tile:
              arr: Union[da.Array, np.ndarray, ZarrArray],
              voxel_sizes: Tuple[float, ...],
              skew_angle: float,
-             chunks: Optional[Tuple[int, ...]] = None
+             chunks: Optional[Tuple[int, ...]] = None,
+             flip_vertically: bool = False
              ) -> Union[da.Array, np.ndarray, ZarrArray, "Deskewed_Tile"]:
         """Apply deskew wrapper if necessary otherwise convert to dask array."""
         if skew_angle == 0:
@@ -316,7 +326,7 @@ class Deskewed_Tile:
                 arr = da.rechunk(arr, chunks=chunks)
             return arr
 
-        return da.from_array(cls(arr, voxel_sizes, skew_angle),
+        return da.from_array(cls(arr, voxel_sizes, skew_angle, flip_vertically=flip_vertically),
                              chunks=(arr.chunks if chunks is None else chunks))
 
 
@@ -614,7 +624,8 @@ def convert_spool_or_zarr(
                             api_key=api_key,
                             voxel_sizes=voxel_size,
                             skew_angle=skew_angle,
-                            chunks=array._array.chunks
+                            chunks=array._array.chunks,
+                            flip_vertically=flip_vertically
                         )
 
                         threshold = background_threshold
@@ -676,6 +687,8 @@ def convert_spool_or_zarr(
                             correction = tiff.imread(
                                 f"{stripes}/{name}.tiff")
                             correction[correction == 0.0] = 1.0
+                            if flip_vertically:
+                                correction = correction[::-1, :]
 
                             correction = white_matter_intensity / correction
 
@@ -719,9 +732,6 @@ def convert_spool_or_zarr(
                             expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
                             sum(expected_overlap[y_inner + min_y]
                                 for y_inner in range(min(rel_y+1, max_y)))
-                        if flip_vertically:
-                            ystart = full_y - ystart - data.shape[1]
-                            data = data[:, ::-1, :]
                         zstart = sum(expected_sz[min_z + z_inner]
                                      for z_inner in range(rel_z))
                         if rel_y != 0 and not blend:
