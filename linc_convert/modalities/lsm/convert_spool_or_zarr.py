@@ -437,7 +437,9 @@ def convert_spool_or_zarr(
             warnings.warn(f"Skipping unrecognized tile name: {name}")
             continue
 
-        y_val = int(match.group("y") if not use_runs else match.group("run"))
+        y_val = int(match.group("y"))
+        if use_runs:
+            y_val = match.group("run")
         z_val = int(match.group("z") or 1)
 
         reader = open_tile_reader(
