@@ -239,7 +239,7 @@ class Deskewed_Tile:
 
         if self.flip_z:
             Z_eff = self.raw.shape[0] - 1 - Zg
-            X_src = Xg - Z_eff * self.shps
+            X_src = Xg + Z_eff * self.shps
         else:
             Z_eff = Zg
             X_src = Xg - Z_eff * self.shps
