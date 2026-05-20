@@ -348,7 +348,8 @@ def convert_spool_or_zarr(
     skip_first_layer: bool = False,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
-    alternate_pattern: bool = False
+    alternate_pattern: bool = False,
+    flip_vertically: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -718,6 +719,9 @@ def convert_spool_or_zarr(
                             expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
                             sum(expected_overlap[y_inner + min_y]
                                 for y_inner in range(min(rel_y+1, max_y)))
+                        if flip_vertically:
+                            ystart = full_y - ystart - data.shape[1]
+                            data = data[:, ::-1, :]
                         zstart = sum(expected_sz[min_z + z_inner]
                                      for z_inner in range(rel_z))
                         if rel_y != 0 and not blend:

@@ -57,6 +57,7 @@ def convert(
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
+    flip_vertically: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -133,5 +134,6 @@ def convert(
                           skip_first_layer=skip_first_layer,
                           background_threshold=background_threshold,
                           checkpoint_file=checkpoint_file,
-                          alternate_pattern=alternate_pattern
+                          alternate_pattern=alternate_pattern,
+                          flip_vertically=flip_vertically
                           )
