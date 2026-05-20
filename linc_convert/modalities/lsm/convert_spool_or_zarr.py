@@ -238,8 +238,8 @@ class Deskewed_Tile:
         )
 
         if self.flip_z:
-            Z_eff = self.shape[0] - 1 - Zg
-            X_src = Xg - Z_eff * self.shps + (self.shape[0] - 1) * self.shps
+            Z_eff = self.raw.shape[0] - 1 - Zg
+            X_src = Xg + Z_eff * self.shps
         else:
             Z_eff = Zg
             X_src = Xg - Z_eff * self.shps
@@ -440,7 +440,7 @@ def convert_spool_or_zarr(
 
         y_val = int(match.group("y"))
         if use_runs:
-            y_val = int(match.group("run"))
+            y_val = match.group("run")
         z_val = int(match.group("z") or 1)
 
         reader = open_tile_reader(
