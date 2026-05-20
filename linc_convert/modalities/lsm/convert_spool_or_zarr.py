@@ -48,10 +48,10 @@ _TILE_PATTERN = re.compile(
 )
 
 _TILE_PATTERN2 = re.compile(
-    r"^(?P<prefix>\w*)"
+    r"^(?P<prefix>[\w-]*)"
     r"_chunk-(?P<y>[0-9]+)"
     r"(?:_z(?P<z>[0-9]+))?"
-    r"(?P<suffix>\w*)$"
+    r"(?P<suffix>[\w-]*)$"
 )
 
 
