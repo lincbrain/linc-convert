@@ -451,7 +451,7 @@ def convert_spool_or_zarr(
             voxel_sizes=voxel_size,
             skew_angle=skew_angle
         )
-        delta_x_val = delta_x
+        delta_x_val = delta_x*y_val
         delta_y = 0
 
         if isinstance(overlap, str):
