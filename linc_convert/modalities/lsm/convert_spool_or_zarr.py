@@ -335,6 +335,7 @@ def convert_spool_or_zarr(
     inp: str,
     *,
     overlap: Union[int, str] = 192,
+    delta_x: int = 0,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
@@ -450,13 +451,13 @@ def convert_spool_or_zarr(
             voxel_sizes=voxel_size,
             skew_angle=skew_angle
         )
-        delta_x = 0
+        delta_x_val = delta_x
         delta_y = 0
 
         if isinstance(overlap, str):
             with open(overlap, "r") as file:
                 yaml_file = yaml.safe_load(file)
-                delta_x = yaml_file["coordinates"][y_val]["x"]
+                delta_x_val = yaml_file["coordinates"][y_val]["x"]
                 delta_y = yaml_file["coordinates"][y_val]["y"]
 
         tile = TileInfo(
@@ -465,7 +466,7 @@ def convert_spool_or_zarr(
             path,
             reader,
             delta_y,
-            delta_x
+            delta_x_val
         )
 
         key = (y_val, z_val)

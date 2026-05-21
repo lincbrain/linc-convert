@@ -32,6 +32,7 @@ def convert(
     inp: str,
     *,
     overlap: Union[int, str] = 192,
+    delta_x: int = 0,
     voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
@@ -110,6 +111,7 @@ def convert(
 
     """
     convert_spool_or_zarr(inp, overlap=overlap,
+                          delta_x=delta_x,
                           voxel_size=voxel_size,
                           general_config=general_config,
                           zarr_config=zarr_config,
