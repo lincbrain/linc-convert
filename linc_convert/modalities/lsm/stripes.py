@@ -118,7 +118,7 @@ def convert(
             # 3) Build (Z,Y) correction image
             # -----------------------------
             vol_np = reader.compute()
-            vol_np[~mask] = np.nan
+            vol_np[:, ~mask] = np.nan
             corr_zy = np.nanmedian(vol_np, axis=2)
             corr_zy = np.nan_to_num(corr_zy, nan=9999999.0)
 
