@@ -102,7 +102,7 @@ def convert(
             if not os.path.exists(yx_path):
                 raise FileNotFoundError(f"Missing YX image: {yx_path}")
 
-            img_yx = tiff.imread(yx_path).astype(np.float32)
+            img_yx = tiff.imread(yx_path).astype(np.float32).transpose()
 
             if z_end is not None:
                 img_yx = img_yx[:z_end, :]
