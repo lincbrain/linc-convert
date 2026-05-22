@@ -37,7 +37,6 @@ lsm.command(stripes)
 @autoconfig
 def convert(
     inp: str,
-    mip_dir: str,
     *,
     general_config: GeneralConfig = None,
     dandiset_id: Optional[str] = None,
@@ -96,12 +95,8 @@ def convert(
         output_name = f"{general_config.out}/{name}.tiff"
 
         if not os.path.exists(output_name):
-            yx_path = os.path.join(mip_dir, f"{name}.tiff")
 
-            if not os.path.exists(yx_path):
-                raise FileNotFoundError(f"Missing YX image: {yx_path}")
-
-            img_yx = tiff.imread(yx_path).astype(np.float32)
+            img_yx = reader[reader.shape[0]//2, :, :]
 
             # -----------------------------
             # 2) Compute mask + corr_y
