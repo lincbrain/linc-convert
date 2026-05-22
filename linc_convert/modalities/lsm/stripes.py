@@ -96,7 +96,8 @@ def convert(
         output_name = f"{general_config.out}/{name}.tiff"
 
         if not os.path.exists(output_name):
-            yx_path = os.path.join(mip_dir, f"{name}_proc-mip.tiff")
+            yx_path = os.path.join(
+                mip_dir, f"{name}_proc-mip.tiff").replace("slice0", "slice")
 
             if not os.path.exists(yx_path):
                 raise FileNotFoundError(f"Missing YX image: {yx_path}")
