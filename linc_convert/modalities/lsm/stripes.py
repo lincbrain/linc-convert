@@ -12,9 +12,9 @@ from typing import Optional
 
 # externals
 import cyclopts
-import dask.array as da
 import numpy as np
 import tifffile as tiff
+from skimage.filters import threshold_otsu
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -37,6 +37,7 @@ lsm.command(stripes)
 @autoconfig
 def convert(
     inp: str,
+    mip_dir: str,
     *,
     general_config: GeneralConfig = None,
     dandiset_id: Optional[str] = None,
@@ -45,16 +46,34 @@ def convert(
     y_start: Optional[int] = None,
     y_end: Optional[int] = None,
 ) -> None:
-    ...
+
+    # -----------------------------
+    # helpers (from your stripe code, simplified)
+    # -----------------------------
+    def compute_mask(img):
+        img = img.astype(np.float32)
+        hi = np.percentile(img, 99.9)
+        img_c = np.minimum(img, hi)
+
+        try:
+            thr = threshold_otsu(img_c)
+        except Exception:
+            thr = np.percentile(img_c, 70)
+
+        return img_c > thr
+
+    # -----------------------------
+    # main logic
+    # -----------------------------
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
     tile_paths = discover_tile_paths(
         inp, dandiset_id=dandiset_id, api_key=api_key)
-    index = 0
-    for path in tile_paths:
+
+    for index, path in enumerate(tile_paths):
         logger.info(path)
         logger.info(index)
-        index += 1
+
         start_time = time.time()
         name = os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
 
@@ -63,6 +82,8 @@ def convert(
             dandiset_id=dandiset_id,
             api_key=api_key,
         )
+
+        # optional cropping
         if z_end is not None:
             reader = reader[:z_end, :, :]
         if z_start is not None:
@@ -71,13 +92,34 @@ def convert(
             reader = reader[:, :y_end, :]
         if y_start is not None:
             reader = reader[:, y_start:, :]
-        output_name = f"{general_config.out}/{name}.tiff"
-        if not os.path.exists(output_name):
-            reader = da.where(reader >= 130, reader, da.nan)
-            np_reader = da.nanmedian(reader, axis=2).compute()
-            np_reader = np.nan_to_num(np_reader, nan=999999)
 
-            tiff.imwrite(output_name + ".tmp",
-                         np_reader)
+        output_name = f"{general_config.out}/{name}.tiff"
+
+        if not os.path.exists(output_name):
+            yx_path = os.path.join(mip_dir, f"{name}.tiff")
+
+            if not os.path.exists(yx_path):
+                raise FileNotFoundError(f"Missing YX image: {yx_path}")
+
+            img_yx = tiff.imread(yx_path).astype(np.float32)
+
+            # -----------------------------
+            # 2) Compute mask + corr_y
+            # -----------------------------
+            mask = compute_mask(img_yx)
+
+            # -----------------------------
+            # 3) Build (Z,Y) correction image
+            # -----------------------------
+            vol_np = reader.compute()
+            vol_np[~mask] = np.nan
+            corr_zy = np.nanmedian(vol_np, axis=2)
+            corr_zy = np.nan_to_num(corr_zy, nan=9999999.0)
+
+            # -----------------------------
+            # 4) Save
+            # -----------------------------
+            tiff.imwrite(output_name + ".tmp", corr_zy)
             os.replace(output_name + ".tmp", output_name)
+
         print("--- %s secs ---" % (time.time() - start_time))

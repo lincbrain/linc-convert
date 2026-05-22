@@ -287,7 +287,7 @@ class Deskewed_Tile:
         sampled = map_coordinates(
             raw_slice,
             coords,
-            order=1,
+            order=3,
             mode="constant",
             cval=self.bg_value,
         )
