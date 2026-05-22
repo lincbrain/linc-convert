@@ -104,10 +104,6 @@ def convert(
 
             img_yx = tiff.imread(yx_path).astype(np.float32).transpose()
 
-            if z_end is not None:
-                img_yx = img_yx[:z_end, :]
-            if z_start is not None:
-                img_yx = img_yx[z_start:, :]
             if y_end is not None:
                 img_yx = img_yx[:, :y_end]
             if y_start is not None:
