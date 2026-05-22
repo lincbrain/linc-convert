@@ -102,12 +102,12 @@ def convert(
             if not os.path.exists(yx_path):
                 raise FileNotFoundError(f"Missing YX image: {yx_path}")
 
-            img_yx = tiff.imread(yx_path).astype(np.float32).transpose()
+            img_yx = tiff.imread(yx_path).astype(np.float32)
 
             if y_end is not None:
-                img_yx = img_yx[:, :y_end]
+                img_yx = img_yx[:y_end, :]
             if y_start is not None:
-                img_yx = img_yx[:, y_start:]
+                img_yx = img_yx[y_start:, :]
 
             # -----------------------------
             # 2) Compute mask + corr_y
