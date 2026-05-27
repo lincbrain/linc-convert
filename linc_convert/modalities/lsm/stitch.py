@@ -54,11 +54,10 @@ def convert(
     blend: bool = False,
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
-    skip_first_layer: bool = False,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
-    flip_vertically: bool = False
+    flip_z: bool = False
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -71,6 +70,9 @@ def convert(
         is optional
     overlap
         Number of pixels between slices that are overlapped
+    delta_x
+        The amount of displacemnt in the x direction each chunk has relative
+        to the prior chunk.
     voxel_size
         Voxel size along the X, Y and Z dimensions, in microns.
     general_config
@@ -84,12 +86,20 @@ def convert(
     dandiset_id
         Dandiset_id that contains the ome.zarr files for inp
         (leave none if inp is local)
+    x_chunk_start
+        The lowest x value chunk to output (inclusive)
+    x_chunk_end
+        The highest x value chunk to output (exclusive)
     x_end
         Max x values to crop or pad all tiles to
     z_start
         The minimum z value that should be read in each tile
     z_end
         The maximum z value that should be read in each tile
+    y_start
+        The minimum y value that should be read in each tile
+    y_end
+        The maximum y value that should be read in each tile
     allow_padding
         If true bad tiles with 0s along the x axis if any are too small
     number_workers
@@ -106,9 +116,12 @@ def convert(
         Directory that contains stripe correction files
     white_matter_intensity
         What the white matter intensity should be set to after stripe correction
-    skip_first_layer
-        Only do pyramid calculation and skip first layer
-
+    checkpoint_file
+        path to a file that can be used to store checkpoitns
+    alternate_pattern
+        use the alternate naming pattern for tiles instead of the the usual one
+    flip_z
+        flip the z axis
     """
     convert_spool_or_zarr(inp, overlap=overlap,
                           delta_x=delta_x,
@@ -133,9 +146,8 @@ def convert(
                           blend=blend,
                           stripes=stripes,
                           white_matter_intensity=white_matter_intensity,
-                          skip_first_layer=skip_first_layer,
                           background_threshold=background_threshold,
                           checkpoint_file=checkpoint_file,
                           alternate_pattern=alternate_pattern,
-                          flip_vertically=flip_vertically
+                          flip_z=flip_z
                           )
