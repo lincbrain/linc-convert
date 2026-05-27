@@ -1,9 +1,12 @@
 """ZarrIO Implementation using the zarr-python library."""
 
+import logging
+from math import ceil
 from numbers import Number
 from os import PathLike
 from typing import (
     Any,
+    Callable,
     Iterator,
     Literal,
     Mapping,
@@ -16,6 +19,7 @@ from typing import (
 
 import dask.array as da
 import numpy as np
+import tqdm
 import zarr
 from dask.diagnostics import ProgressBar
 from numpy.typing import ArrayLike, DTypeLike
@@ -24,8 +28,13 @@ from zarr.core.chunk_key_encodings import ChunkKeyEncodingLike, ChunkKeyEncoding
 
 from linc_convert.utils.io.zarr.abc import ZarrArray, ZarrArrayConfig, ZarrGroup
 from linc_convert.utils.io.zarr.dandi import open_dandi_zarr_group
+from linc_convert.utils.io.zarr.generate_pyramid import (
+    compute_next_level,
+    default_levels,
+    next_level_shape,
+)
 from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
-from linc_convert.utils.zarr_config import ZarrConfig
+from linc_convert.utils.zarr_config import GeneralConfig, ZarrConfig
 
 
 class ZarrPythonArray(ZarrArray):
@@ -301,6 +310,116 @@ class ZarrPythonGroup(ZarrGroup):
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
 
+    def generate_pyramid(
+        self,
+        levels: int = -1,
+        ndim: int = 3,
+        mode: Literal["mean", "median"] | Callable = "mean",
+        no_pyramid_axis: Optional[int] = None,
+        copy_config: Optional[GeneralConfig] = None,
+        copy_zarr_config: Optional[ZarrConfig] = None,
+        x_min: Optional[int] = None,
+        x_max: Optional[int] = None,
+        level_start: int = 1
+    ) -> list[list[int]]:
+        """
+        Generate the levels of a pyramid in an existing Zarr.
+
+        Parameters
+        ----------
+        levels : int
+            Number of additional levels to generate. By default, stop when
+            all dimensions are smaller than their corresponding chunk size.
+        ndim : int
+            Number of spatial dimensions.
+        mode : {"mean", "median"}
+            Function to be used for down-sampling, either a callable or mean or median.
+        no_pyramid_axis : int | None
+            Axis to leave unsampled.
+
+        Returns
+        -------
+        shapes : list[list[int]]
+            Shapes of each level, from finest to coarsest.
+        """
+        overwrite_save = False
+        if copy_zarr_config is not None:
+            overwrite_save = copy_zarr_config.overwrite
+            copy_zarr_config.overwrite = False
+        logger = logging.getLogger("PyramidGeneration")
+        base = self["0"]
+        batch_shape, spatial_shape = base.shape[:-ndim], base.shape[-ndim:]
+        all_shapes = [spatial_shape]
+        chunk_size = base.chunks[-ndim:]
+        if isinstance(mode, Callable):
+            window = mode
+        else:
+            window_func = {"median": da.nanmedian, "mean": da.nanmean}
+            if mode not in window_func:
+                raise ValueError(f"Unsupported mode: {mode}")
+            window = window_func[mode]
+
+        if levels == -1:
+            levels = default_levels(spatial_shape, chunk_size, no_pyramid_axis)
+
+        for lvl in range(1, level_start):
+            if copy_config is not None:
+                x_max = ceil(x_max/2)
+                x_min = ceil(x_min/2)
+            spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
+
+        for lvl in tqdm.tqdm(range(level_start, levels + 1)):
+            spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
+            all_shapes.append(spatial_shape)
+            logger.info(f"Compute level {lvl} with shape {spatial_shape}")
+            arr = self.create_array_from_base(
+                str(lvl), (*batch_shape, *spatial_shape))
+            dat = da.from_array(self[str(lvl - 1)],
+                                chunks=self[str(lvl - 1)].chunks)
+            if copy_config is not None:
+                x_max = min(dat.shape[2], x_max)
+                chunks = list(dat.chunks)
+                if isinstance(dat.chunks[2], Tuple):
+                    chunks[2] = chunks[2][0]
+                if isinstance(dat.chunks[1], Tuple):
+                    chunks[1] = chunks[1][0]
+                if isinstance(dat.chunks[0], Tuple):
+                    chunks[0] = chunks[0][0]
+                for x in range(x_min, x_max, chunks[2]*32):
+                    for y in range(0, dat.shape[1], chunks[1]*16):
+                        for z in range(0, dat.shape[0], chunks[0]*4):
+                            logger.info(
+                                f"writting pyramid level {lvl}, chunks starting at {z} {y} {x}")
+                            x2 = min(x_max, x + chunks[2]*32)
+                            y2 = min(dat.shape[1], y + chunks[1]*16)
+                            z2 = min(dat.shape[0], z + chunks[0]*4)
+                            dat2 = da.from_array(ZarrPythonGroup.from_config(
+                                copy_config.out, copy_zarr_config)[str(lvl - 1)],
+                                chunks=self[str(lvl - 1)].chunks)
+                            dat2 = dat2[z:z2, y:y2, x:x2]
+                            dat2 = compute_next_level(
+                                dat2, ndim, no_pyramid_axis, window)
+                            dat2 = dat2.rechunk(
+                                arr.shards or arr.chunks).persist()
+                            slicer = (
+                                slice(ceil(z/2), ceil(z2/2)),
+                                slice(ceil(y/2), ceil(y2/2)),
+                                slice(ceil(x/2), ceil(x2/2)),
+                            )
+                            with ProgressBar():
+                                da.to_zarr(dat2, arr._array, region=slicer)
+                x_max = ceil(x_max/2)
+                x_min = ceil(x_min/2)
+            else:
+                dat = compute_next_level(dat, ndim, no_pyramid_axis, window)
+                dat = dat.rechunk(arr.shards or arr.chunks).persist()
+                with ProgressBar():
+                    dat.store(arr)
+        if copy_zarr_config is not None:
+            copy_zarr_config.overwrite = overwrite_save
+
+        return all_shapes
+
     @classmethod
     def open_dandi(
         cls,
@@ -308,7 +427,7 @@ class ZarrPythonGroup(ZarrGroup):
         asset_path: str,
         api_key: str,
         *,
-        api_url: str = "https://api.lincbrain.org/api",
+        api_url: str = "https://api.dandiarchive.org/api",
         dandiset_version: str = "draft",
     ) -> "ZarrPythonGroup":
         """Open a Zarr group backed by a DANDI asset.
