@@ -31,10 +31,11 @@ python = "^3.11"
 cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
-zarr = "^3.0.0"
+zarr = "^3.1.5"
 nifti-zarr = "*"
 tqdm = "*"
 dask = "*"
+dandi = "^0.74.3"
 universal_pathlib = "*"
 
 # optionals

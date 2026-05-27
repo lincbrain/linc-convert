@@ -8,22 +8,12 @@ https://lincbrain.org/dandiset/000010/draft/files?location=sourcedata%2Frawdata
 
 import logging
 
-# stdlib
-import os
-import re
-import warnings
-from collections import defaultdict, namedtuple
-from glob import glob
-
 # externals
 import cyclopts
-import numpy as np
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.utils.io.spool import SpoolSetInterpreter
-from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.nifti_header import build_nifti_header
+from linc_convert.modalities.lsm.convert_spool_or_zarr import convert_spool_or_zarr
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
     NiftiConfig,
@@ -68,169 +58,6 @@ def convert(
     nii_config
         NIfTI header related configuration
     """
-    CHUNK_PATTERN = re.compile(
-        r"^(?P<prefix>\w*)"
-        r"_run(?P<run>[0-9]+)"
-        r"_?"
-        r"_y(?P<y>[0-9]+)"
-        r"_z(?P<z>[0-9]+)"
-        r"(?P<suffix>\w*)$"
-    )
-
-    all_tiles_folders_names = sorted(glob(os.path.join(inp, "*_y*_z*_HR/")))
-    if not all_tiles_folders_names:
-        raise ValueError("No tile folder found")
-
-    all_tiles_info = []
-    tiles_info_by_index = {}
-    TileInfo = namedtuple(
-        "TileInfo", ["prefix", "run", "y", "z", "suffix", "filename", "reader"]
-    )
-    for tile_folder_name in all_tiles_folders_names:
-        tile_folder_name = tile_folder_name.rstrip("/")
-        parsed = CHUNK_PATTERN.fullmatch(os.path.basename(tile_folder_name))
-        tile = TileInfo(
-            parsed.group("prefix"),
-            int(parsed.group("run")),
-            int(parsed.group("y")),
-            int(parsed.group("z")),
-            parsed.group("suffix"),
-            tile_folder_name,
-            SpoolSetInterpreter(tile_folder_name, tile_folder_name + "_info.mat"),
-        )
-        all_tiles_info.append(tile)
-        # Check for duplicate tiles
-        if (tile.y, tile.z) in tiles_info_by_index:
-            raise ValueError(
-                f"Duplicate tile, file {tile.filename} conflicts with "
-                f"{tiles_info_by_index[(tile.y, tile.z)].filename}"
-            )
-        tiles_info_by_index[(tile.y, tile.z)] = tile
-
-    # Set default output path if not provided
-    general_config.set_default_name(all_tiles_info[0].prefix + all_tiles_info[0].suffix)
-
-    # Determine unique Y and Z tile indices
-    z_tiles = set(tile.z for tile in all_tiles_info)
-    y_tiles = set(tile.y for tile in all_tiles_info)
-    min_y_tile, max_y_tile = min(y_tiles), max(y_tiles)
-    min_z_tile, max_z_tile = min(z_tiles), max(z_tiles)
-    num_y_tiles, num_z_tiles = len(y_tiles), len(z_tiles)
-
-    # Initialize dtype and shapes storage
-    dtypes = defaultdict(list)
-    expected_sx = 0
-    expected_sy = {}
-    expected_sz = {}
-    # TODO: as it is zero, if a tile is missing, it will make dimension mismatch
-    all_shapes = np.zeros((num_y_tiles, num_z_tiles, 3), dtype=int)
-
-    # Collect shape and dtype info from all tiles
-    for z_tile in range(min_z_tile, max_z_tile + 1):
-        for y_tile in range(min_y_tile, max_y_tile + 1):
-            tile = tiles_info_by_index.get((y_tile, z_tile))
-            if tile is None:
-                warnings.warn(f"Missing tile {y_tile}, {z_tile}")
-                continue
-            reader = tile.reader
-            sz, sy, sx = reader.assembled_spool_shape
-            dt = reader.dtype
-            # Collect shapes and dtypes.
-            rel_y, rel_z = y_tile - min_y_tile, z_tile - min_z_tile
-            all_shapes[rel_y, rel_z] = sx, sy, sz
-            expected_sx = sx
-            expected_sy[y_tile] = sy
-            expected_sz[z_tile] = sz
-            dtypes[dt].append((y_tile, z_tile))
-
-    # Ensure consistent dtype
-    if len(dtypes) != 1:
-        warnings.warn("Two or more dtypes in tiles:\n" + str(dict(dtypes)))
-    dtype = next(iter(dtypes))
-
-    # Ensure tiles's shapes are compatible
-    diff_sx = all_shapes[:, :, 0] != expected_sx
-    if diff_sx.any():
-        y_idxs, z_idxs = np.where(diff_sx)
-        raise ValueError(
-            f"Inconsistent x shapes at indices: {list(zip(y_idxs, z_idxs))}"
-        )
-    for y_tile in range(min_y_tile, max_y_tile + 1):
-        if y_tile not in expected_sy:
-            raise ValueError(f"Missing y tile {y_tile}")
-        diff_sy = all_shapes[:, :, 1] != expected_sy[y_tile]
-        if diff_sy.any():
-            y_idxs, z_idxs = np.where(diff_sy)
-            raise ValueError(
-                f"Inconsistent y shapes at tiles: {list(zip(y_idxs, z_idxs))}"
-            )
-    for z_tile in range(min_z_tile, max_z_tile + 1):
-        if z_tile not in expected_sz:
-            raise ValueError(f"Missing z tile {z_tile}")
-        diff_sz = all_shapes[:, :, 2] != expected_sz[z_tile]
-        if diff_sy.any():
-            y_idxs, z_idxs = np.where(diff_sz)
-            raise ValueError(
-                f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
-            )
-
-    # Calculate full dataset dimensions
-    full_shape_x = expected_sx
-    full_shape_y = sum(expected_sy.values()) - (num_y_tiles - 1) * overlap
-    full_shape_z = sum(expected_sz.values())
-    fullshape = (full_shape_z, full_shape_y, full_shape_x)
-
-    # Initialize Zarr group and array
-    omz = from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
-    logger.info(general_config.out)
-
-    print("Write level 0 with shape", fullshape)
-
-    # Populate Zarr array from tiles
-    for i, tile_info in enumerate(all_tiles_info):
-        rel_y, rel_z = tile_info.y - min_y_tile, tile_info.z - min_z_tile
-        dat = tile_info.reader.assemble_cropped()
-        if num_y_tiles != 1 and overlap != 0:
-            # if not first y tile, crop half overlapped rows at the beginning
-            if tile_info.y != min_y_tile:
-                dat = dat[:, overlap // 2:, :]
-            # if not last y tile, crop half overlapped rows at the end
-            # if overlap is odd, we need to crop an extra column
-            if tile_info.y != max_y_tile:
-                dat = dat[:, : -overlap // 2 - (overlap % 2), :]
-        ystart = sum(
-            expected_sy[min_y_tile + y_idx] - overlap for y_idx in range(rel_y)
-        )
-        zstart = sum(expected_sz[min_z_tile + z_idx] for z_idx in range(rel_z))
-        if rel_y != 0:
-            ystart += overlap // 2
-        print(
-            f"Write plane "
-            f"( {zstart} :{zstart + dat.shape[0]}, {ystart}:"
-            f"{ystart + dat.shape[1]})",
-            end="\r",
-        )
-        slicer = (
-            slice(zstart, zstart + dat.shape[0]),
-            slice(ystart, ystart + dat.shape[1]),
-            slice(None),
-        )
-        array[slicer] = dat
-    print("")
-
-    voxel_size = list(map(float, reversed(voxel_size)))
-    # Generate Zarr pyramid and metadata
-    omz.generate_pyramid(levels=zarr_config.levels)
-    omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
-
-    if nii_config.nii:
-        header = build_nifti_header(
-            zgroup=omz,
-            voxel_size_zyx=tuple(voxel_size),
-            unit="micrometer",
-            nii_config=nii_config,
-        )
-        omz.write_nifti_header(header)
-
-    logger.info("Conversion complete.")
+    convert_spool_or_zarr(inp, overlap=overlap, voxel_size=voxel_size,
+                          general_config=general_config, zarr_config=zarr_config,
+                          nii_config=nii_config, use_runs=False)
