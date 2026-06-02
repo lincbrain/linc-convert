@@ -353,6 +353,8 @@ def convert_spool_or_zarr(
     white_matter_intensity: float = 1000.0,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     correction_clip: float = 0.0,
+    foreground_gated: bool = False,
+    background_level: Optional[float] = None,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
     flip_z: bool = False
@@ -717,7 +719,20 @@ def convert_spool_or_zarr(
 
                         correction = correction[:, :, None]
 
-                        data = data * correction
+                        if foreground_gated:
+                            # Foreground-gated (affine) correction: normalize signal
+                            # above background while leaving background unscaled, so the
+                            # per-line gain cannot amplify background into horizontal
+                            # bands. corrected = bg + (data - bg) * correction. bg is a
+                            # per-tile background level (param, else 5th percentile).
+                            if background_level is not None:
+                                bg = float(background_level)
+                            else:
+                                bg = da.percentile(
+                                    data.reshape((-1,)).astype("f4"), [5])[0]
+                            data = bg + (data - bg) * correction
+                        else:
+                            data = data * correction
 
                     next_overlap = 0
                     if (y+1, z) in tiles:

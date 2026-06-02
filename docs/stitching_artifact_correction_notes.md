@@ -97,10 +97,22 @@ mosaic (figures generated in scratch; not committed — restricted data):
 - The stripe-prominence metric is an **unreliable proxy** here: corrected images have more
   contrast, which inflates it regardless of true striping.
 
-**Right next step (needs maintainer intent):** make the illumination correction
-**foreground-gated / additive** rather than a blanket multiplicative scale — i.e. normalize the
-foreground but leave background unscaled (e.g. `bg + (data - bg) * corr`), so background is not
-banded. This is a model change, not a metric tweak.
+**Foreground-gated correction implemented** (`foreground_gated=True`,
+`background_level` optional, else per-tile 5th percentile): apply
+`corrected = bg + (data - bg) * correction` so background stays flat and only signal above
+background is normalized. Results vs. baseline on the sample (`smooth_y=25`, `wm=200`):
+
+| variant | seam-body step | stripe prominence | mean | banding (visual) |
+|---------|----------------|-------------------|------|------------------|
+| baseline (blend only) | 126.6% | 22.1 | 125 | n/a |
+| blanket multiply | 13.6% (−89%) | 23.9 (worse) | 511 (5× amp) | strong horizontal bands |
+| **foreground-gated** | 42.4% (−67%) | 20.8 (−6%) | 117 (preserved) | **bands removed** |
+
+Visually the foreground-gated mosaic is the cleanest: strips equalized, tissue preserved, and
+the horizontal background banding of the blanket multiply is gone. Its seam-body-step number is
+higher only because that metric conflates each strip's *foreground fraction* (strips genuinely
+tile different tissue density) with intensity — a metric limitation, not a worse result.
+**Recommendation: foreground-gated is the right default for the illumination/stripe correction.**
 
 ## Remaining work
 
