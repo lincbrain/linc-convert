@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+import warnings
 from typing import Optional
 
 # externals
@@ -53,6 +54,7 @@ def create(
     z_end: Optional[int] = None,
     y_start: Optional[int] = None,
     y_end: Optional[int] = None,
+    smooth_y: float = 0.0,
 ) -> None:
     """
     Generate ZY projection TIFF images from volumetric tile data.
@@ -133,8 +135,10 @@ def create(
         output_name = f"{general_config.out}/{name}.tiff"
 
         if not os.path.exists(output_name):
-            yx_path = os.path.join(
-                mip_dir, f"{name}_proc-mip.tiff").replace("slice0", "slice")
+            # Match exactly what `lsm mip` writes. The previous
+            # .replace("slice0", "slice") corrupted names like
+            # "sample-slice036" -> "sample-slice36" (R5).
+            yx_path = os.path.join(mip_dir, f"{name}_proc-mip.tiff")
 
             if not os.path.exists(yx_path):
                 raise FileNotFoundError(f"Missing YX image: {yx_path}")
@@ -148,13 +152,49 @@ def create(
 
             mask = _compute_mask(img_yx)
 
-            vol_np = reader.compute()
-            vol_np = vol_np.astype(float)
+            vol_np = np.asarray(reader[:], dtype=float)
             vol_np[:, ~mask] = np.nan
-            corr_zy = np.nanmedian(vol_np, axis=2)
-            corr_zy = np.nan_to_num(corr_zy, nan=9999999.0)
+            with warnings.catch_warnings():
+                # all-foreground-masked (z,y) lines produce an all-NaN slice
+                warnings.simplefilter("ignore", RuntimeWarning)
+                corr_zy = np.nanmedian(vol_np, axis=2)
 
-            tiff.imwrite(output_name + ".tmp", corr_zy)
+            # Harden the map: (z,y) lines with no foreground come back NaN. The old
+            # code replaced them with a 9999999 sentinel, which at stitch time becomes
+            # white_matter_intensity / 9999999 ~= 0 -> a black line/hole. Instead fill
+            # with the tile's finite-line median (a neutral correction) and LOG how many
+            # lines fell back, so degraded output is visible, never silent.
+            finite = np.isfinite(corr_zy)
+            n_empty = int((~finite).sum())
+            if n_empty:
+                logger.warning(
+                    "tile %s: %d/%d (z,y) lines had no foreground; "
+                    "filling with finite-line median fallback",
+                    name, n_empty, corr_zy.size,
+                )
+            fill = float(np.median(corr_zy[finite])) if finite.any() else 1.0
+            corr_zy = np.where(finite, corr_zy, fill)
+            # avoid zero/negative medians that would blow up white_matter / corr
+            positive = corr_zy > 0
+            if not positive.all():
+                pos_fill = (
+                    float(np.median(corr_zy[positive])) if positive.any() else 1.0
+                )
+                corr_zy = np.where(positive, corr_zy, pos_fill)
+            if not np.isfinite(corr_zy).all():
+                raise ValueError(f"non-finite correction map for tile {name}")
+
+            # Smooth the per-(z,y)-line map along Y so it captures the smooth
+            # illumination falloff but NOT line-to-line noise. Dividing data by a
+            # noisy per-line map injects new stripes; smoothing prevents that while
+            # still removing the low-frequency falloff that drives seams.
+            if smooth_y and smooth_y > 0:
+                from scipy.ndimage import gaussian_filter1d
+
+                corr_zy = gaussian_filter1d(
+                    corr_zy, sigma=float(smooth_y), axis=1, mode="nearest")
+
+            tiff.imwrite(output_name + ".tmp", corr_zy.astype(np.float32))
             os.replace(output_name + ".tmp", output_name)
 
         print("--- %s secs ---" % (time.time() - start_time))

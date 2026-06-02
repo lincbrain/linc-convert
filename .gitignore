@@ -160,3 +160,14 @@ cython_debug/
 .idea/
 
 tests/data/000051/
+
+# stitching-artifact-correction: never commit extracted samples or eval outputs (restricted data)
+/stitch-eval/
+**/*.ome.zarr/
+scripts/**/_out/
+*.before.json
+*.after.json
+figures/
+
+# uv lock (upstream uses poetry)
+uv.lock

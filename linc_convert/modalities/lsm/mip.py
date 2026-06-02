@@ -59,5 +59,7 @@ def convert(
         if z_end is not None:
             reader = reader[:z_end, :, :]
 
-        tiff.imwrite(f"{general_config.out}/{name}.tiff",
+        # Write the name `lsm stripes` expects ({name}_proc-mip.tiff) so the
+        # mip -> stripes -> stitch chain works without manual renaming (R5).
+        tiff.imwrite(f"{general_config.out}/{name}_proc-mip.tiff",
                      da.max(reader, axis=0).compute())

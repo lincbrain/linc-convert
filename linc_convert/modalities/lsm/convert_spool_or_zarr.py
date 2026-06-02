@@ -352,6 +352,9 @@ def convert_spool_or_zarr(
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
+    correction_clip: float = 0.0,
+    foreground_gated: bool = False,
+    background_level: Optional[float] = None,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
     flip_z: bool = False
@@ -673,7 +676,12 @@ def convert_spool_or_zarr(
                             constant_values=0,
                         )
                     if threshold is not None:
-                        data = data*(data < threshold)
+                        # Suppress BACKGROUND (values at/below the background level),
+                        # keeping foreground signal. The previous `data < threshold`
+                        # zeroed foreground and kept background — an inverted mask that
+                        # silently erased signal (constitution IV). Gated by
+                        # background_threshold, so default (None) behavior is unchanged.
+                        data = data*(data >= threshold)
 
                     if stripes is not None:
 
@@ -681,16 +689,50 @@ def convert_spool_or_zarr(
                             tile.filename.rstrip("/").replace(".ome.zarr", ""))
 
                         correction = tiff.imread(
-                            f"{stripes}/{name}.tiff")
+                            f"{stripes}/{name}.tiff").astype(np.float32)
                         correction[correction == 0.0] = 1.0
                         if flip_z:
                             correction = correction[::-1, :]
 
                         correction = white_matter_intensity / correction
 
+                        # Never let a bad map silently zero/NaN out data
+                        # (constitution: never fail silently).
+                        n_bad = int((~np.isfinite(correction)).sum())
+                        if n_bad:
+                            logger.warning(
+                                "tile %s: %d non-finite stripe-correction "
+                                "values; setting them to 1.0 (no-op)",
+                                name, n_bad,
+                            )
+                            correction = np.where(
+                                np.isfinite(correction), correction, 1.0)
+
+                        # Bound the per-line gain so low-signal/background lines are
+                        # not amplified into horizontal bands (visible artifact from an
+                        # unbounded wm/corr). Clips to the [clip, 100-clip] percentiles
+                        # of this tile's correction; default 0.0 = off.
+                        if correction_clip and correction_clip > 0:
+                            lo = float(np.percentile(correction, correction_clip))
+                            hi = float(np.percentile(correction, 100 - correction_clip))
+                            correction = np.clip(correction, lo, hi)
+
                         correction = correction[:, :, None]
 
-                        data = data * correction
+                        if foreground_gated:
+                            # Foreground-gated (affine) correction: normalize signal
+                            # above background while leaving background unscaled, so the
+                            # per-line gain cannot amplify background into horizontal
+                            # bands. corrected = bg + (data - bg) * correction. bg is a
+                            # per-tile background level (param, else 5th percentile).
+                            if background_level is not None:
+                                bg = float(background_level)
+                            else:
+                                bg = da.percentile(
+                                    data.reshape((-1,)).astype("f4"), [5])[0]
+                            data = bg + (data - bg) * correction
+                        else:
+                            data = data * correction
 
                     next_overlap = 0
                     if (y+1, z) in tiles:
