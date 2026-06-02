@@ -30,20 +30,26 @@ def seam_rows(strip_height: int, overlap: int, n_strips: int) -> list[int]:
     return [k * step + (strip_height - overlap) for k in range(n_strips - 1)]
 
 
-def seam_discontinuity(plane: np.ndarray, seams: list[int], guard: int = 4) -> float:
-    """Cross-seam |Δrow-mean| relative to interior |Δrow-mean| (>=0; ~1 is good)."""
+def seam_discontinuity(
+    plane: np.ndarray, seams: list[int], margin: int = 150, band: int = 400
+) -> float:
+    """Max strip-body brightness step across seams, as %% of the overall mean.
+
+    The visible seam is the brightness difference between adjacent strip *bodies*
+    (the raised-cosine blend turns the junction into a gradient, so a local row-jump
+    metric misses it). For each seam we compare the median of a body band just above
+    vs. just below, skipping the blend zone (``margin``). 0%% => indistinguishable.
+    """
     row_mean = plane.mean(axis=1).astype(np.float64)
-    drow = np.abs(np.diff(row_mean))
-    if drow.size == 0:
-        raise ValueError("Plane too small to measure seams")
-    interior = np.median(drow) + 1e-9
-    vals = []
+    overall = float(np.median(row_mean)) + 1e-9
+    steps = []
     for s in seams:
-        lo, hi = max(1, s - guard), min(drow.size, s + guard)
-        if lo < hi:
-            vals.append(drow[lo:hi].max())
-    seam_jump = float(np.mean(vals)) if vals else 0.0
-    return seam_jump / interior
+        above = row_mean[max(0, s - margin - band): max(0, s - margin)]
+        below = row_mean[s + margin: s + margin + band]
+        if above.size and below.size:
+            steps.append(abs(np.median(above) - np.median(below)))
+    step = float(np.max(steps)) if steps else 0.0
+    return 100.0 * step / overall
 
 
 def stripe_energy(plane: np.ndarray, band=(0.02, 0.5), axis: int = 0) -> float:

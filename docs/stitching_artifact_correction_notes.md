@@ -46,10 +46,46 @@ Per-strip body means: **127.8 / 204.2 / 265.3** — strips get progressively bri
    zeroed foreground; changed to `data*(data >= threshold)`, gated by `background_threshold`
    (default unchanged). Latent data-erasing bug (constitution: never fail silently).
 
-## Next steps (remaining tasks)
+## Update — illumination normalization implemented and measured
 
-- Decide artifact-vs-signal for the inter-strip brightness ramp (domain input); likely
-  normalize per-strip illumination via the stripe/white-matter path, not the blend.
-- Fix R5 naming so `mip → stripes → stitch` chains; produce a stripe "before".
-- Harden stripe maps (empty-line fallback + logging, R4) and re-measure stripe prominence.
-- Make the seam metric target the inter-strip body step; re-validate against SC-002/003.
+Changes made:
+- **R5 fixed**: `mip.py` now writes `{name}_proc-mip.tiff`; `stripes.py` reads it directly
+  (removed the `slice0`→`slice` rewrite that corrupted `slice036`→`slice36`). The
+  `mip → stripes → stitch` chain runs end-to-end.
+- **Stripe-map hardening**: empty (no-foreground) `(z,y)` lines no longer become the
+  `9999999` sentinel (→ black holes); they are filled with the tile's finite-line median
+  and the count is **logged**. On the sample, chunk-0001 had **49,920/102,400 (49%)** empty
+  lines — these would have been black stripes. Added a finiteness guard on apply.
+- **Map smoothing along Y** (`smooth_y`, Gaussian): the per-line map is noisy (many fallback
+  lines); dividing by it injects new stripes. Smoothing keeps the low-frequency illumination
+  falloff but not the line noise.
+- **Seam metric corrected**: now measures the strip-body brightness step across each seam
+  (the blend turns the junction into a gradient, so a local row-jump metric missed it).
+
+Results on the sample (`white_matter_intensity=200`, `smooth_y=25`), vs. the `--blend`-only
+baseline:
+
+| metric | baseline | after | change |
+|--------|----------|-------|--------|
+| seam-body step (% of mean) | 126.6% | 13.6% | **−89%** (≈ SC-002's 90% target) |
+| stripe prominence (Y) | 22.1 | 23.9 | ≈ neutral (−8%) |
+
+Interpretation:
+- **Seams (P1) are essentially fixed** by per-line illumination normalization (the
+  `stripes`/`white_matter_intensity` path), once the map is hardened and Y-smoothed.
+- **Stripes (P2) are not yet reduced.** The per-line flat-field removes the low-frequency
+  falloff that drives the seam, but not the mid-frequency stripe prominence. Note also the
+  overlap analysis: adjacent strips' shared-overlap foreground medians disagree ~2.5× (153 vs
+  379), i.e. strong **within-strip illumination falloff along Y** — a single per-strip gain
+  cannot fix it (confirmed: whole-strip normalization only moved the step 126.6%→103%).
+
+## Remaining work
+
+- Stripe suppression (SC-003 ≥75%): add the dedicated FFT-notch destripe (T023 fallback) or
+  re-target the stripe metric/band to the true stripe frequency; current per-line flat-field
+  is ~neutral on stripe prominence.
+- Tune `white_matter_intensity` per dataset (default 1000 amplifies this data ~5×; relative
+  metrics are unaffected, but output scale matters downstream).
+- Full-slice end-to-end run (SC-005); `_cm2` camera variant; unit tests for the fixes.
+- **Maintainer input**: is the inter-strip / within-strip brightness variation purely
+  illumination (normalize away) or partly real signal? This gates how aggressive to be.

@@ -686,12 +686,24 @@ def convert_spool_or_zarr(
                             tile.filename.rstrip("/").replace(".ome.zarr", ""))
 
                         correction = tiff.imread(
-                            f"{stripes}/{name}.tiff")
+                            f"{stripes}/{name}.tiff").astype(np.float32)
                         correction[correction == 0.0] = 1.0
                         if flip_z:
                             correction = correction[::-1, :]
 
                         correction = white_matter_intensity / correction
+
+                        # Never let a bad map silently zero/NaN out data
+                        # (constitution: never fail silently).
+                        n_bad = int((~np.isfinite(correction)).sum())
+                        if n_bad:
+                            logger.warning(
+                                "tile %s: %d non-finite stripe-correction "
+                                "values; setting them to 1.0 (no-op)",
+                                name, n_bad,
+                            )
+                            correction = np.where(
+                                np.isfinite(correction), correction, 1.0)
 
                         correction = correction[:, :, None]
 
