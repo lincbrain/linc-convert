@@ -55,6 +55,7 @@ def convert(
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
+    correction_clip: float = 0.0,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
     flip_z: bool = False
@@ -147,6 +148,7 @@ def convert(
                           stripes=stripes,
                           white_matter_intensity=white_matter_intensity,
                           background_threshold=background_threshold,
+                          correction_clip=correction_clip,
                           checkpoint_file=checkpoint_file,
                           alternate_pattern=alternate_pattern,
                           flip_z=flip_z

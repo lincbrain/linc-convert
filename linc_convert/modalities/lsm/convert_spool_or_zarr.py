@@ -352,6 +352,7 @@ def convert_spool_or_zarr(
     stripes: Optional[str] = None,
     white_matter_intensity: float = 1000.0,
     background_threshold: Optional[Union[float, Literal["auto"]]] = None,
+    correction_clip: float = 0.0,
     checkpoint_file: Optional[str] = None,
     alternate_pattern: bool = False,
     flip_z: bool = False
@@ -704,6 +705,15 @@ def convert_spool_or_zarr(
                             )
                             correction = np.where(
                                 np.isfinite(correction), correction, 1.0)
+
+                        # Bound the per-line gain so low-signal/background lines are
+                        # not amplified into horizontal bands (visible artifact from an
+                        # unbounded wm/corr). Clips to the [clip, 100-clip] percentiles
+                        # of this tile's correction; default 0.0 = off.
+                        if correction_clip and correction_clip > 0:
+                            lo = float(np.percentile(correction, correction_clip))
+                            hi = float(np.percentile(correction, 100 - correction_clip))
+                            correction = np.clip(correction, lo, hi)
 
                         correction = correction[:, :, None]
 

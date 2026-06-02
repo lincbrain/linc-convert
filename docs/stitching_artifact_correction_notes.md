@@ -79,13 +79,36 @@ Interpretation:
   379), i.e. strong **within-strip illumination falloff along Y** — a single per-strip gain
   cannot fix it (confirmed: whole-strip normalization only moved the step 126.6%→103%).
 
+## Stripe suppression: why no FFT-notch, and what's actually left
+
+Investigated stripe suppression with spectral analysis + visual inspection of the stitched
+mosaic (figures generated in scratch; not committed — restricted data):
+
+- **No narrow stripe peak.** The Y power spectrum of the baseline has its in-band energy
+  spread broadly around period ~35–48 px (peak/band-sum ≈ 0.006; a true periodic stripe
+  would be ≈ 1), and low-frequency power dominates the band by ~37×. So an **FFT-notch is the
+  wrong tool** — there is no narrow frequency to notch, and notching the broad band would
+  destroy real ~40 px tissue structure. Deliberately NOT implemented.
+- **The residual "stripe" is banding introduced by the correction**, not a source stripe.
+  Visually, the per-line `white_matter / corr` multiply equalizes the strips (seam fixed) but
+  amplifies low-signal/background lines unevenly into horizontal bands. Y-smoothing
+  (`smooth_y`) and bounding the gain (`correction_clip`, clips to [clip, 100-clip] percentiles)
+  reduce the worst of it but do not eliminate it (both ~neutral on the prominence metric).
+- The stripe-prominence metric is an **unreliable proxy** here: corrected images have more
+  contrast, which inflates it regardless of true striping.
+
+**Right next step (needs maintainer intent):** make the illumination correction
+**foreground-gated / additive** rather than a blanket multiplicative scale — i.e. normalize the
+foreground but leave background unscaled (e.g. `bg + (data - bg) * corr`), so background is not
+banded. This is a model change, not a metric tweak.
+
 ## Remaining work
 
-- Stripe suppression (SC-003 ≥75%): add the dedicated FFT-notch destripe (T023 fallback) or
-  re-target the stripe metric/band to the true stripe frequency; current per-line flat-field
-  is ~neutral on stripe prominence.
+- Foreground-gated correction (above) to remove background banding; re-define an acceptance
+  metric for stripes that matches a visible artifact (current prominence metric is unreliable).
 - Tune `white_matter_intensity` per dataset (default 1000 amplifies this data ~5×; relative
-  metrics are unaffected, but output scale matters downstream).
+  metrics unaffected, but output scale matters downstream).
 - Full-slice end-to-end run (SC-005); `_cm2` camera variant; unit tests for the fixes.
 - **Maintainer input**: is the inter-strip / within-strip brightness variation purely
-  illumination (normalize away) or partly real signal? This gates how aggressive to be.
+  illumination (normalize away) or partly real signal? And is there a dataset/region with a
+  genuine periodic stripe (this sample has none)? These gate the stripe approach.
