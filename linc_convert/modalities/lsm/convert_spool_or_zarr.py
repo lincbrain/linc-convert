@@ -673,7 +673,12 @@ def convert_spool_or_zarr(
                             constant_values=0,
                         )
                     if threshold is not None:
-                        data = data*(data < threshold)
+                        # Suppress BACKGROUND (values at/below the background level),
+                        # keeping foreground signal. The previous `data < threshold`
+                        # zeroed foreground and kept background — an inverted mask that
+                        # silently erased signal (constitution IV). Gated by
+                        # background_threshold, so default (None) behavior is unchanged.
+                        data = data*(data >= threshold)
 
                     if stripes is not None:
 

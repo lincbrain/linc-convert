@@ -168,3 +168,6 @@ scripts/**/_out/
 *.before.json
 *.after.json
 figures/
+
+# uv lock (upstream uses poetry)
+uv.lock

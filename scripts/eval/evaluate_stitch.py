@@ -46,17 +46,19 @@ def seam_discontinuity(plane: np.ndarray, seams: list[int], guard: int = 4) -> f
     return seam_jump / interior
 
 
-def stripe_energy(plane: np.ndarray, band=(0.02, 0.5)) -> float:
-    """Stripe peak prominence along X: dominant in-band spectral peak / median power.
+def stripe_energy(plane: np.ndarray, band=(0.02, 0.5), axis: int = 0) -> float:
+    """Stripe peak prominence along ``axis``: dominant in-band spectral peak / median.
 
-    A periodic stripe makes one frequency dominate -> large ratio. Broadband texture
-    or noise spreads energy -> ratio near 1. This discriminates stripes from real
-    content (which a wide-band energy fraction cannot).
+    LSM stripes run parallel to the illumination beam and the branch's correction is a
+    per-(z,y)-line model, so stripes are periodic along **Y** (axis=0 of a (Y,X) plane),
+    i.e. horizontal bands. We therefore measure prominence along Y by default: a periodic
+    stripe makes one frequency dominate -> large ratio; broadband texture/noise -> ~1.
+    The (0.02, 0.5) band excludes the very-low-frequency seam steps and DC.
     """
     p = plane.astype(np.float64)
-    p = p - p.mean(axis=1, keepdims=True)
-    spec = (np.abs(np.fft.rfft(p, axis=1)) ** 2).mean(axis=0)  # avg power spectrum
-    freqs = np.fft.rfftfreq(p.shape[1])
+    p = p - p.mean(axis=axis, keepdims=True)
+    spec = (np.abs(np.fft.rfft(p, axis=axis)) ** 2).mean(axis=1 - axis)
+    freqs = np.fft.rfftfreq(p.shape[axis])
     bandmask = (freqs >= band[0]) & (freqs <= band[1])
     if not bandmask.any():
         return 0.0
