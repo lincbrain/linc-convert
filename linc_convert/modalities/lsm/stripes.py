@@ -6,9 +6,11 @@ from typing import Optional
 import cyclopts
 import numpy as np
 import tifffile as tiff
+from dask.diagnostics import ProgressBar
 from pystripe import filter_streaks
 from skimage.filters import threshold_otsu
 from tqdm import tqdm
+import dask.array as da
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.convert_spool_or_zarr import (
@@ -126,10 +128,15 @@ def destripe_dask_pystripe_chunked(
                         threshold=thr,
                     )
 
-                    out_chunk[i] = destriped
+                out_chunk[i] = destriped
+                slicer = (
+                    slice(z_0, z_1)
+                )
 
                 # ✅ write once
-                out[z_0:z_1] = out_chunk
+                with ProgressBar():
+                    da.to_zarr(out_chunk, out._array,
+                               region=slicer)
 
                 z_0 = z_1
             os.replace(output_name + ".tmp", output_name)

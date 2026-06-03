@@ -1,5 +1,8 @@
 """Light Sheet Microscopy converters."""
 
+from . import coordinates
+
+
 try:
     import tifffile as _  # noqa: F401
 
@@ -12,8 +15,9 @@ try:
         "single_volume",
         "strip",
         "stitch",
-        "mip"
-        "pyramid"
+        "mip",
+        "pyramid",
+        "coordinates"
     ]
 
     from . import (
