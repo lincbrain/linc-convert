@@ -10,8 +10,7 @@ import tqdm
 from pystripe import filter_streaks
 from skimage.filters import threshold_otsu
 
-# your local pystripe copy
-from linc_convert.modalities import lsm
+from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.convert_spool_or_zarr import (
     discover_tile_paths,
     open_tile_reader,
