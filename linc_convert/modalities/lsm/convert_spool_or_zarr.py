@@ -123,7 +123,8 @@ def discover_tile_paths(inp: str,
         if not paths:
             paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
             if not paths:
-                paths = sorted(glob(os.path.join(inp, "*slice039*/")))
+                paths = sorted(glob(os.path.join(
+                    inp, "sub-MF283_sample-slice39_chunk-*_acq-camera-02_proc-mip.tiff")))
                 if not paths:
                     raise ValueError(
                         "No tile folders found in input directory")
