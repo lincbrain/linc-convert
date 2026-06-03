@@ -9,7 +9,7 @@ import time
 import warnings
 from collections import defaultdict, namedtuple
 from glob import glob
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import List, Literal, Optional, Tuple, Union
 
 import dask
@@ -115,14 +115,28 @@ def open_tile_reader(
 def discover_tile_paths(inp: str,
                         *,
                         dandiset_id: Optional[str],
-                        api_key: Optional[str]) -> List[str]:
+                        api_key: Optional[str],
+                        filename_pattern: Optional[str] = None,) -> List[str]:
     """Get all tiles from the folder specified."""
     if dandiset_id is None:
+        if filename_pattern is not None:
+            pattern = re.compile(filename_pattern)
+
+            candidates = (
+                glob(os.path.join(inp, "*")) +
+                glob(os.path.join(inp, "*/"))
+            )
+
+            return sorted(
+                p
+                for p in candidates
+                if pattern.match(Path(p).stem)
+            )
         paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
         if not paths:
             paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
             if not paths:
-                paths = sorted(glob(os.path.join(inp, "*_y*/")))
+                paths = sorted(glob(os.path.join(inp, "*/")))
                 if not paths:
                     raise ValueError(
                         "No tile folders found in input directory")
