@@ -119,24 +119,11 @@ def discover_tile_paths(inp: str,
                         filename_pattern: Optional[str] = None,) -> List[str]:
     """Get all tiles from the folder specified."""
     if dandiset_id is None:
-        if filename_pattern is not None:
-            pattern = re.compile(filename_pattern)
-
-            candidates = (
-                glob(os.path.join(inp, "*")) +
-                glob(os.path.join(inp, "*/"))
-            )
-
-            return sorted(
-                p
-                for p in candidates
-                if pattern.match(Path(p).stem)
-            )
         paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
         if not paths:
             paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
             if not paths:
-                paths = sorted(glob(os.path.join(inp, "*/")))
+                paths = sorted(glob(os.path.join(inp, "*slice039*/")))
                 if not paths:
                     raise ValueError(
                         "No tile folders found in input directory")
