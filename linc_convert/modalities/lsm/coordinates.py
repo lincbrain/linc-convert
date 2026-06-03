@@ -145,10 +145,10 @@ lsm.command(coordinates)
 @coordinates.default
 @autoconfig
 def calculate_coordinates(
-    input,
-    output,
-    overlap,
-    file_pattern,
+    input: str,
+    output: str,
+    overlap: int,
+    file_pattern: str,
     *,
     dandiset_id: Optional[str] = None,
     y_start: Optional[int] = None,
