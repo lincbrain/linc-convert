@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Optional
 
 import cyclopts
 import numpy as np
@@ -9,7 +10,7 @@ import tifffile
 from skimage.registration import phase_cross_correlation
 
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.modalities.lsm.convert_spool_or_zarr import discover_tile_paths
+from linc_convert.modalities.lsm.convert_spool_or_zarr import discover_tile_paths, prompt_dandi_api_key
 from linc_convert.utils.zarr_config import autoconfig
 
 _TILE_PATTERN = re.compile(
@@ -28,18 +29,24 @@ _TILE_PATTERN2 = re.compile(
 )
 
 
-def parse_y(filename):
+def parse_y(filename, file_pattern):
     stem = Path(filename).stem
 
-    m = _TILE_PATTERN.match(stem)
-    if m:
-        return int(m.group("y"))
+    match = file_pattern.match(stem)
 
-    m = _TILE_PATTERN2.match(stem)
-    if m:
-        return int(m.group("y"))
+    if not match:
+        raise ValueError(
+            f"Could not parse y from '{filename}' using pattern "
+            f"'{file_pattern.pattern}'"
+        )
 
-    raise ValueError(f"Could not parse y from {filename}")
+    try:
+        return int(match.group("y"))
+    except IndexError:
+        raise ValueError(
+            "file_pattern must contain a named capture group "
+            "'(?P<y>...)'"
+        )
 
 
 def estimate_pairwise_shift(
@@ -69,7 +76,11 @@ def estimate_pairwise_shift(
 def estimate_strip_coordinates(
     tif_files,
     overlap_pixels,
+    file_pattern,
     upsample_factor=20,
+    *,
+    y_start: Optional[int] = None,
+    y_end: Optional[int] = None,
 ):
     """
     Returns
@@ -80,7 +91,10 @@ def estimate_strip_coordinates(
     coordinates[i] corresponds to ordered_files[i]
     """
 
-    ordered_files = sorted(tif_files, key=parse_y)
+    ordered_files = sorted(
+        tif_files,
+        key=lambda x: parse_y(x, file_pattern),
+    )
 
     # first tile at origin
     coordinates = [(0.0, 0.0)]
@@ -93,11 +107,12 @@ def estimate_strip_coordinates(
         img1 = tifffile.imread(f1)
         img2 = tifffile.imread(f2)
 
-        if img1.ndim > 2:
-            img1 = img1.max(axis=0)
-
-        if img2.ndim > 2:
-            img2 = img2.max(axis=0)
+        if y_end is not None:
+            img1 = img1[:y_end, :]
+            img2 = img2[:y_end, :]
+        if y_start is not None:
+            img1 = img1[y_start:, :]
+            img2 = img2[y_start:, :]
 
         dx, dy, error = estimate_pairwise_shift(
             img1,
@@ -129,16 +144,31 @@ lsm.command(coordinates)
 
 @coordinates.default
 @autoconfig
-def calculate_coordiantes(
+def calculate_coordinates(
     input,
     output,
-    overlap
+    overlap,
+    file_pattern,
+    *,
+    dandiset_id: Optional[str] = None,
+    y_start: Optional[int] = None,
+    y_end: Optional[int] = None,
 ):
-    tif_files = discover_tile_paths(input)
+    compiled_pattern = re.compile(file_pattern)
+    if "y" not in compiled_pattern.groupindex:
+        raise ValueError(
+            "file_pattern must contain a named group '(?P<y>...)'"
+        )
+    api_key = prompt_dandi_api_key() if dandiset_id else None
+    tif_files = discover_tile_paths(
+        input, api_key=api_key, dandiset_id=dandiset_id, filename_pattern=file_pattern)
 
     ordered_files, coordinates = estimate_strip_coordinates(
         tif_files=tif_files,
         overlap_pixels=overlap,
+        file_pattern=compiled_pattern,
+        y_start=y_start,
+        y_end=y_end
     )
 
     data = {
