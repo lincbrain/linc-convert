@@ -6,9 +6,9 @@ from typing import Optional
 import cyclopts
 import numpy as np
 import tifffile as tiff
-import tqdm
 from pystripe import filter_streaks
 from skimage.filters import threshold_otsu
+from tqdm import tqdm
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.convert_spool_or_zarr import (
