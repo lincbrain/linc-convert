@@ -141,5 +141,9 @@ def destripe_dask_pystripe_chunked(
 
                 z_0 = z_1
             omz.generate_pyramid(levels=zarr_config.levels)
+            omz.write_ome_metadata(
+                axes=["z", "y", "x"],
+            )
+
             os.replace(output_name + ".tmp", output_name)
             print("--- %s secs ---" % (time.time() - start_time))
