@@ -30,8 +30,8 @@ lsm.command(stripes)
 @autoconfig
 def destripe_dask_pystripe_chunked(
     inp: str,
-    mip_dir: str,
     *,
+    mip_dir: str,
     general_config: GeneralConfig = None,
     sigma=(10, 40),
     level=0,
@@ -134,9 +134,10 @@ def destripe_dask_pystripe_chunked(
                 )
 
                 # ✅ write once
-                with ProgressBar():
-                    da.to_zarr(out_chunk, out._array,
-                               region=slicer)
+                # with ProgressBar():
+                #    np.to_zarr(out_chunk, out._array,
+                #               region=slicer)
+                out._array[z_0:z_1] = out_chunk
 
                 z_0 = z_1
             omz.generate_pyramid(levels=zarr_config.levels,
