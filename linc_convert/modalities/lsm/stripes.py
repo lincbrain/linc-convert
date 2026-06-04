@@ -87,10 +87,6 @@ def destripe_dask_pystripe_chunked(
                 img_yx = img_yx[y_start:, :]
             thr = threshold_otsu(img_yx)
 
-            omz = ZarrPythonGroup.from_config(output_name+".tmp", zarr_config)
-            out = omz.create_array("0", shape=dask_vol.shape,
-                                   zarr_config=zarr_config, dtype=np.uint16)
-
             if z_end is not None:
                 dask_vol = dask_vol[:z_end, :, :]
             if z_start is not None:
@@ -99,6 +95,10 @@ def destripe_dask_pystripe_chunked(
                 dask_vol = dask_vol[:, :y_end, :]
             if y_start is not None:
                 dask_vol = dask_vol[:, y_start:, :]
+
+            omz = ZarrPythonGroup.from_config(output_name+".tmp", zarr_config)
+            out = omz.create_array("0", shape=dask_vol.shape,
+                                   zarr_config=zarr_config, dtype=np.uint16)
 
             z_chunks = dask_vol.chunks[0]
 
