@@ -410,8 +410,9 @@ def create(
                 if not os.path.exists(output_name):
                     vol = Deskewed_Tile.wrap(
                         vol_channels[i],
-                        scanParameters["skewCorr"]["umPixelSize"],
-                        scanParameters["skewCorr"]["delta"],
+                        [float(x)
+                         for x in scanParameters["skewCorr"]["umPixelSize"]],
+                        float(scanParameters["skewCorr"]["delta"]),
                         flip_z=bool(scanParameters["crop"][f"Camera{camera_id}"]["verticalFlip"]))
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
