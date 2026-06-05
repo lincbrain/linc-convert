@@ -372,7 +372,11 @@ def create(
             api_key=api_key,
         )
 
-        if any([not os.path.exists(f"{general_config.out}/{i}/{name}.ome.zarr" for i in camera_channel_map[camera_id])]):
+        if any(
+            not os.path.exists(f"{general_config.out}/{i}/{name}.ome.zarr")
+            for i in camera_channel_map[camera_id]
+        ):
+
             yx_path = os.path.join(
                 mip_dir, f"{name}_proc-mip.tiff").replace("slice0", "slice")
 
