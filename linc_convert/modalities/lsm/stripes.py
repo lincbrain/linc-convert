@@ -418,10 +418,6 @@ def create(
                         float(scanParameters["skewCorr"]["delta"]),
                         chunk,
                         flip_z=bool(scanParameters["crop"][f"Camera{camera_id}"]["verticalFlip"]))"""
-                    omz = ZarrPythonGroup.from_config(
-                        output_name+".tmp", zarr_config)
-                    out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16)
                     mip = raw_mip_channels[i]
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
@@ -429,6 +425,10 @@ def create(
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
                     vol = da.rechunk(vol, chunk)
+                    omz = ZarrPythonGroup.from_config(
+                        output_name+".tmp", zarr_config)
+                    out = omz.create_array("0", shape=vol.shape,
+                                           zarr_config=zarr_config, dtype=np.uint16)
                     with ProgressBar():
                         da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
