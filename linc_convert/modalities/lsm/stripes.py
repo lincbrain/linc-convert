@@ -389,35 +389,35 @@ def create(
             raw_mip_channels.update(
                 crop_mip_channels(raw_mip, cam_info)
             )
-
-            mask = compute_tissue_mask_otsu(
-                raw_mip_channels[camera_channel_map[camera_id][0]],
-                ds=ds,
-                clip_hi_pct=clip_hi_pct,
-                fallback_pct=fallback_pct,
-            )
-
-            row_keep = row_keep_from_mask(
-                mask,
-                row_frac_thresh=row_frac_thresh_488,
-                dilate_rows=dilate_rows,
-            )
-            mask = mask & row_keep[:, None]
             cam_info = get_camera_info(scanParameters, camera_id)
             vol_channels = crop_volume_channels(reader, cam_info)
             for i in camera_channel_map[camera_id]:
                 output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
+                    mask = compute_tissue_mask_otsu(
+                        raw_mip_channels[i],
+                        ds=ds,
+                        clip_hi_pct=clip_hi_pct,
+                        fallback_pct=fallback_pct,
+                    )
+
+                    row_keep = row_keep_from_mask(
+                        mask,
+                        row_frac_thresh=row_frac_thresh_488,
+                        dilate_rows=dilate_rows,
+                    )
+                    mask = mask & row_keep[:, None]
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     um = scanParameters["skewCorr"]["umPixelSize"]
-                    vol = Deskewed_Tile.wrap(
+                    vol = vol_channels[i]
+                    """vol = Deskewed_Tile.wrap(
                         vol_channels[i],
                         [um["z"], um["y"], um["x"]],
                         float(scanParameters["skewCorr"]["delta"]),
                         chunk,
-                        flip_z=bool(scanParameters["crop"][f"Camera{camera_id}"]["verticalFlip"]))
+                        flip_z=bool(scanParameters["crop"][f"Camera{camera_id}"]["verticalFlip"]))"""
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
@@ -426,6 +426,9 @@ def create(
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
                     vol = apply_corr_y_lazy(vol, corr_y)
+                    vol = skew_correct_volume_lazy(
+                        vol, scanParameters, camera_id)
+                    vol = da.rechunk(vol, chunk)
                     with ProgressBar():
                         da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
