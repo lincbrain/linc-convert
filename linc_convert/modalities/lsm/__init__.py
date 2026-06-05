@@ -1,8 +1,5 @@
 """Light Sheet Microscopy converters."""
 
-from . import coordinates
-
-
 try:
     import tifffile as _  # noqa: F401
 
@@ -22,6 +19,7 @@ try:
 
     from . import (
         cli,
+        coordinates,
         mip,
         mosaic,
         multi_slice,
