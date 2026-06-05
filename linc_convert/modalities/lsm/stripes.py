@@ -408,11 +408,15 @@ def create(
             for i in camera_channel_map[camera_id]:
                 output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
+                    chunk = zarr_config.chunk
+                    if len(zarr_config.chunk) == 1:
+                        chunk = tuple([zarr_config.chunk[0]]*3)
                     um = scanParameters["skewCorr"]["umPixelSize"]
                     vol = Deskewed_Tile.wrap(
                         vol_channels[i],
                         [um["z"], um["y"], um["x"]],
                         float(scanParameters["skewCorr"]["delta"]),
+                        chunk,
                         flip_z=bool(scanParameters["crop"][f"Camera{camera_id}"]["verticalFlip"]))
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
