@@ -433,12 +433,12 @@ def create(
                     )
                     mask = mask & row_keep[:, None]
                     ys, xs = np.where(mask)
-                    max_x = xs.max()
+                    max_x = xs.max() + 1
                     mask = mask[:, :max_x]
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i][:, :max_x]
+                    vol = vol_channels[i][:, :, :max_x]
                     corr_zy = compute_corr_zy_from_pixel_mask(
                         vol, mask, tissue_frac_min, smooth_win)
                     vol = apply_corr_zy_lazy(vol, corr_zy)
