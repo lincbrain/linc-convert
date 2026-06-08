@@ -126,7 +126,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
     # NEW: check threshold vs max
     max_val = small_c.max()
     if max_val > 0 and thr >= (max_val / 1.2):
-        return np.zeros_like(img, dtype=bool), max_val
+        return np.zeros_like(img, dtype=bool), max_val*10
 
     tissue_small = small_c > thr
     if tissue_small.mean() < 0.002:
@@ -134,7 +134,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
 
         # check again after fallback
         if max_val > 0 and thr >= (max_val / 1.2):
-            return np.zeros_like(img, dtype=bool)
+            return np.zeros_like(img, dtype=bool), max_val*10
 
         tissue_small = small_c > thr
 
@@ -451,6 +451,14 @@ def create(
                     mip = raw_mip_channels[i][:, :]
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
+                    y_med = np.median(corr_y)
+                    thr_map = corr_y * thr / y_med
+                    # reshape for broadcasting
+                    thr_map = thr_map[None, :, None]   # (1, y, 1)
+
+                    # apply threshold lazily
+                    vol = da.where(vol < thr_map*0.8, 0, vol)
+
                     vol = apply_corr_y_lazy(vol, corr_y)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
