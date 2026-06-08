@@ -126,7 +126,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
     # NEW: check threshold vs max
     max_val = small_c.max()
     if max_val > 0 and thr >= (max_val / 1.2):
-        return np.zeros_like(img, dtype=bool)
+        return np.zeros_like(img, dtype=bool), max_val
 
     tissue_small = small_c > thr
     if tissue_small.mean() < 0.002:
@@ -139,7 +139,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
         tissue_small = small_c > thr
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
-    return tissue[:img.shape[0], :img.shape[1]]
+    return tissue[:img.shape[0], :img.shape[1]], thr
 
 
 def row_keep_from_mask(mask_pix: np.ndarray,
@@ -172,46 +172,54 @@ def smooth_1d(v: np.ndarray, win: int) -> np.ndarray:
 
 
 def compute_corr_zy_from_pixel_mask(
-    vol_u16: np.ndarray,     # (Z, Y, X)
-    mask_pix: np.ndarray,    # (Z, Y, X) OR (Y, X)
+    vol_u16: da.Array,     # (Z, Y, X)
+    mask_pix: np.ndarray,  # (Y, X) or (Z, Y, X)
     tissue_frac_min: float,
-    smooth_win: int
 ) -> np.ndarray:
-    vol = vol_u16.astype(np.float32, copy=False)
+
+    vol = vol_u16.astype(np.float32)
     Z, Y, X = vol.shape
 
-    # Allow either 2D mask (shared across Z) or full 3D mask
+    # ✅ Convert mask to Dask
+    mask_da = da.from_array(mask_pix, chunks=mask_pix.shape)
+
+    # ✅ Broadcast mask properly
     if mask_pix.shape == (Y, X):
-        mask_pix = np.broadcast_to(mask_pix, (Z, Y, X))
+        mask_da = mask_da[None, :, :]                  # (1, Y, X)
+        mask_da = da.broadcast_to(mask_da, (Z, Y, X))  # (Z, Y, X)
     elif mask_pix.shape != (Z, Y, X):
         raise ValueError(
-            f"mask shape {mask_pix.shape} != volume shape {(Z, Y, X)}")
+            f"mask shape {mask_pix.shape} != volume shape {(Z, Y, X)}"
+        )
 
-    # Mask invalid pixels
-    masked = vol.copy().compute()
-    masked[~mask_pix] = np.nan
+    # ✅ Dask-safe masking
+    masked = da.where(mask_da, vol, np.nan)
 
-    # ✅ Median across X → gives (Z, Y)
-    corr_zy = np.nanmedian(masked, axis=2)  # shape (Z, Y)
+    # ✅ Reduce over X (still Dask)
+    corr_zy = da.nanmedian(masked, axis=2)        # (Z, Y)
+    counts = da.sum(da.isfinite(masked), axis=2)  # (Z, Y)
 
-    # Reject rows with too few valid pixels
-    counts = np.sum(np.isfinite(masked), axis=2)  # (Z, Y)
+    # ✅ Compute small arrays only
+    corr_zy = corr_zy.compute()
+    counts = counts.compute()
+
+    # ✅ Remove low-signal rows
     min_n = int(tissue_frac_min * X)
     corr_zy[counts < min_n] = np.nan
 
-    for z in range(Z):
-        good = np.isfinite(corr_zy[z])
-        if good.sum() < 10:
-            corr_zy[z] = 10000.0
+    # ✅ Handle bad slices (vectorized, no loop)
+    good_counts = np.sum(np.isfinite(corr_zy), axis=1)
+    bad = good_counts < 10
+    corr_zy[bad] = 10000.0
 
-    # Normalize
-    corr_zy /= 1000.0
+    # ✅ Normalize (safer than fixed scaling)
+    corr_zy /= np.nanmedian(corr_zy)
 
     return corr_zy.astype(np.float32)  # (Z, Y)
 
 
 def apply_corr_zy_lazy(
-    vol_zyx: np.ndarray,      # (Z, Y, X)
+    vol_zyx: da.Array,      # (Z, Y, X)
     corr_zy: np.ndarray,    # (Z, Y)
     eps: float = 1e-6
 ) -> da.Array:
@@ -444,7 +452,7 @@ def create(
             for i in camera_channel_map[camera_id]:
                 output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
-                    mask = compute_tissue_mask_otsu(
+                    mask, thr = compute_tissue_mask_otsu(
                         raw_mip_channels[i],
                         ds=ds,
                         clip_hi_pct=clip_hi_pct,
@@ -462,17 +470,23 @@ def create(
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i][:, :, :].compute()
+                    vol = vol_channels[i][:, :, :]
                     mip = raw_mip_channels[i][:, :]
-                    corr_y = compute_corr_zy_from_pixel_mask(
-                        mip, mask, tissue_frac_min, smooth_win)
-                    vol = apply_corr_zy_lazy(vol, corr_y)
+                    corr_zy = compute_corr_zy_from_pixel_mask(
+                        vol, mask, tissue_frac_min, smooth_win)
+                    vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
+                    vol = da.where(vol < thr, 0, vol)
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16, data=vol)
+                                           zarr_config=zarr_config, dtype=np.uint16)
+
+                    vol = da.rechunk(
+                        vol, out._array.shards or chunk)
+                    with ProgressBar():
+                        da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
                     omz.write_ome_metadata(
                         axes=["z", "y", "x"],
