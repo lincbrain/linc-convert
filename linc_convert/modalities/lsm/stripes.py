@@ -453,12 +453,14 @@ def create(
                     vol = apply_corr_y_lazy(vol, corr_y)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
-                    vol = da.rechunk(vol, chunk)
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16, data=vol)
-
+                                           zarr_config=zarr_config, dtype=np.uint16)
+                    vol = da.rechunk(
+                        vol, out._array.shards or out._array.chunks)
+                    with ProgressBar():
+                        da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
                     omz.write_ome_metadata(
                         axes=["z", "y", "x"],
