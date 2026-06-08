@@ -171,47 +171,63 @@ def smooth_1d(v: np.ndarray, win: int) -> np.ndarray:
     return np.convolve(v.astype(np.float32), k, mode="same")
 
 
-def compute_corr_y_from_pixel_mask(img_u16: np.ndarray,
-                                   mask_pix: np.ndarray,
-                                   tissue_frac_min: float,
-                                   smooth_win: int) -> np.ndarray:
-    img = img_u16.astype(np.float32, copy=False)
-    Y, X = img.shape
-    if mask_pix.shape != (Y, X):
-        raise ValueError(
-            f"mask shape {mask_pix.shape} != image shape {(Y, X)}")
+def compute_corr_zy_from_pixel_mask(
+    vol_u16: np.ndarray,     # (Z, Y, X)
+    mask_pix: np.ndarray,    # (Z, Y, X) OR (Y, X)
+    tissue_frac_min: float,
+    smooth_win: int
+) -> np.ndarray:
+    vol = vol_u16.astype(np.float32, copy=False)
+    Z, Y, X = vol.shape
 
-    masked = img.copy()
+    # Allow either 2D mask (shared across Z) or full 3D mask
+    if mask_pix.shape == (Y, X):
+        mask_pix = np.broadcast_to(mask_pix, (Z, Y, X))
+    elif mask_pix.shape != (Z, Y, X):
+        raise ValueError(
+            f"mask shape {mask_pix.shape} != volume shape {(Z, Y, X)}")
+
+    # Mask invalid pixels
+    masked = vol.copy().compute()
     masked[~mask_pix] = np.nan
 
-    corr_y = np.nanmedian(masked, axis=1)
+    # ✅ Median across X → gives (Z, Y)
+    corr_zy = np.nanmedian(masked, axis=2)  # shape (Z, Y)
 
-    counts = np.sum(np.isfinite(masked), axis=1)
+    # Reject rows with too few valid pixels
+    counts = np.sum(np.isfinite(masked), axis=2)  # (Z, Y)
     min_n = int(tissue_frac_min * X)
-    corr_y[counts < min_n] = np.nan
+    corr_zy[counts < min_n] = np.nan
 
-    good = np.isfinite(corr_y)
-    if good.sum() < 10:
-        return np.ones(Y, dtype=np.float32)
+    for z in range(Z):
+        good = np.isfinite(corr_zy[z])
+        if good.sum() < 10:
+            corr_zy[z] = 10000.0
 
-    y = np.arange(Y)
-    corr_y = np.interp(y, y[good], corr_y[good]).astype(np.float32)
+    # Normalize
+    corr_zy /= 1000.0
 
-    corr_y = smooth_1d(corr_y, smooth_win)
-    corr_y /= 1000
-    return corr_y
+    return corr_zy.astype(np.float32)  # (Z, Y)
 
 
-def apply_corr_y_lazy(vol_zyx: da.Array, corr_y: np.ndarray, eps: float = 1e-6) -> da.Array:
-    """
-    vol_zyx shape: (Z, Y, X)
-    corr_y shape: (Y,)
-    Applies correction along Y lazily.
-    """
+def apply_corr_zy_lazy(
+    vol_zyx: np.ndarray,      # (Z, Y, X)
+    corr_zy: np.ndarray,    # (Z, Y)
+    eps: float = 1e-6
+) -> da.Array:
+
     vol_f = vol_zyx.astype(np.float32)
-    corr_y_da = da.from_array(corr_y.astype(np.float32), chunks=(len(corr_y),))
-    corr_y_da = corr_y_da[None, :, None]
-    vol_corr = vol_f / (corr_y_da + eps)
+
+    # Convert correction to dask
+    corr_da = da.from_array(corr_zy.astype(np.float32),
+                            chunks=(corr_zy.shape[0], corr_zy.shape[1]))
+
+    # Expand to (Z, Y, 1)
+    corr_da = corr_da[:, :, None]
+
+    # Apply correction
+    vol_corr = vol_f / (corr_da + eps)
+
     return da.clip(vol_corr, 0, 65535).astype(np.uint16)
 
 
@@ -446,22 +462,17 @@ def create(
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i][:, :, :]
+                    vol = vol_channels[i][:, :, :].compute()
                     mip = raw_mip_channels[i][:, :]
-                    corr_y = compute_corr_y_from_pixel_mask(
+                    corr_y = compute_corr_zy_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
-                    vol = apply_corr_y_lazy(vol, corr_y)
+                    vol = apply_corr_zy_lazy(vol, corr_y)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16, data=vol.compute())
-
-                    vol = da.rechunk(
-                        vol, out._array.shards or chunk)
-                    # with ProgressBar():
-                    #    da.to_zarr(vol, out._array)
+                                           zarr_config=zarr_config, dtype=np.uint16, data=vol)
                     omz.generate_pyramid(levels=zarr_config.levels)
                     omz.write_ome_metadata(
                         axes=["z", "y", "x"],
