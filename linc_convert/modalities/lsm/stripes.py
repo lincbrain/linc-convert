@@ -69,11 +69,13 @@ def clean_mask(mask, erode_size=5, dilate_size=5):
     erode_struct = np.ones((erode_size, erode_size), dtype=bool)
     dilate_struct = np.ones((dilate_size, dilate_size), dtype=bool)
 
-    # Erode (shrink mask, remove small speckles)
     mask_eroded = binary_erosion(mask, structure=erode_struct)
 
-    # Dilate (grow back main regions)
     mask_clean = binary_dilation(mask_eroded, structure=dilate_struct)
+
+    mask_clean = binary_dilation(mask_clean, structure=dilate_struct)
+
+    mask_clean = binary_erosion(mask_clean, structure=erode_struct)
 
     return mask_clean
 
@@ -442,12 +444,12 @@ def create(
                     mask = clean_mask(mask)
                     ys, xs = np.where(mask)
                     max_x = xs.max() + 1
-                    mask = mask[:, :max_x]
+                    mask = mask[:, :]
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i][:, :, :max_x]
-                    mip = raw_mip_channels[i][:, :max_x]
+                    vol = vol_channels[i][:, :, :]
+                    mip = raw_mip_channels[i][:, :]
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
                     vol = apply_corr_y_lazy(vol, corr_y)
@@ -458,7 +460,7 @@ def create(
                     out = omz.create_array("0", shape=vol.shape,
                                            zarr_config=zarr_config, dtype=np.uint16)
                     vol = da.rechunk(
-                        vol, out._array.shards or out._array.chunks)
+                        vol, out._array.shards or chunk)
                     with ProgressBar():
                         da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
