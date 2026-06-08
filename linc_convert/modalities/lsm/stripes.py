@@ -457,12 +457,12 @@ def create(
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16, data=vol.compute())
+                                           zarr_config=zarr_config, dtype=np.uint16)
 
                     vol = da.rechunk(
                         vol, out._array.shards or chunk)
-                    # with ProgressBar():
-                    #    da.to_zarr(vol, out._array)
+                    with ProgressBar():
+                        da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
                     omz.write_ome_metadata(
                         axes=["z", "y", "x"],
