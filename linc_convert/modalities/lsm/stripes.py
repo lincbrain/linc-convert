@@ -471,9 +471,8 @@ def create(
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
-                    mip = raw_mip_channels[i][:, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, smooth_win)
+                        vol, mask, tissue_frac_min)
                     vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
