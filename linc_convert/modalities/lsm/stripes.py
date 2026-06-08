@@ -442,8 +442,6 @@ def create(
                     )
                     mask = mask & row_keep[:, None]
                     mask = clean_mask(mask)
-                    ys, xs = np.where(mask)
-                    max_x = xs.max() + 1
                     mask = mask[:, :]
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
@@ -458,7 +456,7 @@ def create(
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16, data=omz.compute())
+                                           zarr_config=zarr_config, dtype=np.uint16, data=vol.compute())
 
                     vol = da.rechunk(
                         vol, out._array.shards or chunk)
