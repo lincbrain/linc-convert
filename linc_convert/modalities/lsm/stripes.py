@@ -155,7 +155,7 @@ def compute_corr_zy_from_pixel_mask(
 
     # Mask invalid pixels
     masked = vol.copy()
-    masked[~mask_pix] = np.nan
+    masked = da.where(mask_pix, vol, np.nan)
 
     # ✅ Median across X → gives (Z, Y)
     corr_zy = np.nanmedian(masked, axis=2)  # shape (Z, Y)
