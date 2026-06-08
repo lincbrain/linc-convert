@@ -126,7 +126,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
     # NEW: check threshold vs max
     max_val = small_c.max()
     if max_val > 0 and thr >= (max_val / 1.2):
-        return np.zeros_like(img, dtype=bool)
+        return np.zeros_like(img, dtype=bool), max_val
 
     tissue_small = small_c > thr
     if tissue_small.mean() < 0.002:
@@ -139,7 +139,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
         tissue_small = small_c > thr
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
-    return tissue[:img.shape[0], :img.shape[1]]
+    return tissue[:img.shape[0], :img.shape[1]], thr
 
 
 def row_keep_from_mask(mask_pix: np.ndarray,
@@ -428,7 +428,7 @@ def create(
             for i in camera_channel_map[camera_id]:
                 output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
-                    mask = compute_tissue_mask_otsu(
+                    mask, thr = compute_tissue_mask_otsu(
                         raw_mip_channels[i],
                         ds=ds,
                         clip_hi_pct=clip_hi_pct,
