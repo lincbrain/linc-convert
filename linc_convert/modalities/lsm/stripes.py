@@ -1,5 +1,6 @@
 """Generate stripe .tff files from ome zarr and MIP projection."""
 
+from scipy.ndimage import binary_erosion, binary_dilation
 import logging
 import os
 import time
@@ -44,6 +45,37 @@ camera_channel_map = {
 # --------------------------------------------------
 # Functions
 # --------------------------------------------------
+
+
+def clean_mask(mask, erode_size=5, dilate_size=5):
+    """
+    Remove small outliers from a binary mask using erosion + dilation.
+
+    Parameters
+    ----------
+    mask : np.ndarray (bool)
+        Input mask (Y, X)
+    erode_size : int
+        Size of erosion structuring element
+    dilate_size : int
+        Size of dilation structuring element
+
+    Returns
+    -------
+    cleaned_mask : np.ndarray (bool)
+    """
+
+    # Structuring elements
+    erode_struct = np.ones((erode_size, erode_size), dtype=bool)
+    dilate_struct = np.ones((dilate_size, dilate_size), dtype=bool)
+
+    # Erode (shrink mask, remove small speckles)
+    mask_eroded = binary_erosion(mask, structure=erode_struct)
+
+    # Dilate (grow back main regions)
+    mask_clean = binary_dilation(mask_eroded, structure=dilate_struct)
+
+    return mask_clean
 
 
 def load_scan_parameters(yaml_path: Path):
@@ -407,11 +439,15 @@ def create(
                         dilate_rows=dilate_rows,
                     )
                     mask = mask & row_keep[:, None]
+                    mask = clean_mask(mask)
+                    ys, xs = np.where(mask)
+                    max_x = xs.max() + 1
+                    mask = mask[:, :max_x]
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i]
-                    mip = raw_mip_channels[i]
+                    vol = vol_channels[i][:, :, :max_x]
+                    mip = raw_mip_channels[i][:, :max_x]
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
                     vol = apply_corr_y_lazy(vol, corr_y)
@@ -421,9 +457,8 @@ def create(
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
-                                           zarr_config=zarr_config, dtype=np.uint16)
-                    with ProgressBar():
-                        da.to_zarr(vol, out)
+                                           zarr_config=zarr_config, dtype=np.uint16, data=vol)
+
                     omz.generate_pyramid(levels=zarr_config.levels)
                     omz.write_ome_metadata(
                         axes=["z", "y", "x"],
