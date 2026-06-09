@@ -530,10 +530,12 @@ def create(
                     vol = vol_channels[i][:, :, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
                         vol, mask, tissue_frac_min, smooth_win)
+
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
-                    # reshape for broadcasting
-                    thr_map = thr_map[None, :, None]   # (1, y, 1)
+
+                    # reshape for broadcasting to (Z, Y, X)
+                    thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
                     vol = da.where(vol < thr_map*0.7, 0, vol)
