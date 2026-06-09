@@ -32,6 +32,7 @@ from linc_convert.utils.zarr_config import (
     ZarrConfig,
     autoconfig,
 )
+from scipy.ndimage import convolve
 
 logger = logging.getLogger(__name__)
 stripes = cyclopts.App(name="stripes", help_format="markdown")
@@ -171,35 +172,117 @@ def smooth_1d(v: np.ndarray, win: int) -> np.ndarray:
     return np.convolve(v.astype(np.float32), k, mode="same")
 
 
-def compute_corr_y_from_pixel_mask(img_u16: np.ndarray,
-                                   mask_pix: np.ndarray,
-                                   tissue_frac_min: float,
-                                   smooth_win: int) -> np.ndarray:
-    img = img_u16.astype(np.float32, copy=False)
-    Y, X = img.shape
-    if mask_pix.shape != (Y, X):
+def compute_corr_zy_from_pixel_mask(
+    vol_zyx: da.Array,     # (Z, Y, X)
+    mask_pix: np.ndarray,  # (Y, X) or (Z, Y, X)
+    tissue_frac_min: float,
+    kernel_size: int = 5
+) -> np.ndarray:
+    """
+    Compute (Z,Y) correction map from a 3D Dask volume, using 2D smoothing.
+
+    Returns
+    -------
+    corr_zy : np.ndarray (Z, Y)
+    """
+
+    vol = vol_zyx.astype(np.float32)
+    Z, Y, X = vol.shape
+
+    # -------------------------
+    # Broadcast mask
+    # -------------------------
+    mask_da = da.from_array(mask_pix, chunks=vol.chunks[1:])
+
+    if mask_pix.shape == (Y, X):
+        mask_da = mask_da[None, :, :]
+        mask_da = da.broadcast_to(mask_da, (Z, Y, X))
+    elif mask_pix.shape != (Z, Y, X):
         raise ValueError(
-            f"mask shape {mask_pix.shape} != image shape {(Y, X)}")
+            f"mask shape {mask_pix.shape} != volume shape {(Z, Y, X)}"
+        )
 
-    masked = img.copy()
-    masked[~mask_pix] = np.nan
+    # -------------------------
+    # Mask data
+    # -------------------------
+    masked = da.where(mask_da, vol, np.nan)
 
-    corr_y = np.nanmedian(masked, axis=1)
+    # -------------------------
+    # Compute median across X → (Z,Y)
+    # -------------------------
+    corr_zy = da.nanmedian(masked, axis=2)
+    counts = da.sum(da.isfinite(masked), axis=2)
 
-    counts = np.sum(np.isfinite(masked), axis=1)
+    # Bring small arrays into memory
+    corr_zy = corr_zy.compute()
+    counts = counts.compute()
+
+    # -------------------------
+    # Remove low-quality rows
+    # -------------------------
     min_n = int(tissue_frac_min * X)
-    corr_y[counts < min_n] = np.nan
+    corr_zy[counts < min_n] = np.nan
 
-    good = np.isfinite(corr_y)
-    if good.sum() < 10:
-        return np.ones(Y, dtype=np.float32)
+    bad = np.sum(np.isfinite(corr_zy), axis=1) < 10
 
-    y = np.arange(Y)
-    corr_y = np.interp(y, y[good], corr_y[good]).astype(np.float32)
+    median_val = np.nanmedian(corr_zy)
 
-    corr_y = smooth_1d(corr_y, smooth_win)
-    corr_y /= 1000
-    return corr_y
+    if not np.isfinite(median_val):
+        median_val = 1.0
+
+    corr_zy[bad] = median_val
+
+    # -------------------------
+    # ✅ 2D smoothing (NEW)
+    # -------------------------
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
+
+    # Handle NaNs during convolution
+    valid = np.isfinite(corr_zy).astype(np.float32)
+    corr_filled = np.nan_to_num(corr_zy, nan=0)
+
+    smooth_num = convolve(corr_filled, kernel, mode="nearest")
+    smooth_den = convolve(valid, kernel, mode="nearest")
+
+    corr_zy_smooth = smooth_num / (smooth_den + 1e-6)
+
+    corr_zy_smooth[~valid] = 1.0
+
+    # -------------------------
+    # Normalize
+    # -------------------------
+    corr_zy_smooth /= 1000
+
+    return corr_zy_smooth.astype(np.float32)
+
+
+def apply_corr_zy_lazy(
+    vol_zyx: da.Array,
+    corr_zy: np.ndarray,   # (Z, Y)
+    eps: float = 1e-6
+) -> da.Array:
+    """
+    vol_zyx shape: (Z, Y, X)
+    corr_zy shape: (Z, Y)
+    Applies correction along Z and Y lazily.
+    """
+
+    # Convert volume
+    vol_f = vol_zyx.astype(np.float32)
+
+    # Convert correction to Dask
+    corr_da = da.from_array(
+        corr_zy.astype(np.float32),
+        chunks=(corr_zy.shape[0], corr_zy.shape[1])
+    )
+
+    # Expand to (Z, Y, 1) for broadcasting
+    corr_da = corr_da[:, :, None]
+
+    # Apply correction
+    vol_corr = vol_f / (corr_da + eps)
+
+    return da.clip(vol_corr, 0, 65535).astype(np.uint16)
 
 
 def apply_corr_y_lazy(vol_zyx: da.Array, corr_y: np.ndarray, eps: float = 1e-6) -> da.Array:
@@ -447,18 +530,17 @@ def create(
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
-                    mip = raw_mip_channels[i][:, :]
-                    corr_y = compute_corr_y_from_pixel_mask(
-                        mip, mask, tissue_frac_min, smooth_win)
-                    y_med = np.median(corr_y)
-                    thr_map = corr_y * thr / y_med
+                    corr_zy = compute_corr_zy_from_pixel_mask(
+                        vol, mask, tissue_frac_min, smooth_win)
+                    zy_max = np.max(corr_zy)
+                    thr_map = corr_zy * thr / zy_max
                     # reshape for broadcasting
                     thr_map = thr_map[None, :, None]   # (1, y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.6, 0, vol)
+                    vol = da.where(vol < thr_map*0.7, 0, vol)
 
-                    vol = apply_corr_y_lazy(vol, corr_y)
+                    vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
                     omz = ZarrPythonGroup.from_config(
