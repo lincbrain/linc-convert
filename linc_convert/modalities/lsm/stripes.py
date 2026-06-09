@@ -447,7 +447,6 @@ def create(
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
-                    vol = da.where(vol < thr*0.8, 0, vol)
                     mip = raw_mip_channels[i][:, :]
                     corr_y = compute_corr_y_from_pixel_mask(
                         mip, mask, tissue_frac_min, smooth_win)
