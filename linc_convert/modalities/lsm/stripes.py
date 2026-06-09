@@ -1,6 +1,5 @@
 """Generate stripe .tff files from ome zarr and MIP projection."""
 
-from scipy.ndimage import binary_erosion, binary_dilation
 import logging
 import os
 import time
@@ -15,8 +14,11 @@ import tifffile as tiff
 import yaml
 from dask.diagnostics import ProgressBar
 from dask_image.ndinterp import affine_transform
-from scipy.ndimage import binary_dilation
+from pystackreg import StackReg
+from scipy.ndimage import binary_dilation, binary_erosion, convolve, shift
+from skimage import io
 from skimage.filters import threshold_otsu
+from skimage.registration import phase_cross_correlation
 
 # internals
 from linc_convert.modalities.lsm.cli import lsm
@@ -32,7 +34,6 @@ from linc_convert.utils.zarr_config import (
     ZarrConfig,
     autoconfig,
 )
-from scipy.ndimage import convolve
 
 logger = logging.getLogger(__name__)
 stripes = cyclopts.App(name="stripes", help_format="markdown")
@@ -176,6 +177,7 @@ def compute_corr_zy_from_pixel_mask(
     vol_zyx: da.Array,     # (Z, Y, X)
     mask_pix: np.ndarray,  # (Y, X) or (Z, Y, X)
     tissue_frac_min: float,
+    thr: float,
     kernel_size: int = 5
 ) -> np.ndarray:
     """
@@ -206,6 +208,11 @@ def compute_corr_zy_from_pixel_mask(
     # Mask data
     # -------------------------
     masked = da.where(mask_da, vol, np.nan)
+    masked = da.where(
+        da.isfinite(masked) & (masked < thr),
+        np.nan,
+        masked
+    )
 
     # -------------------------
     # Compute median across X → (Z,Y)
@@ -397,6 +404,29 @@ def skew_correct_volume_lazy(vol_zyx, scan_parameters, camera_id, force_flip=Non
     return vol_skew_zyx
 
 
+def register_channels(unregistered_channels):
+    image = io.imread('multi_channel_image.tif')
+
+    # Initialize StackReg for Affine or Rigid Body transformation
+    sr = StackReg(StackReg.AFFINE)
+
+    # Use Channel 0 as the anchor
+    reference_channel = image[0]
+    registered_channels = [reference_channel]
+
+    for i in range(1, image.shape[0]):
+        moving_channel = image[i]
+
+        # Compute the transformation matrix from moving to reference channel
+        tmat = sr.register(reference_channel, moving_channel)
+
+        # Warp the moving channel using the matrix
+        aligned_channel = sr.transform(moving_channel, tmat=tmat)
+        registered_channels.append(aligned_channel.astype(image.dtype))
+
+    final_image = np.stack(registered_channels, axis=0)
+
+
 @stripes.default
 @autoconfig
 def create(
@@ -529,7 +559,7 @@ def create(
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, smooth_win)
+                        vol, mask, tissue_frac_min, thr*0.2)
 
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
@@ -538,7 +568,7 @@ def create(
                     thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.7, 0, vol)
+                    vol = da.where(vol < thr_map*0.5, 0, vol)
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = skew_correct_volume_lazy(
