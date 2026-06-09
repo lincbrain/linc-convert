@@ -246,8 +246,6 @@ def compute_corr_zy_from_pixel_mask(
 
     corr_zy_smooth = smooth_num / (smooth_den + 1e-6)
 
-    corr_zy_smooth[~valid] = 1.0
-
     # -------------------------
     # Normalize
     # -------------------------
