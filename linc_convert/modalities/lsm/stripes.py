@@ -399,7 +399,6 @@ def skew_correct_volume_lazy(vol_zyx, scan_parameters, camera_id, force_flip=Non
     )
 
     vol_skew_zyx = da.transpose(vol_skew_yzx, (1, 0, 2))
-    vol_skew_zyx = maybe_flip_z_lazy(vol_skew_zyx, do_flip)
 
     return vol_skew_zyx
 
