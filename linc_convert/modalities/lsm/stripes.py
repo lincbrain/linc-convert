@@ -456,7 +456,7 @@ def create(
                     thr_map = thr_map[None, :, None]   # (1, y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.8, 0, vol)
+                    vol = da.where(vol < thr_map*0.6, 0, vol)
 
                     vol = apply_corr_y_lazy(vol, corr_y)
                     vol = skew_correct_volume_lazy(
