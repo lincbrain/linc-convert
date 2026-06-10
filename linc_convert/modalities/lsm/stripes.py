@@ -522,10 +522,10 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         key = camera_channel_map[1][i]
         channels.append(
             sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)[
-                ::3, ::3, ::3].compute().astype(np.float32)))
+                ::5, ::5, ::5].compute().astype(np.float32)))
         )
         channel_keys.append((1, key))  # (camera, channel_key)
-        print(f"load1 {i}")
+        logger.info(f"load1 {i}")
     # Break ALL references to reader-backed objects
     del vol_channels_1
     del reader_1
@@ -536,9 +536,9 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         key = camera_channel_map[2][i]
         channels.append(
             sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)[
-                ::3, ::3, ::3].compute().astype(np.float32)))
+                ::5, ::5, ::5].compute().astype(np.float32)))
         )
-        print(f"load2 {i}")
+        logger.info(f"load2 {i}")
         channel_keys.append((2, key))
     # Break ALL references to reader-backed objects
     del vol_channels_2
@@ -557,7 +557,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
             affine = np.eye(4)
         else:
             affine = upscale_affine(affine_to_matrix(
-                register_affine(channels[fixed_idx], channels[i])), 3
+                register_affine(channels[fixed_idx], channels[i])), 5
             )
 
         affines[cam][ch_key] = affine
