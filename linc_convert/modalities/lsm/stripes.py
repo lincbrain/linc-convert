@@ -448,7 +448,7 @@ def estimate_affine_zy(image_ref, image_mov):
     """
 
     # Detect ORB features
-    orb = feature.ORB(n_keypoints=500)
+    orb = feature.ORB(n_keypoints=30)
 
     orb.detect_and_extract(image_ref)
     keypoints1 = orb.keypoints
