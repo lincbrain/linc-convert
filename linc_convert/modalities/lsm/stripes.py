@@ -438,43 +438,44 @@ def upscale_affine(affine_low, factor=2):
     return S @ affine_low @ S_inv
 
 
-def estimate_affine_zy(image_ref, image_mov):
-    """
-    Estimate full 2D affine transform (rotation, scale, translation)
-    between image_mov -> image_ref in (z, y) plane.
+def estimate_affine_zy(image_ref_np, image_mov_np):
+    ref = sitk.GetImageFromArray(image_ref_np.astype(np.float32))
+    mov = sitk.GetImageFromArray(image_mov_np.astype(np.float32))
 
-    Returns:
-        skimage AffineTransform object
-    """
+    transform = sitk.AffineTransform(2)
 
-    # Detect ORB features
-    orb = feature.ORB(n_keypoints=30)
+    reg = sitk.ImageRegistrationMethod()
+    reg.SetMetricAsMattesMutualInformation(50)
+    reg.SetMetricSamplingStrategy(reg.RANDOM)
+    reg.SetMetricSamplingPercentage(0.2)
 
-    orb.detect_and_extract(image_ref)
-    keypoints1 = orb.keypoints
-    descriptors1 = orb.descriptors
+    reg.SetInterpolator(sitk.sitkLinear)
 
-    orb.detect_and_extract(image_mov)
-    keypoints2 = orb.keypoints
-    descriptors2 = orb.descriptors
-
-    # Match features
-    matches = feature.match_descriptors(
-        descriptors1, descriptors2, cross_check=True)
-
-    src = keypoints2[matches[:, 1]]  # moving image
-    dst = keypoints1[matches[:, 0]]  # reference image
-
-    # Robust affine estimation (RANSAC)
-    model_robust, inliers = ransac(
-        (src, dst),
-        AffineTransform,
-        min_samples=3,
-        residual_threshold=2,
-        max_trials=1000
+    reg.SetOptimizerAsGradientDescent(
+        learningRate=1.0,
+        numberOfIterations=200
     )
 
-    return model_robust
+    reg.SetOptimizerScalesFromPhysicalShift()
+    reg.SetInitialTransform(transform, inPlace=False)
+
+    return reg.Execute(ref, mov)
+
+
+def sitk_to_4x4(tx):
+    A = np.array(tx.GetMatrix()).reshape(2, 2)
+    t = np.array(tx.GetTranslation())
+
+    M = np.eye(4)
+    M[1, 1] = A[1, 1]
+    M[1, 2] = A[1, 0]
+    M[1, 3] = t[1]
+
+    M[2, 1] = A[0, 1]
+    M[2, 2] = A[0, 0]
+    M[2, 3] = t[0]
+
+    return M
 
 
 def zy_to_zyx_affine(affine_zy):
@@ -575,7 +576,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         if i == fixed_idx:
             affine = np.eye(4)
         else:
-            affine = zy_to_zyx_affine(estimate_affine_zy(
+            affine = sitk_to_4x4(estimate_affine_zy(
                 channels[fixed_idx], channels[i]))
 
         affines[cam][ch_key] = affine
