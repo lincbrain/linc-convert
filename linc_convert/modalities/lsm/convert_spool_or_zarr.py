@@ -114,8 +114,8 @@ def open_tile_reader(
 
 def discover_tile_paths(inp: str,
                         *,
-                        dandiset_id: Optional[str],
-                        api_key: Optional[str],
+                        dandiset_id: Optional[str] = None,
+                        api_key: Optional[str] = None,
                         filename_pattern: Optional[str] = None,) -> List[str]:
     """Get all tiles from the folder specified."""
     if dandiset_id is None:
