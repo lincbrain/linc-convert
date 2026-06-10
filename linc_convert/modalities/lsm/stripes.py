@@ -36,6 +36,11 @@ from linc_convert.utils.zarr_config import (
 )
 import gc
 
+from skimage import feature, transform, color
+from skimage.measure import ransac
+from skimage.transform import AffineTransform
+
+
 logger = logging.getLogger(__name__)
 stripes = cyclopts.App(name="stripes", help_format="markdown")
 lsm.command(stripes)
@@ -433,71 +438,85 @@ def upscale_affine(affine_low, factor=2):
     return S @ affine_low @ S_inv
 
 
-def register_affine(fixed_img, moving_img):
+def estimate_affine_zy(image_ref, image_mov):
     """
-    Compute affine transform that maps moving → fixed.
+    Estimate full 2D affine transform (rotation, scale, translation)
+    between image_mov -> image_ref in (z, y) plane.
+
+    Returns:
+        skimage AffineTransform object
     """
 
-    # Initial transform (center-based)
-    initial_transform = sitk.CenteredTransformInitializer(
-        fixed_img,
-        moving_img,
-        sitk.AffineTransform(3),
-        sitk.CenteredTransformInitializerFilter.GEOMETRY
+    # Detect ORB features
+    orb = feature.ORB(n_keypoints=500)
+
+    orb.detect_and_extract(image_ref)
+    keypoints1 = orb.keypoints
+    descriptors1 = orb.descriptors
+
+    orb.detect_and_extract(image_mov)
+    keypoints2 = orb.keypoints
+    descriptors2 = orb.descriptors
+
+    # Match features
+    matches = feature.match_descriptors(
+        descriptors1, descriptors2, cross_check=True)
+
+    src = keypoints2[matches[:, 1]]  # moving image
+    dst = keypoints1[matches[:, 0]]  # reference image
+
+    # Robust affine estimation (RANSAC)
+    model_robust, inliers = ransac(
+        (src, dst),
+        AffineTransform,
+        min_samples=3,
+        residual_threshold=2,
+        max_trials=1000
     )
 
-    # Registration method
-    registration_method = sitk.ImageRegistrationMethod()
-
-    # Similarity metric (robust)
-    registration_method.SetMetricAsMattesMutualInformation(
-        numberOfHistogramBins=50
-    )
-
-    registration_method.SetMetricSamplingStrategy(
-        registration_method.RANDOM
-    )
-    registration_method.SetMetricSamplingPercentage(0.25)
-
-    # Interpolator
-    registration_method.SetInterpolator(sitk.sitkLinear)
-
-    # Optimizer
-    registration_method.SetOptimizerAsGradientDescent(
-        learningRate=1.0,
-        numberOfIterations=200,
-        convergenceMinimumValue=1e-6,
-        convergenceWindowSize=10
-    )
-
-    registration_method.SetOptimizerScalesFromPhysicalShift()
-
-    # Multi-resolution pyramid
-    registration_method.SetShrinkFactorsPerLevel(shrinkFactors=[4, 2, 1])
-    registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[2, 1, 0])
-    registration_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
-
-    # Set initial transform
-    registration_method.SetInitialTransform(initial_transform, inPlace=False)
-
-    # Run registration
-    final_transform = registration_method.Execute(fixed_img, moving_img)
-
-    print("Optimizer stop condition:",
-          registration_method.GetOptimizerStopConditionDescription())
-    print("Final metric value:", registration_method.GetMetricValue())
-
-    return final_transform
+    return model_robust
 
 
-def affine_to_matrix(transform):
-    matrix = np.array(transform.GetMatrix()).reshape(3, 3)
-    translation = np.array(transform.GetTranslation())
+def zy_to_zyx_affine(affine_zy):
+    """
+    Convert a 2D affine (z, y) → (z, y) into a 3D 4x4 affine (x, y, z),
+    where x is unchanged.
 
-    affine = np.eye(4)
-    affine[:3, :3] = matrix
-    affine[:3, 3] = translation
-    return affine
+    Parameters
+    ----------
+    affine_zy : (3, 3) array OR skimage AffineTransform
+        2D affine transform acting on (z, y) coordinates.
+
+    Returns
+    -------
+    M : (4, 4) ndarray
+        3D affine in (x, y, z) space
+    """
+
+    # Extract matrix if it's a skimage transform
+    if hasattr(affine_zy, "params"):
+        A = affine_zy.params
+    else:
+        A = np.asarray(affine_zy)
+
+    if A.shape != (3, 3):
+        raise ValueError("Input must be a 3x3 affine matrix")
+
+    M = np.eye(4, dtype=float)
+
+    M[0, 0] = 1.0
+
+    # y row
+    M[1, 2] = A[1, 0]  # y <- z
+    M[1, 1] = A[1, 1]  # y <- y
+    M[1, 3] = A[1, 2]  # translation y
+
+    # z row
+    M[2, 2] = A[0, 0]  # z <- z
+    M[2, 1] = A[0, 1]  # z <- y
+    M[2, 3] = A[0, 2]  # translation z
+
+    return M
 
 
 def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
@@ -522,7 +541,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         key = camera_channel_map[1][i]
         channels.append(
             sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)[
-                ::5, ::5, ::5].compute().astype(np.float32)))
+                :, :, 14076].compute().astype(np.float32)))
         )
         channel_keys.append((1, key))  # (camera, channel_key)
         logger.info(f"load1 {i}")
@@ -536,7 +555,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         key = camera_channel_map[2][i]
         channels.append(
             sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)[
-                ::5, ::5, ::5].compute().astype(np.float32)))
+                :, :, 14076].compute().astype(np.float32)))
         )
         logger.info(f"load2 {i}")
         channel_keys.append((2, key))
@@ -556,9 +575,8 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         if i == fixed_idx:
             affine = np.eye(4)
         else:
-            affine = upscale_affine(affine_to_matrix(
-                register_affine(channels[fixed_idx], channels[i])), 5
-            )
+            affine = zy_to_zyx_affine(estimate_affine_zy(
+                channels[fixed_idx], channels[i]))
 
         affines[cam][ch_key] = affine
 
