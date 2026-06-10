@@ -425,6 +425,10 @@ def register_affine(fixed_img, moving_img):
     Compute affine transform that maps moving → fixed.
     """
 
+    moving_img = sitk.GetImageFromArray(
+        moving_img.compute().astype(np.float32)
+    )
+
     # Initial transform (center-based)
     initial_transform = sitk.CenteredTransformInitializer(
         fixed_img,
@@ -521,8 +525,9 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         channel_keys.append((2, key))
 
     # Convert to SimpleITK
-    for i in range(4):
-        channels[i] = sitk.GetImageFromArray(channels[i].compute())
+    channels[fixed_idx] = sitk.GetImageFromArray(
+        channels[fixed_idx].compute().astype(np.float32)
+    )
 
     # Compute affines
     affines = {}
