@@ -420,13 +420,25 @@ def skew_correct_volume_lazy(vol_zyx, scan_parameters, camera_id, force_flip=Non
     return vol_skew_zyx
 
 
+def upscale_affine(affine_low, factor=2):
+    S = np.eye(4)
+    S[0, 0] = factor
+    S[1, 1] = factor
+    S[2, 2] = factor
+
+    S_inv = np.eye(4) / factor
+    S_inv[3, 3] = 1  # keep homogeneous correct
+
+    return S @ affine_low @ S_inv
+
+
 def register_affine(fixed_img, moving_img):
     """
     Compute affine transform that maps moving → fixed.
     """
 
     moving_img = sitk.GetImageFromArray(
-        moving_img.compute().astype(np.float32)
+        moving_img[::2, ::2, ::2].compute().astype(np.float32)
     )
 
     # Initial transform (center-based)
@@ -526,7 +538,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
 
     # Convert to SimpleITK
     channels[fixed_idx] = sitk.GetImageFromArray(
-        channels[fixed_idx].compute().astype(np.float32)
+        channels[fixed_idx][::2, ::2, ::2].compute().astype(np.float32)
     )
 
     # Compute affines
@@ -540,8 +552,8 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
         if i == fixed_idx:
             affine = np.eye(4)
         else:
-            affine = affine_to_matrix(
-                register_affine(channels[fixed_idx], channels[i])
+            affine = upscale_affine(affine_to_matrix(
+                register_affine(channels[fixed_idx], channels[i]))
             )
 
         affines[cam][ch_key] = affine
