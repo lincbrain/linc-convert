@@ -10,11 +10,11 @@ from typing import List, Optional
 import cyclopts
 import dask.array as da
 import numpy as np
+import SimpleITK as sitk
 import tifffile as tiff
 import yaml
 from dask.diagnostics import ProgressBar
 from dask_image.ndinterp import affine_transform
-from pystackreg import StackReg
 from scipy.ndimage import binary_dilation, binary_erosion, convolve, shift
 from skimage import io
 from skimage.filters import threshold_otsu
@@ -378,6 +378,23 @@ def skew_correction_affine_dask(
     return skew_corrected
 
 
+def apply_affine(
+    scape_data_yzx: da.Array,
+    affine: np.ndarray,
+):
+    affine_inv = np.linalg.inv(affine)
+
+    applied = affine_transform(
+        scape_data_yzx,
+        matrix=affine_inv,
+        order=3,
+        mode="constant",
+        cval=0.0,
+        output_chunks=scape_data_yzx.chunks,
+    )
+    return applied
+
+
 def skew_correct_volume_lazy(vol_zyx, scan_parameters, camera_id, force_flip=None):
     delta = scan_parameters["skewCorr"]["delta"]
     umps = scan_parameters["skewCorr"]["umPixelSize"]
@@ -403,13 +420,144 @@ def skew_correct_volume_lazy(vol_zyx, scan_parameters, camera_id, force_flip=Non
     return vol_skew_zyx
 
 
+def register_affine(fixed_img, moving_img):
+    """
+    Compute affine transform that maps moving → fixed.
+    """
+
+    # Initial transform (center-based)
+    initial_transform = sitk.CenteredTransformInitializer(
+        fixed_img,
+        moving_img,
+        sitk.AffineTransform(3),
+        sitk.CenteredTransformInitializerFilter.GEOMETRY
+    )
+
+    # Registration method
+    registration_method = sitk.ImageRegistrationMethod()
+
+    # Similarity metric (robust)
+    registration_method.SetMetricAsMattesMutualInformation(
+        numberOfHistogramBins=50
+    )
+
+    registration_method.SetMetricSamplingStrategy(
+        registration_method.RANDOM
+    )
+    registration_method.SetMetricSamplingPercentage(0.25)
+
+    # Interpolator
+    registration_method.SetInterpolator(sitk.sitkLinear)
+
+    # Optimizer
+    registration_method.SetOptimizerAsGradientDescent(
+        learningRate=1.0,
+        numberOfIterations=200,
+        convergenceMinimumValue=1e-6,
+        convergenceWindowSize=10
+    )
+
+    registration_method.SetOptimizerScalesFromPhysicalShift()
+
+    # Multi-resolution pyramid
+    registration_method.SetShrinkFactorsPerLevel(shrinkFactors=[4, 2, 1])
+    registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[2, 1, 0])
+    registration_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+    # Set initial transform
+    registration_method.SetInitialTransform(initial_transform, inPlace=False)
+
+    # Run registration
+    final_transform = registration_method.Execute(fixed_img, moving_img)
+
+    print("Optimizer stop condition:",
+          registration_method.GetOptimizerStopConditionDescription())
+    print("Final metric value:", registration_method.GetMetricValue())
+
+    return final_transform
+
+
+def affine_to_matrix(transform):
+    matrix = np.array(transform.GetMatrix()).reshape(3, 3)
+    translation = np.array(transform.GetTranslation())
+
+    affine = np.eye(4)
+    affine[:3, :3] = matrix
+    affine[:3, 3] = translation
+    return affine
+
+
+def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
+    cam_info_1 = get_camera_info(scanParameters, 1)
+    cam_info_2 = get_camera_info(scanParameters, 2)
+
+    reader_1 = open_tile_reader(path_cm1)
+    reader_2 = open_tile_reader(path_cm2)
+
+    vol_channels_1 = crop_volume_channels(reader_1, cam_info_1)
+    vol_channels_2 = crop_volume_channels(reader_2, cam_info_2)
+
+    # Precompute flips
+    do_flip_1 = bool(scanParameters["crop"]["Camera1"]["verticalFlip"])
+    do_flip_2 = bool(scanParameters["crop"]["Camera2"]["verticalFlip"])
+
+    channels = []
+    channel_keys = []  # <-- track mapping
+
+    # Camera 1
+    for i in range(2):
+        key = camera_channel_map[1][i]
+        channels.append(
+            maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)
+        )
+        channel_keys.append((1, key))  # (camera, channel_key)
+
+    # Camera 2
+    for i in range(2):
+        key = camera_channel_map[2][i]
+        channels.append(
+            maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)
+        )
+        channel_keys.append((2, key))
+
+    # Convert to SimpleITK
+    for i in range(4):
+        channels[i] = sitk.GetImageFromArray(channels[i].compute())
+
+    # Compute affines
+    affines = {}
+    for i in range(4):
+        cam, ch_key = channel_keys[i]
+
+        if cam not in affines:
+            affines[cam] = {}
+
+        if i == fixed_idx:
+            affine = np.eye(4)
+        else:
+            affine = affine_to_matrix(
+                register_affine(channels[fixed_idx], channels[i])
+            )
+
+        affines[cam][ch_key] = affine
+
+    # Debug print
+    for cam in affines:
+        for ch in affines[cam]:
+            print(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
+
+    return affines
+
+
 @stripes.default
 @autoconfig
 def create(
-    inp: str,
+    inp_cm1: str,
+    inp_cm2: str,
     mip_dir: str,
     yaml_path: str,
     camera_id: int,
+    file_num: int,
     *,
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
@@ -477,8 +625,16 @@ def create(
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
-    tile_paths = discover_tile_paths(
-        inp, dandiset_id=dandiset_id, api_key=api_key)
+    tile_paths_1 = discover_tile_paths(
+        inp_cm1, dandiset_id=dandiset_id, api_key=api_key)
+
+    tile_paths_2 = discover_tile_paths(
+        inp_cm2, dandiset_id=dandiset_id, api_key=api_key)
+
+    affines = get_all_affines(tile_paths_1[file_num],
+                              tile_paths_2[file_num], scanParameters)
+
+    tile_paths = tile_paths_1 if camera_id == 1 else tile_paths_2
 
     for index, path in enumerate(tile_paths):
         logger.info(path)
@@ -535,7 +691,7 @@ def create(
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, thr*0.2)
+                        vol, mask, tissue_frac_min, thr*0.65)
 
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
@@ -544,11 +700,13 @@ def create(
                     thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.5, 0, vol)
+                    vol = da.where(vol < thr_map*0.65, 0, vol)
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
+                    vol = apply_affine(vol, affines[camera_id][i])
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
+
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
