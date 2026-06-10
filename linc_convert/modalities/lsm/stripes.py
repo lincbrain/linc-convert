@@ -251,11 +251,12 @@ def compute_corr_zy_from_pixel_mask(
     kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
 
     # Handle NaNs during convolution
-    valid = np.isfinite(corr_zy).astype(np.float32)
+    valid = np.isfinite(corr_zy)
+    valid_f = valid.astype(np.float32)
     corr_filled = np.nan_to_num(corr_zy, nan=0)
 
     smooth_num = convolve(corr_filled, kernel, mode="nearest")
-    smooth_den = convolve(valid, kernel, mode="nearest")
+    smooth_den = convolve(valid_f, kernel, mode="nearest")
 
     corr_zy_smooth = smooth_num / (smooth_den + 1e-6)
 
