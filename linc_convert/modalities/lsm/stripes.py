@@ -561,7 +561,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
     # Debug print
     for cam in affines:
         for ch in affines[cam]:
-            print(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
+            logger.info(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
 
     return affines
 
