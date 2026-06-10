@@ -463,17 +463,28 @@ def estimate_affine_zy(image_ref_np, image_mov_np):
 
 
 def sitk_to_4x4(tx):
-    A = np.array(tx.GetMatrix()).reshape(2, 2)
-    t = np.array(tx.GetTranslation())
+    # If it's composite, extract the first transform
+    if isinstance(tx, sitk.CompositeTransform):
+        if tx.GetNumberOfTransforms() == 0:
+            raise RuntimeError("Empty CompositeTransform")
+
+        tx = tx.GetNthTransform(0)
+
+    # Now it should be an AffineTransform
+    matrix = np.array(tx.GetMatrix()).reshape(2, 2)
+    translation = np.array(tx.GetTranslation())
 
     M = np.eye(4)
-    M[1, 1] = A[1, 1]
-    M[1, 2] = A[1, 0]
-    M[1, 3] = t[1]
 
-    M[2, 1] = A[0, 1]
-    M[2, 2] = A[0, 0]
-    M[2, 3] = t[0]
+    # y row
+    M[1, 2] = matrix[1, 0]
+    M[1, 1] = matrix[1, 1]
+    M[1, 3] = translation[1]
+
+    # z row
+    M[2, 2] = matrix[0, 0]
+    M[2, 1] = matrix[0, 1]
+    M[2, 3] = translation[0]
 
     return M
 
