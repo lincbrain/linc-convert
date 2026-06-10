@@ -462,29 +462,37 @@ def estimate_affine_zy(image_ref_np, image_mov_np):
     return reg.Execute(ref, mov)
 
 
-def sitk_to_4x4(tx):
-    # If it's composite, extract the first transform
+def sitk_to_zyx_affine(tx):
+
+    # Unwrap composite if needed
     if isinstance(tx, sitk.CompositeTransform):
         if tx.GetNumberOfTransforms() == 0:
             raise RuntimeError("Empty CompositeTransform")
-
         tx = tx.GetNthTransform(0)
 
-    # Now it should be an AffineTransform
-    matrix = np.array(tx.GetMatrix()).reshape(2, 2)
-    translation = np.array(tx.GetTranslation())
+    A = np.array(tx.GetMatrix()).reshape(2, 2)
+    t = np.array(tx.GetTranslation())
 
+    # Build 4x4 in (z, y, x)
     M = np.eye(4)
 
-    # y row
-    M[1, 2] = matrix[1, 0]
-    M[1, 1] = matrix[1, 1]
-    M[1, 3] = translation[1]
+    # Recall:
+    # z' = A[0,0]*z + A[0,1]*y + t[0]
+    # y' = A[1,0]*z + A[1,1]*y + t[1]
+    # x unchanged
 
-    # z row
-    M[2, 2] = matrix[0, 0]
-    M[2, 1] = matrix[0, 1]
-    M[2, 3] = translation[0]
+    # z row (index 0)
+    M[0, 0] = A[0, 0]   # z <- z
+    M[0, 1] = A[0, 1]   # z <- y
+    M[0, 3] = t[0]
+
+    # y row (index 1)
+    M[1, 0] = A[1, 0]   # y <- z
+    M[1, 1] = A[1, 1]   # y <- y
+    M[1, 3] = t[1]
+
+    # x row (index 2) stays identity
+    M[2, 2] = 1.0
 
     return M
 
