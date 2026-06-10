@@ -34,6 +34,7 @@ from linc_convert.utils.zarr_config import (
     ZarrConfig,
     autoconfig,
 )
+import gc
 
 logger = logging.getLogger(__name__)
 stripes = cyclopts.App(name="stripes", help_format="markdown")
@@ -437,10 +438,6 @@ def register_affine(fixed_img, moving_img):
     Compute affine transform that maps moving → fixed.
     """
 
-    moving_img = sitk.GetImageFromArray(
-        moving_img[::2, ::2, ::2].compute().astype(np.float32)
-    )
-
     # Initial transform (center-based)
     initial_transform = sitk.CenteredTransformInitializer(
         fixed_img,
@@ -524,22 +521,29 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
     for i in range(2):
         key = camera_channel_map[1][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)
+            sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)[
+                ::3, ::3, ::3].compute().astype(np.float32)))
         )
         channel_keys.append((1, key))  # (camera, channel_key)
+        print(f"load1 {i}")
+    # Break ALL references to reader-backed objects
+    del vol_channels_1
+    del reader_1
+    gc.collect()
 
     # Camera 2
     for i in range(2):
         key = camera_channel_map[2][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)
+            sitk.Normalize(sitk.GetImageFromArray(maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)[
+                ::3, ::3, ::3].compute().astype(np.float32)))
         )
+        print(f"load2 {i}")
         channel_keys.append((2, key))
-
-    # Convert to SimpleITK
-    channels[fixed_idx] = sitk.GetImageFromArray(
-        channels[fixed_idx][::2, ::2, ::2].compute().astype(np.float32)
-    )
+    # Break ALL references to reader-backed objects
+    del vol_channels_2
+    del reader_2
+    gc.collect()
 
     # Compute affines
     affines = {}
@@ -553,7 +557,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
             affine = np.eye(4)
         else:
             affine = upscale_affine(affine_to_matrix(
-                register_affine(channels[fixed_idx], channels[i]))
+                register_affine(channels[fixed_idx], channels[i])), 3
             )
 
         affines[cam][ch_key] = affine
