@@ -497,56 +497,15 @@ def sitk_to_4x4(tx):
     return M
 
 
-def split_along_y(arr, num_channels=2):
-    """
-    Split (Z,Y,X) or (Y,X) along Y axis into channels.
-    """
-    if arr.ndim == 3:
-        Z, Y, X = arr.shape
-        chunk = Y // num_channels
-        return {i: arr[:, i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
+def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
+    cam_info_1 = get_camera_info(scanParameters, 1)
+    cam_info_2 = get_camera_info(scanParameters, 2)
 
-    elif arr.ndim == 2:
-        Y, X = arr.shape
-        chunk = Y // num_channels
-        return {i: arr[i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
-
-    else:
-        raise ValueError("Unsupported array shape")
-
-
-def split_channels_along_z(volume, num_channels=2):
-    """
-    Split a volume (Z, Y, X) into channels along Y axis.
-
-    Returns dict compatible with your existing code.
-    """
-    Z, Y, X = volume.shape
-
-    if Z % num_channels != 0:
-        raise ValueError(f"Y dimension ({Z}) not divisible by {num_channels}")
-
-    chunk = Z // num_channels
-
-    channels = {}
-    for i in range(num_channels):
-        z0 = i * chunk
-        z1 = (i + 1) * chunk
-        channels[i] = volume[:, z0:z1, :]
-
-    return channels
-
-
-def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=True):
     reader_1 = open_tile_reader(path_cm1)
     reader_2 = open_tile_reader(path_cm2)
 
-    if split_y:
-        vol_channels_1 = split_along_y(reader_1)
-        vol_channels_2 = split_along_y(reader_2)
-    else:
-        vol_channels_1 = split_channels_along_z(reader_1)
-        vol_channels_2 = split_channels_along_z(reader_2)
+    vol_channels_1 = crop_volume_channels(reader_1, cam_info_1)
+    vol_channels_2 = crop_volume_channels(reader_2, cam_info_2)
 
     # Precompute flips
     do_flip_1 = bool(scanParameters["crop"]["Camera1"]["verticalFlip"])
@@ -602,7 +561,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
     # Debug print
     for cam in affines:
         for ch in affines[cam]:
-            logger.info(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
+            print(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
 
     return affines
 
