@@ -462,7 +462,7 @@ def estimate_affine_zy(image_ref_np, image_mov_np):
     return reg.Execute(ref, mov)
 
 
-def sitk_to_zyx_affine(tx):
+def sitk_to_affine(tx):
 
     # Unwrap composite if needed
     if isinstance(tx, sitk.CompositeTransform):
@@ -493,48 +493,6 @@ def sitk_to_zyx_affine(tx):
 
     # x row (index 2) stays identity
     M[2, 2] = 1.0
-
-    return M
-
-
-def zy_to_zyx_affine(affine_zy):
-    """
-    Convert a 2D affine (z, y) → (z, y) into a 3D 4x4 affine (x, y, z),
-    where x is unchanged.
-
-    Parameters
-    ----------
-    affine_zy : (3, 3) array OR skimage AffineTransform
-        2D affine transform acting on (z, y) coordinates.
-
-    Returns
-    -------
-    M : (4, 4) ndarray
-        3D affine in (x, y, z) space
-    """
-
-    # Extract matrix if it's a skimage transform
-    if hasattr(affine_zy, "params"):
-        A = affine_zy.params
-    else:
-        A = np.asarray(affine_zy)
-
-    if A.shape != (3, 3):
-        raise ValueError("Input must be a 3x3 affine matrix")
-
-    M = np.eye(4, dtype=float)
-
-    M[0, 0] = 1.0
-
-    # y row
-    M[1, 2] = A[1, 0]  # y <- z
-    M[1, 1] = A[1, 1]  # y <- y
-    M[1, 3] = A[1, 2]  # translation y
-
-    # z row
-    M[2, 2] = A[0, 0]  # z <- z
-    M[2, 1] = A[0, 1]  # z <- y
-    M[2, 3] = A[0, 2]  # translation z
 
     return M
 
