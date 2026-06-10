@@ -497,26 +497,22 @@ def sitk_to_4x4(tx):
     return M
 
 
-def split_channels_along_y(volume, num_channels=2):
+def split_along_y(arr, num_channels=2):
     """
-    Split a volume (Z, Y, X) into channels along Y axis.
-
-    Returns dict compatible with your existing code.
+    Split (Z,Y,X) or (Y,X) along Y axis into channels.
     """
-    Z, Y, X = volume.shape
+    if arr.ndim == 3:
+        Z, Y, X = arr.shape
+        chunk = Y // num_channels
+        return {i: arr[:, i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
 
-    if Y % num_channels != 0:
-        raise ValueError(f"Y dimension ({Y}) not divisible by {num_channels}")
+    elif arr.ndim == 2:
+        Y, X = arr.shape
+        chunk = Y // num_channels
+        return {i: arr[i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
 
-    chunk = Y // num_channels
-
-    channels = {}
-    for i in range(num_channels):
-        y0 = i * chunk
-        y1 = (i + 1) * chunk
-        channels[i] = volume[:, y0:y1, :]
-
-    return channels
+    else:
+        raise ValueError("Unsupported array shape")
 
 
 def split_channels_along_z(volume, num_channels=2):
@@ -542,18 +538,15 @@ def split_channels_along_z(volume, num_channels=2):
 
 
 def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=True):
-    cam_info_1 = get_camera_info(scanParameters, 1)
-    cam_info_2 = get_camera_info(scanParameters, 2)
-
     reader_1 = open_tile_reader(path_cm1)
     reader_2 = open_tile_reader(path_cm2)
 
     if split_y:
-        vol_channels_1 = split_channels_along_y(reader_1, cam_info_1)
-        vol_channels_2 = split_channels_along_y(reader_2, cam_info_2)
+        vol_channels_1 = split_along_y(reader_1)
+        vol_channels_2 = split_along_y(reader_2)
     else:
-        vol_channels_1 = split_channels_along_z(reader_1, cam_info_1)
-        vol_channels_2 = split_channels_along_z(reader_2, cam_info_2)
+        vol_channels_1 = split_channels_along_z(reader_1)
+        vol_channels_2 = split_channels_along_z(reader_2)
 
     # Precompute flips
     do_flip_1 = bool(scanParameters["crop"]["Camera1"]["verticalFlip"])
@@ -609,7 +602,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
     # Debug print
     for cam in affines:
         for ch in affines[cam]:
-            print(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
+            logger.info(f"Camera {cam}, Channel {ch}:\n{affines[cam][ch]}")
 
     return affines
 
