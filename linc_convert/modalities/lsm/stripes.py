@@ -259,6 +259,8 @@ def compute_corr_zy_from_pixel_mask(
 
     corr_zy_smooth = smooth_num / (smooth_den + 1e-6)
 
+    corr_zy_smooth[~valid] = 99999999.0
+
     # -------------------------
     # Normalize
     # -------------------------
@@ -332,15 +334,18 @@ def crop_mip_channels(mip_2d, cam_info, x_crop=None):
     return out
 
 
-def crop_volume_channels(vol_zyx, cam_info):
+def crop_volume_channels(vol_zyx, cam_info, vols=2):
     """
     vol_zyx shape: (Z, Y, X), dask or numpy
     Returns dict[channel] -> cropped volume (Z, Yc, X)
     """
     out = {}
+    i = 0
     for meta in cam_info:
-        y1, y2 = meta["y_start"], meta["y_end"]
-        out[meta["channel"]] = vol_zyx[:, y1:y2, :]
+        if i < vols:
+            y1, y2 = meta["y_start"], meta["y_end"]
+            out[meta["channel"]] = vol_zyx[:, y1:y2, :]
+        i += 1
     return out
 
 
@@ -497,15 +502,56 @@ def sitk_to_4x4(tx):
     return M
 
 
-def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
-    cam_info_1 = get_camera_info(scanParameters, 1)
-    cam_info_2 = get_camera_info(scanParameters, 2)
+def split_along_y(arr, num_channels=2):
+    """
+    Split (Z,Y,X) or (Y,X) along Y axis into channels.
+    """
+    if arr.ndim == 3:
+        Z, Y, X = arr.shape
+        chunk = Y // num_channels
+        return {i: arr[:, i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
 
+    elif arr.ndim == 2:
+        Y, X = arr.shape
+        chunk = Y // num_channels
+        return {i: arr[i * chunk:(i + 1) * chunk, :] for i in range(num_channels)}
+
+    else:
+        raise ValueError("Unsupported array shape")
+
+
+def split_channels_along_z(volume, num_channels=2):
+    """
+    Split a volume (Z, Y, X) into channels along Y axis.
+
+    Returns dict compatible with your existing code.
+    """
+    Z, Y, X = volume.shape
+
+    if Z % num_channels != 0:
+        raise ValueError(f"Y dimension ({Z}) not divisible by {num_channels}")
+
+    chunk = Z // num_channels
+
+    channels = {}
+    for i in range(num_channels):
+        z0 = i * chunk
+        z1 = (i + 1) * chunk
+        channels[i] = volume[:, z0:z1, :]
+
+    return channels
+
+
+def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=True):
     reader_1 = open_tile_reader(path_cm1)
     reader_2 = open_tile_reader(path_cm2)
 
-    vol_channels_1 = crop_volume_channels(reader_1, cam_info_1)
-    vol_channels_2 = crop_volume_channels(reader_2, cam_info_2)
+    if split_y:
+        vol_channels_1 = split_along_y(reader_1)
+        vol_channels_2 = split_along_y(reader_2)
+    else:
+        vol_channels_1 = split_channels_along_z(reader_1)
+        vol_channels_2 = split_channels_along_z(reader_2)
 
     # Precompute flips
     do_flip_1 = bool(scanParameters["crop"]["Camera1"]["verticalFlip"])
@@ -518,7 +564,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
     for i in range(2):
         key = camera_channel_map[1][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_1[key], do_flip_1)[
+            maybe_flip_z_lazy(vol_channels_1[i], do_flip_1)[
                 :, :, 14076].compute()
         )
         channel_keys.append((1, key))  # (camera, channel_key)
@@ -532,7 +578,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2):
     for i in range(2):
         key = camera_channel_map[2][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_2[key], do_flip_2)[
+            maybe_flip_z_lazy(vol_channels_2[i], do_flip_2)[
                 :, :, 14076].compute()
         )
         logger.info(f"load2 {i}")
@@ -679,14 +725,11 @@ def create(
 
             raw_mip = tiff.imread(yx_path).astype(np.float32)
             raw_mip_channels = {}
-            cam_info = get_camera_info(scanParameters, camera_id)
-            raw_mip_channels.update(
-                crop_mip_channels(raw_mip, cam_info)
-            )
-            cam_info = get_camera_info(scanParameters, camera_id)
-            vol_channels = crop_volume_channels(reader, cam_info)
-            for i in camera_channel_map[camera_id]:
-                output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
+            raw_mip_channels = split_along_y(raw_mip)
+            cam_info = get_camera_info(scanParameters, 2)
+            vol_channels = split_along_y(reader)
+            for i, channel in enumerate(camera_channel_map[camera_id]):
+                output_name = f"{general_config.out}/{channel}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
                     mask, thr = compute_tissue_mask_otsu(
                         raw_mip_channels[i],
@@ -720,7 +763,7 @@ def create(
                     vol = da.where(vol < thr_map*0.65, 0, vol)
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
-                    vol = apply_affine(vol, affines[camera_id][i])
+                    vol = apply_affine(vol, affines[camera_id][channel])
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
@@ -728,7 +771,7 @@ def create(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
                                            zarr_config=zarr_config, dtype=np.uint16)
-
+                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
                     vol = da.rechunk(
                         vol, out._array.shards or chunk)
                     with ProgressBar():
