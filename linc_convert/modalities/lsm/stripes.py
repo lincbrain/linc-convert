@@ -768,11 +768,12 @@ def create(
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
+                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
+
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
                                            zarr_config=zarr_config, dtype=np.uint16)
-                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
                     vol = da.rechunk(
                         vol, out._array.shards or chunk)
                     with ProgressBar():
