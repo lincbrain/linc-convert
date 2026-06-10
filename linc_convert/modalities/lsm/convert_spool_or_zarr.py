@@ -84,8 +84,8 @@ def prompt_dandi_api_key() -> str:
 def open_tile_reader(
     path: str,
     *,
-    dandiset_id: Optional[str],
-    api_key: Optional[str],
+    dandiset_id: Optional[str] = None,
+    api_key: Optional[str] = None,
     voxel_sizes: Tuple[float] = (1.0, 1.0, 1.0),
     skew_angle: float = 0.0,
     chunks: Optional[Tuple[int, ...]] = None,
