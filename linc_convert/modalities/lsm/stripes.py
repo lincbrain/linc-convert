@@ -462,7 +462,7 @@ def estimate_affine_zy(image_ref_np, image_mov_np):
     return reg.Execute(ref, mov)
 
 
-def sitk_to_affine(tx):
+def sitk_to_4x4(tx):
 
     # Unwrap composite if needed
     if isinstance(tx, sitk.CompositeTransform):
