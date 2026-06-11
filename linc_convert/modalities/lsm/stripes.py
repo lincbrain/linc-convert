@@ -721,8 +721,8 @@ def create(
     tile_paths_2 = discover_tile_paths(
         inp_cm2, dandiset_id=dandiset_id, api_key=api_key)
 
-    affines = get_all_affines(tile_paths_1[file_num],
-                              tile_paths_2[file_num], scanParameters)
+    # affines = get_all_affines(tile_paths_1[file_num],
+    #                          tile_paths_2[file_num], scanParameters)
 
     tile_paths = tile_paths_1 if camera_id == 1 else tile_paths_2
 
@@ -752,11 +752,11 @@ def create(
 
             raw_mip = tiff.imread(yx_path).astype(np.float32)
             raw_mip_channels = {}
-            raw_mip_channels = split_along_y(raw_mip)
-            cam_info = get_camera_info(scanParameters, 2)
-            vol_channels = split_along_y(reader)
-            for i, channel in enumerate(camera_channel_map[camera_id]):
-                output_name = f"{general_config.out}/{channel}/{name}.ome.zarr"
+            cam_info = get_camera_info(scanParameters, camera_id)
+            raw_mip_channels = crop_mip_channels(raw_mip, cam_info)
+            vol_channels = crop_volume_channels(reader, cam_info)
+            for i in camera_channel_map[camera_id]:
+                output_name = f"{general_config.out}/{i}/{name}.ome.zarr"
                 if not os.path.exists(output_name):
                     mask, thr = compute_tissue_mask_otsu(
                         raw_mip_channels[i],
@@ -792,16 +792,16 @@ def create(
                     logger.info(f"vol shape 2: {vol.shape}")
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
-                    logger.info(camera_id)
-                    logger.info(channel)
-                    logger.info(affines)
-                    logger.info(affines[camera_id][channel])
-                    logger.info(vol.shape)
-                    vol = apply_affine(vol, affines[camera_id][channel])
+                    # logger.info(camera_id)
+                    # logger.info(i)
+                    # logger.info(affines)
+                    # logger.info(affines[camera_id][i])
+                    # logger.info(vol.shape)
+                    # vol = apply_affine(vol, affines[camera_id][i])
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
-                    vol = crop_volume_channels(vol, cam_info, "488")["488"]
+                    # vol = crop_volume_channels(vol, cam_info, "488")["488"]
 
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
