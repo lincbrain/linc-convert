@@ -779,7 +779,7 @@ def create(
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, thr*1.0)
+                        vol, mask, tissue_frac_min, thr)
                     logger.info(f"vol shape 1: {vol.shape}")
 
                     zy_max = np.max(corr_zy)
@@ -789,7 +789,7 @@ def create(
                     thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*1.0, 0, vol)
+                    vol = da.where(vol < thr, 0, vol)
                     logger.info(f"vol shape 2: {vol.shape}")
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
