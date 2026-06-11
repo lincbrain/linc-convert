@@ -785,7 +785,7 @@ def create(
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, thr*0.1)
+                        vol, mask, tissue_frac_min, thr*0.0)
 
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
@@ -794,7 +794,7 @@ def create(
                     thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.1, 0, vol)
+                    vol = da.where(vol < thr_map*0.0, 0, vol)
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = apply_affine(vol, affines[camera_id][channel])
