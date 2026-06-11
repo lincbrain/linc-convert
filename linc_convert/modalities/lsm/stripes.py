@@ -122,30 +122,32 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
                              clip_hi_pct: float = 99.9,
                              fallback_pct: float = 70.0) -> np.ndarray:
     img = img_u16.astype(np.float32, copy=False)
+
+    thr = img[::ds, -100:].max()
     small = img[::ds, ::ds]
 
     hi = np.percentile(small, clip_hi_pct)
     small_c = np.minimum(small, hi)
 
-    try:
-        thr = threshold_otsu(small_c)
-    except Exception:
-        thr = np.percentile(small_c, fallback_pct)
+    # try:
+    #    thr = threshold_otsu(small_c)
+    # except Exception:
+    #    thr = np.percentile(small_c, fallback_pct)
 
     # NEW: check threshold vs max
     max_val = small_c.max()
-    if max_val > 0 and thr >= (max_val / 1.2):
+    if max_val > 0 and thr >= (max_val / 1.1):
         return np.zeros_like(img, dtype=bool), max_val*10
 
     tissue_small = small_c > thr
-    if tissue_small.mean() < 0.002:
-        thr = np.percentile(small_c, fallback_pct)
+    # if tissue_small.mean() < 0.002:
+    #    thr = np.percentile(small_c, fallback_pct)
 
-        # check again after fallback
-        if max_val > 0 and thr >= (max_val / 1.2):
-            return np.zeros_like(img, dtype=bool), max_val*10
+    # check again after fallback
+    #    if max_val > 0 and thr >= (max_val / 1.2):
+    #        return np.zeros_like(img, dtype=bool), max_val*10
 
-        tissue_small = small_c > thr
+    #    tissue_small = small_c > thr
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
     return tissue[:img.shape[0], :img.shape[1]], thr
@@ -785,7 +787,7 @@ def create(
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i][:, :, :]
                     corr_zy = compute_corr_zy_from_pixel_mask(
-                        vol, mask, tissue_frac_min, thr*0.0)
+                        vol, mask, tissue_frac_min, thr*1.0)
 
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
@@ -794,7 +796,7 @@ def create(
                     thr_map = thr_map[:, :, None]   # (Z, Y, 1)
 
                     # apply threshold lazily
-                    vol = da.where(vol < thr_map*0.0, 0, vol)
+                    vol = da.where(vol < thr_map*1.0, 0, vol)
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = apply_affine(vol, affines[camera_id][channel])
