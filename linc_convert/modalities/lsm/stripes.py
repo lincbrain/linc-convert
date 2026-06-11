@@ -338,7 +338,7 @@ def crop_mip_channels(mip_2d, cam_info, x_crop=None):
     return out
 
 
-def crop_volume_channels(vol_zyx, cam_info, vols=2):
+def crop_volume_channels(vol_zyx, cam_info, vols=None):
     """
     vol_zyx shape: (Z, Y, X), dask or numpy
     Returns dict[channel] -> cropped volume (Z, Yc, X)
@@ -346,7 +346,7 @@ def crop_volume_channels(vol_zyx, cam_info, vols=2):
     out = {}
     i = 0
     for meta in cam_info:
-        if i < vols:
+        if vols is None or vols == meta["channel"]:
             y1, y2 = meta["y_start"], meta["y_end"]
             out[meta["channel"]] = vol_zyx[:, y1:y2, :]
         i += 1
@@ -404,8 +404,7 @@ def apply_affine(
         matrix=affine_inv,
         order=3,
         mode="constant",
-        cval=0.0,
-        output_chunks=scape_data_yzx.chunks,
+        cval=0.0
     )
     return applied
 
@@ -802,7 +801,7 @@ def create(
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
-                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
+                    vol = crop_volume_channels(vol, cam_info, "488")["488"]
 
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
