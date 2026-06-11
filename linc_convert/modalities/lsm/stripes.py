@@ -123,7 +123,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
                              fallback_pct: float = 70.0) -> np.ndarray:
     img = img_u16.astype(np.float32, copy=False)
 
-    thr = img[::ds, -100:].max()
+    thr = np.percentile(img[::ds, -100:], 99)
     small = img[::ds, ::ds]
 
     hi = np.percentile(small, clip_hi_pct)
@@ -764,6 +764,7 @@ def create(
                         clip_hi_pct=clip_hi_pct,
                         fallback_pct=fallback_pct,
                     )
+                    logger.info(thr)
 
                     row_keep = row_keep_from_mask(
                         mask,
