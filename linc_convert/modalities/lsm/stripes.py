@@ -1,5 +1,6 @@
 """Generate stripe .tff files from ome zarr and MIP projection."""
 
+from scipy.linalg import expm, logm
 import logging
 import os
 import time
@@ -444,6 +445,38 @@ def upscale_affine(affine_low, factor=2):
     return S @ affine_low @ S_inv
 
 
+def average_affines_log_euclidean(mats):
+    """
+    Compute mean affine using Log-Euclidean averaging.
+    mats: list of (4,4) matrices
+    """
+    logs = [logm(M) for M in mats]
+    mean_log = sum(logs) / len(logs)
+    return expm(mean_log)
+
+
+def estimate_affine_multislice(image_ref_vol, image_mov_vol, z_indices):
+    """
+    Estimate affine from multiple Z slices and average them.
+
+    image_ref_vol, image_mov_vol: (Z,Y,X)
+    z_indices: list of slice indices
+    """
+
+    affines = []
+
+    for z in z_indices:
+        ref_slice = image_ref_vol[:, :, z].compute()
+        mov_slice = image_mov_vol[:, :, z].compute()
+
+        tx = estimate_affine_zy(ref_slice, mov_slice)
+        M = sitk_to_4x4(tx)
+        affines.append(M)
+
+    # Robust combine
+    return average_affines_log_euclidean(affines)
+
+
 def estimate_affine_zy(image_ref_np, image_mov_np):
     ref = sitk.GetImageFromArray(image_ref_np.astype(np.float32))
     mov = sitk.GetImageFromArray(image_mov_np.astype(np.float32))
@@ -600,8 +633,8 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
         if i == fixed_idx:
             affine = np.eye(4)
         else:
-            affine = sitk_to_4x4(estimate_affine_zy(
-                channels[fixed_idx], channels[i]))
+            affine = estimate_affine_multislice(
+                channels[fixed_idx], channels[i], [19884, 14076, 19786, 30327])
 
         affines[cam][ch_key] = affine
 
