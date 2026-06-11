@@ -532,6 +532,7 @@ def sitk_to_4x4(tx):
 
     # x row (index 2) stays identity
     M[2, 2] = 1.0
+    M[3, :3] = 0.0
 
     return M
 
@@ -633,6 +634,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
         else:
             affine = estimate_affine_multislice(
                 channels[fixed_idx], channels[i], [19884, 14076, 19786, 30327])
+            affine[3, :3] = 0.0
 
         affines[cam][ch_key] = affine
 
