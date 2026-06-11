@@ -799,7 +799,7 @@ def create(
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
-                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
+                    # vol = crop_volume_channels(vol, cam_info, 1)["488"]
 
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
