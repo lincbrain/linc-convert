@@ -605,10 +605,6 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
         )
         channel_keys.append((1, key))  # (camera, channel_key)
         logger.info(f"load1 {i}")
-    # Break ALL references to reader-backed objects
-    del vol_channels_1
-    del reader_1
-    gc.collect()
 
     # Camera 2
     for i in range(2):
@@ -618,10 +614,6 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
         )
         logger.info(f"load2 {i}")
         channel_keys.append((2, key))
-    # Break ALL references to reader-backed objects
-    del vol_channels_2
-    del reader_2
-    gc.collect()
 
     # Compute affines
     affines = {}
@@ -785,9 +777,10 @@ def create(
                     chunk = zarr_config.chunk
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
-                    vol = vol_channels[i][:, :, :]
+                    vol = vol_channels[i]
                     corr_zy = compute_corr_zy_from_pixel_mask(
                         vol, mask, tissue_frac_min, thr*1.0)
+                    logger.info(f"vol shape 1: {vol.shape}")
 
                     zy_max = np.max(corr_zy)
                     thr_map = corr_zy * thr / zy_max
@@ -797,13 +790,14 @@ def create(
 
                     # apply threshold lazily
                     vol = da.where(vol < thr_map*1.0, 0, vol)
+                    logger.info(f"vol shape 2: {vol.shape}")
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
                     vol = apply_affine(vol, affines[camera_id][channel])
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
 
-                    # vol = crop_volume_channels(vol, cam_info, 1)["488"]
+                    vol = crop_volume_channels(vol, cam_info, 1)["488"]
 
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
