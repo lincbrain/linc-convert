@@ -793,6 +793,11 @@ def create(
                     logger.info(f"vol shape 2: {vol.shape}")
 
                     vol = apply_corr_zy_lazy(vol, corr_zy)
+                    logger.info(camera_id)
+                    logger.info(channel)
+                    logger.info(affines)
+                    logger.info(affines[camera_id][channel])
+                    logger.info(vol.shape)
                     vol = apply_affine(vol, affines[camera_id][channel])
                     vol = skew_correct_volume_lazy(
                         vol, scanParameters, camera_id)
