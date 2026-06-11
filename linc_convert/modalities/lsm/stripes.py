@@ -598,8 +598,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
     for i in range(2):
         key = camera_channel_map[1][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_1[i], do_flip_1)[
-                :, :, 14076].compute()
+            maybe_flip_z_lazy(vol_channels_1[i], do_flip_1)
         )
         channel_keys.append((1, key))  # (camera, channel_key)
         logger.info(f"load1 {i}")
@@ -612,8 +611,7 @@ def get_all_affines(path_cm1, path_cm2, scanParameters, fixed_idx=2, split_y=Tru
     for i in range(2):
         key = camera_channel_map[2][i]
         channels.append(
-            maybe_flip_z_lazy(vol_channels_2[i], do_flip_2)[
-                :, :, 14076].compute()
+            maybe_flip_z_lazy(vol_channels_2[i], do_flip_2)
         )
         logger.info(f"load2 {i}")
         channel_keys.append((2, key))
