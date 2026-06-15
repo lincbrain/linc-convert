@@ -6,7 +6,7 @@ https://lincbrain.org/dandiset/000056/draft/files?location=derivatives%2Fcompres
 """
 
 import logging
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 # externals
 import cyclopts
@@ -33,31 +33,16 @@ def convert(
     *,
     overlap: Union[int, str] = 192,
     delta_x: int = 0,
-    voxel_size: list[float] = (1, 1, 1),
+    voxel_size: List[float] = [1, 1, 1],
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
     nii_config: NiftiConfig = None,
-    use_runs: bool = False,
     dandiset_id: Optional[str] = None,
     x_chunk_start: Optional[int] = None,
     x_chunk_end: Optional[int] = None,
-    x_end: Optional[int] = None,
-    z_start: Optional[int] = None,
-    z_end: Optional[int] = None,
-    y_start: Optional[int] = None,
-    y_end: Optional[int] = None,
-    allow_padding: bool = False,
-    number_workers: Optional[int] = None,
-    threads_per_worker: int = 1,
-    skew_angle: float = 0,
     chunks_processed: int = 0,
-    blend: bool = False,
-    stripes: Optional[str] = None,
-    white_matter_intensity: float = 1000.0,
-    background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
-    alternate_pattern: bool = False,
-    flip_z: bool = False
+    filename_pattern: str = "*_run{y}*.ome.zarr"
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -129,25 +114,8 @@ def convert(
                           general_config=general_config,
                           zarr_config=zarr_config,
                           nii_config=nii_config,
-                          use_runs=use_runs,
                           dandiset_id=dandiset_id,
                           x_chunk_start=x_chunk_start,
                           x_chunk_end=x_chunk_end,
-                          x_end=x_end,
-                          z_start=z_start,
-                          z_end=z_end,
-                          y_start=y_start,
-                          y_end=y_end,
-                          allow_padding=allow_padding,
-                          number_workers=number_workers,
-                          threads_per_worker=threads_per_worker,
-                          skew_angle=skew_angle,
                           chunks_processed=chunks_processed,
-                          blend=blend,
-                          stripes=stripes,
-                          white_matter_intensity=white_matter_intensity,
-                          background_threshold=background_threshold,
-                          checkpoint_file=checkpoint_file,
-                          alternate_pattern=alternate_pattern,
-                          flip_z=flip_z
                           )

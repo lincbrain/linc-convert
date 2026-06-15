@@ -123,7 +123,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
                              fallback_pct: float = 70.0) -> np.ndarray:
     img = img_u16.astype(np.float32, copy=False)
 
-    thr = np.percentile(img[::ds, -100:], 99)
+    thr = np.percentile(img[::ds, -100:], 98) * 1.1
     small = img[::ds, ::ds]
 
     hi = np.percentile(small, clip_hi_pct)
@@ -151,6 +151,64 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
     return tissue[:img.shape[0], :img.shape[1]], thr
+
+
+def remove_periodic_x_noise(darr, period=100, ref_width=400):
+    """
+    Remove repeating noise pattern along x axis from a Dask array.
+
+    Parameters
+    ----------
+    darr : dask.array.Array
+        Input array with x as the last axis.
+    period : int
+        Period of repeating noise (default: 100)
+    ref_width : int
+        Number of pixels from the end of x used as baseline (default: 400)
+
+    Returns
+    -------
+    dask.array.Array
+        Noise-corrected array (still lazy)
+    """
+    x_axis = -1
+    nx = darr.shape[x_axis]
+
+    if nx is None:
+        raise ValueError("Array must have known size along x axis")
+
+    # --- Step 1: baseline from last ref_width pixels ---
+    ref_slice = [slice(None)] * darr.ndim
+    ref_slice[x_axis] = slice(-ref_width, None)
+    baseline = da.median(darr[tuple(ref_slice)], axis=x_axis, keepdims=True)
+
+    # --- Step 2: compute residual relative to baseline ---
+    residual = darr - baseline
+
+    # --- Step 3: learn repeating pattern ---
+    pattern_list = []
+    for i in range(period):
+        slicer = [slice(None)] * darr.ndim
+        slicer[x_axis] = slice(i, None, period)
+        pattern_i = da.median(residual[tuple(slicer)], axis=x_axis)
+        pattern_list.append(pattern_i)
+
+    # shape: (..., period)
+    pattern = da.stack(pattern_list, axis=x_axis)
+
+    # --- Step 4: broadcast pattern across x ---
+    x_indices = da.arange(nx, chunks=darr.chunks[x_axis])
+    pattern_indices = x_indices % period
+
+    expanded_pattern = da.take(pattern, pattern_indices, axis=x_axis)
+
+    # --- Step 5: subtract pattern ---
+    corrected = residual - expanded_pattern
+
+    # re-add baseline to preserve original intensity scale
+    corrected = corrected + baseline
+
+    return corrected
 
 
 def row_keep_from_mask(mask_pix: np.ndarray,
@@ -778,6 +836,7 @@ def create(
                     if len(zarr_config.chunk) == 1:
                         chunk = tuple([zarr_config.chunk[0]]*3)
                     vol = vol_channels[i]
+                    vol = remove_periodic_x_noise(vol)
                     corr_zy = compute_corr_zy_from_pixel_mask(
                         vol, mask, tissue_frac_min, thr)
                     logger.info(f"vol shape 1: {vol.shape}")

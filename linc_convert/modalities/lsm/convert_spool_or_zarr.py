@@ -39,20 +39,47 @@ from linc_convert.utils.zarr_config import (
 logger = logging.getLogger(__name__)
 
 
-_TILE_PATTERN = re.compile(
-    r"^(?P<prefix>\w*)"
-    r"_run(?P<run>[0-9]+)"
-    r"_y(?P<y>[0-9]+)"
-    r"(?:_z(?P<z>[0-9]+))?"
-    r"(?P<suffix>\w*)$"
-)
+def format_to_regex(pattern: str) -> re.Pattern:
+    """
+    Convert a glob-like format string with {fields} into a regex.
 
-_TILE_PATTERN2 = re.compile(
-    r"^(?P<prefix>[\w-]*)"
-    r"_chunk-(?P<y>[0-9]+)"
-    r"(?:_z(?P<z>[0-9]+))?"
-    r"(?P<suffix>[\w-]*)$"
-)
+    Example:
+        "*y_val{y}*.ome.zarr"
+    →   r".*y_val(?P<y>\\d+).*\\.ome\\.zarr"
+    """
+
+    # Escape regex special chars first
+    regex = ""
+    i = 0
+
+    while i < len(pattern):
+        c = pattern[i]
+
+        # ✅ Handle wildcard *
+        if c == "*":
+            regex += ".*"
+            i += 1
+
+        # ✅ Handle placeholders {y}, {z}, etc.
+        elif c == "{":
+            j = pattern.index("}", i)
+            key = pattern[i+1:j]
+
+            # assume numeric fields by default
+            regex += fr"(?P<{key}>\d+)"
+
+            i = j + 1
+
+        # ✅ Escape regex special characters
+        elif c in ".[](){}+?^$\\|":
+            regex += "\\" + c
+            i += 1
+
+        else:
+            regex += c
+            i += 1
+
+    return re.compile("^" + regex + "$")
 
 
 TileInfo = namedtuple(
@@ -84,50 +111,36 @@ def prompt_dandi_api_key() -> str:
 def open_tile_reader(
     path: str,
     *,
-    dandiset_id: Optional[str] = None,
-    api_key: Optional[str] = None,
-    voxel_sizes: Tuple[float] = (1.0, 1.0, 1.0),
-    skew_angle: float = 0.0,
+    dandiset_id: Optional[str],
+    api_key: Optional[str],
     chunks: Optional[Tuple[int, ...]] = None,
-    flip_z: bool = False,
-) -> "Deskewed_Tile":
+) -> da.Array:
     """Read a tile from the path and apply skew if needed."""
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return Deskewed_Tile.wrap(ZarrPythonGroup.open(path)["0"],
-                                      voxel_sizes,
-                                      skew_angle,
-                                      chunks,
-                                      flip_z)
-        return Deskewed_Tile.wrap(ZarrPythonGroup.open_dandi(
+            return da.asarray(ZarrPythonGroup.open(path)["0"], chunks=chunks)
+        return da.asarray(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], voxel_sizes, skew_angle, chunks, flip_z)
+        )["0"], chunks=chunks)
 
-    return Deskewed_Tile.wrap(
+    return da.asarray(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
-        voxel_sizes,
-        skew_angle,
-        chunks)
+        chunks=chunks)
 
 
 def discover_tile_paths(inp: str,
                         *,
-                        dandiset_id: Optional[str] = None,
-                        api_key: Optional[str] = None,
-                        filename_pattern: Optional[str] = None,) -> List[str]:
+                        dandiset_id: Optional[str],
+                        api_key: Optional[str],
+                        filename_pattern: Optional[str] = "*.ome.zarr",) -> List[str]:
     """Get all tiles from the folder specified."""
     if dandiset_id is None:
-        paths = sorted(glob(os.path.join(inp, "*_y*_HR/")))
+        paths = sorted(glob(os.path.join(inp, filename_pattern)))
         if not paths:
-            paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
-            if not paths:
-                paths = sorted(glob(os.path.join(
-                    inp, "sub-MF283_sample-slice39_chunk-*_acq-camera-02_proc-mip.tiff")))
-                if not paths:
-                    raise ValueError(
-                        "No tile folders found in input directory")
+            raise ValueError(
+                "No tile folders found in input directory")
         return paths
 
     with DandiAPIClient(
@@ -150,213 +163,21 @@ def discover_tile_paths(inp: str,
     return paths
 
 
-class Deskewed_Tile:
-    """
-    Read-only, on-the-fly deskewed view of SCAPE data.
-
-    raw_data: (Z, Y, X) or (Z, Y, X, T)
-    voxel_sizes: (z_size, y_size, x_size)
-    Deskew: X <- Z shear (matches MATLAB code exactly)
-    """
-
-    def __init__(
-        self,
-        raw_data: da.Array,
-        voxel_sizes: Tuple[float],
-        skew_angle: float,
-        bg_value: float = 0.0,
-        flip_z: bool = False
-    ) -> None:
-        self.raw = raw_data
-        self.z_size, self.y_size, self.x_size = voxel_sizes
-        self.delta = skew_angle
-        self.bg_value = bg_value
-        self.flip_z = flip_z
-
-        self.shps = (
-            self.z_size
-            * np.tan(np.deg2rad(self.delta))
-            / self.x_size
-        )
-
-        self.has_time = (raw_data.ndim == 4)
-
-        Z, Y, X = raw_data.shape[:3]
-        self.extra_x = int(np.ceil(Z * self.shps))
-
-        # Deskewed output shape (Z, Y, X_out[, T])
-        if self.has_time:
-            self._shape = (Z, Y, X + self.extra_x, raw_data.shape[3])
-        else:
-            self._shape = (Z, Y, X + self.extra_x)
-
-    @property
-    def shape(self) -> Tuple[int]:
-        """Return shape after descewing is performed."""
-        return self._shape
-
-    @property
-    def dtype(self) -> type:
-        """Returns raw data data type."""
-        return self.raw.dtype
-
-    @property
-    def ndim(self) -> int:
-        """Returns raw data number of demensions."""
-        return self.raw.ndim
-
-    @property
-    def chunks(self) -> Tuple[int]:
-        """Returns raw data chunks."""
-        return self.raw.chunks
-
-    def __getitem__(self,
-                    key: Union[Tuple[Union[int, slice]], int, slice]
-                    ) -> np.ndarray:
-        """Get a slice of the deskewed data."""
-        if self.delta == 0.0:
-            return self.raw[key]
-
-        if not isinstance(key, tuple):
-            key = (key,)
-        while len(key) < len(self.shape):
-            key += (slice(None),)
-
-        z_key, y_key, x_key = key[:3]
-
-        z_idx = self._key_to_idx(z_key, self.shape[0])
-        y_idx = self._key_to_idx(y_key, self.shape[1])
-        x_idx = self._key_to_idx(x_key, self.shape[2])
-
-        Zg, Yg, Xg = np.meshgrid(
-            z_idx, y_idx, x_idx, indexing="ij"
-        )
-
-        if self.flip_z:
-            Z_eff = self.raw.shape[0] - 1 - Zg
-            # TODO: figure out why this works. This was generated from guess and check and not what my intuition would tell me is correct
-            X_src = Xg + Z_eff * self.shps
-        else:
-            Z_eff = Zg
-            X_src = Xg - Z_eff * self.shps
-
-        Y_src = Yg
-        Z_src = Z_eff
-
-        # Interpolation margin (cubic)
-        margin = 3
-
-        # Compute required bounds in raw coordinates
-        z0 = int(np.floor(Z_src.min())) - margin
-        z1 = int(np.ceil(Z_src.max())) + margin + 1
-
-        y0 = int(np.floor(Y_src.min())) - margin
-        y1 = int(np.ceil(Y_src.max())) + margin + 1
-
-        x0 = int(np.floor(X_src.min())) - margin
-        x1 = int(np.ceil(X_src.max())) + margin + 1
-
-        # Clamp to raw array bounds
-        z0 = max(z0, 0)
-        y0 = max(y0, 0)
-        x0 = max(x0, 0)
-
-        z1 = min(z1, self.raw.shape[0])
-        y1 = min(y1, self.raw.shape[1])
-        x1 = min(x1, self.raw.shape[2])
-
-        # Slice raw data
-        raw_slice = self._as_numpy(self.raw[z0:z1, y0:y1, x0:x1])
-
-        # Shift coordinates into sliced array space
-        Zs = Z_src - z0
-        Ys = Y_src - y0
-        Xs = X_src - x0
-
-        coords = np.vstack([
-            Zs.ravel(),
-            Ys.ravel(),
-            Xs.ravel(),
-        ])
-
-        # Interpolate
-        sampled = map_coordinates(
-            raw_slice,
-            coords,
-            order=3,
-            mode="constant",
-            cval=self.bg_value,
-        )
-
-        return sampled.reshape(Zg.shape)
-
-    @staticmethod
-    def _key_to_idx(key: Union[Tuple[Union[int, slice]], int, slice],
-                    size: int
-                    ) -> np.ndarray:
-        if isinstance(key, slice):
-            return np.arange(*key.indices(size))
-        elif np.isscalar(key):
-            return np.array([key])
-        else:
-            return np.asarray(key)
-
-    @staticmethod
-    def _as_numpy(arr: Union[da.Array, np.ndarray]) -> np.ndarray:
-        if isinstance(arr, da.Array):
-            return arr.compute()
-        return np.asarray(arr)
-
-    @classmethod
-    def wrap(cls,
-             arr: Union[da.Array, np.ndarray, ZarrArray],
-             voxel_sizes: Tuple[float, ...],
-             skew_angle: float,
-             chunks: Optional[Tuple[int, ...]] = None,
-             flip_z: bool = False
-             ) -> Union[da.Array, np.ndarray, ZarrArray, "Deskewed_Tile"]:
-        """Apply deskew wrapper if necessary otherwise convert to dask array."""
-        if skew_angle == 0:
-            if not isinstance(arr, da.Array):
-                arr = da.array(arr)
-            if chunks is not None:
-                arr = da.rechunk(arr, chunks=chunks)
-            return arr
-
-        return da.from_array(cls(arr, voxel_sizes, skew_angle, flip_z=flip_z),
-                             chunks=(arr.chunks if chunks is None else chunks))
-
-
 def convert_spool_or_zarr(
     inp: str,
     *,
     overlap: Union[int, str] = 192,
     delta_x: int = 0,
-    voxel_size: list[float] = (1, 1, 1),
+    voxel_size: List[float] = [1, 1, 1],
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
     nii_config: NiftiConfig = None,
-    use_runs: bool = False,
     dandiset_id: Optional[str] = None,
     x_chunk_start: Optional[int] = None,
     x_chunk_end: Optional[int] = None,
-    x_end: Optional[int] = None,
-    z_start: Optional[int] = None,
-    z_end: Optional[int] = None,
-    y_start: Optional[int] = None,
-    y_end: Optional[int] = None,
-    allow_padding: bool = False,
-    number_workers: Optional[int] = None,
-    threads_per_worker: int = 1,
-    skew_angle: float = 0.0,
     chunks_processed: int = 0,
-    blend: bool = False,
-    stripes: Optional[str] = None,
-    white_matter_intensity: float = 1000.0,
-    background_threshold: Optional[Union[float, Literal["auto"]]] = None,
     checkpoint_file: Optional[str] = None,
-    alternate_pattern: bool = False,
-    flip_z: bool = False
+    filename_pattern: str = "*_run{y}*.ome.zarr"
 ) -> None:
     """
     Convert a collection of spool files or ome_zarr files into a large Zarr.
@@ -421,30 +242,27 @@ def convert_spool_or_zarr(
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
     tile_paths = discover_tile_paths(
-        inp, dandiset_id=dandiset_id, api_key=api_key)
+        inp, dandiset_id=dandiset_id, api_key=api_key, filename_pattern=re.sub(r"\{.*?\}", "*", filename_pattern))
 
     tiles = {}
     tiles_list = []
+    regex = format_to_regex(filename_pattern)
 
     for path in tile_paths:
         name = os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
-        match = (
-            _TILE_PATTERN2 if alternate_pattern else _TILE_PATTERN).fullmatch(name)
+        match = regex.fullmatch(name)
         if not match:
             warnings.warn(f"Skipping unrecognized tile name: {name}")
             continue
 
         y_val = int(match.group("y"))
-        if use_runs:
-            y_val = int(match.group("run"))
-        z_val = int(match.group("z") or 1)
+
+        z_val = int(match.groupdict().get("z") or 1)
 
         reader = open_tile_reader(
             path,
             dandiset_id=dandiset_id,
-            api_key=api_key,
-            voxel_sizes=voxel_size,
-            skew_angle=skew_angle
+            api_key=api_key
         )
         delta_x_val = delta_x*y_val
         delta_y = 0
@@ -500,18 +318,6 @@ def convert_spool_or_zarr(
             tile = tiles[(y, z)]
             reader = tile.reader
             sz, sy, sx = reader.shape
-            if x_end is not None:
-                sx = min(x_end, sx)
-
-            if z_end is not None:
-                sz = min(z_end, sz)
-            if z_start is not None:
-                sz -= min(z_start, sz)
-
-            if y_end is not None:
-                sy = min(y_end, sy)
-            if y_start is not None:
-                sy -= min(y_start, sy)
 
             shapes[(y, z)] = (sz, sy, sx)
 
@@ -539,9 +345,7 @@ def convert_spool_or_zarr(
     dtype = next(iter(dtypes))
 
     logger.info("Ensureing compatiable tile shapes")
-    diff_sx = all_shapes[:, :, 2] != expected_sx
-    if allow_padding:
-        diff_sx = all_shapes[:, :, 2] > expected_sx
+    diff_sx = all_shapes[:, :, 2] > expected_sx
     if diff_sx.any():
         y_idxs, z_idxs = np.where(diff_sx)
         raise ValueError(
@@ -574,7 +378,7 @@ def convert_spool_or_zarr(
                 f"Inconsistent z shapes at tiles: {list(zip(y_idxs, z_idxs))}"
             )
 
-    full_x = min(expected_sx, x_end) if x_end else expected_sx
+    full_x = expected_sx
     full_y = sum(shapes[(y, z_tiles[0])][1]
                  for y in y_tiles) - sum(0 if y == min_y else overlaps[(y, z_tiles[0])]
                                          for y in y_tiles)
@@ -590,12 +394,15 @@ def convert_spool_or_zarr(
         chunks[2]
     end = min(expected_sx, x_chunk_end *
               chunks[2] if x_chunk_end else expected_sx)
-    checkpoint = min_y
+    checkpoint = start
     if checkpoint_file is not None:
-        checkpoint = _read_checkpoint(checkpoint_file, min_y)
-    if checkpoint == min_y:
-        array = omz.create_array("0", shape=fullshape,
-                                 zarr_config=zarr_config, dtype=dtype)
+        checkpoint = _read_checkpoint(checkpoint_file, start)
+    if checkpoint == start:
+        try:
+            array = omz.create_array("0", shape=fullshape,
+                                     zarr_config=zarr_config, dtype=dtype)
+        except:
+            array = omz["0"]
     else:
         array = omz["0"]
 
@@ -605,12 +412,12 @@ def convert_spool_or_zarr(
     logger.info("Writing level 0 array with shape %s", fullshape)
     bottom_overlap = None
     for z in z_tiles:
-        for x in range(start, end,
+        for x in range(checkpoint, end,
                        x_chunks):
             x2 = min(expected_sx, x+x_chunks)
             for y in range(min_y, max_y+1):
                 if checkpoint_file is not None:
-                    _write_checkpoint(checkpoint_file, y)
+                    _write_checkpoint(checkpoint_file, x)
                 key = (y, z)
                 if key in tiles:
 
@@ -620,27 +427,10 @@ def convert_spool_or_zarr(
                         tile.filename,
                         dandiset_id=dandiset_id,
                         api_key=api_key,
-                        voxel_sizes=voxel_size,
-                        skew_angle=skew_angle,
                         chunks=array._array.chunks,
-                        flip_z=flip_z
                     )
 
-                    threshold = background_threshold
-                    if background_threshold == "auto":
-                        threshold = data[:, :, -300:].max().compute()
-
-                    if z_end is not None:
-                        data = data[:z_end, :, :]
-                    if z_start is not None:
-                        data = data[z_start:, :, :]
-
-                    if y_end is not None:
-                        data = data[:, :y_end, :]
-                    if y_start is not None:
-                        data = data[:, y_start:, :]
-
-                    if allow_padding and data.shape[2] < expected_sx:
+                    if data.shape[2] < expected_sx:
                         pad_width = expected_sx - data.shape[2]
 
                         data = da.pad(
@@ -649,11 +439,11 @@ def convert_spool_or_zarr(
                             mode="constant",
                             constant_values=0,
                         )
-                    if x_end is not None:
-                        data = data[:, :, :min(data.shape[2], x_end)]
 
                     data_x = x-tile.delta_x
                     data_x2 = x2-tile.delta_x
+                    data_x = min(data.shape[2], data_x)
+                    data_x2 = max(0, data_x2)
                     if data_x2 < expected_sx:
                         data = data[:, :, :data_x2]
                     elif data_x2 > expected_sx:
@@ -674,57 +464,30 @@ def convert_spool_or_zarr(
                             mode="constant",
                             constant_values=0,
                         )
-                    if threshold is not None:
-                        data = data*(data < threshold)
-
-                    if stripes is not None:
-
-                        name = os.path.basename(
-                            tile.filename.rstrip("/").replace(".ome.zarr", ""))
-
-                        correction = tiff.imread(
-                            f"{stripes}/{name}.tiff")
-                        correction[correction == 0.0] = 1.0
-                        if flip_z:
-                            correction = correction[::-1, :]
-
-                        correction = white_matter_intensity / correction
-
-                        correction = correction[:, :, None]
-
-                        data = data * correction
 
                     next_overlap = 0
                     if (y+1, z) in tiles:
                         next_overlap = overlaps[(y+1, z)]
 
-                    if (overlaps[y, z] or next_overlap) and len(y_tiles) > 1:
+                    if (overlaps[(y, z)] or next_overlap) and len(y_tiles) > 1:
 
-                        if blend:
-                            if tile.y != min_y:
-                                t = np.linspace(0, 1, overlaps[y, z])
-                                ramp = (1 - np.cos(np.pi * t)) / 2
-                                ramp_inverse = (1 + np.cos(np.pi * t)) / 2
-                                ramp = ramp[None, :, None]
-                                ramp_inverse = ramp_inverse[None, :, None]
-                                top_overlap = data[:, :overlaps[y, z], :]
-                                data = data[:, overlaps[y, z]:, :]
+                        if tile.y != min_y:
+                            t = np.linspace(0, 1, overlaps[(y, z)])
+                            ramp = (1 - np.cos(np.pi * t)) / 2
+                            ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                            ramp = ramp[None, :, None]
+                            ramp_inverse = ramp_inverse[None, :, None]
+                            top_overlap = data[:, :overlaps[(y, z)], :]
+                            data = data[:, overlaps[(y, z)]:, :]
 
-                                blended = bottom_overlap * ramp_inverse + \
-                                    top_overlap * ramp
+                            blended = bottom_overlap * ramp_inverse + \
+                                top_overlap * ramp
 
-                                data = da.concatenate(
-                                    [blended, data], axis=1)
-                            if tile.y != max_y:
-                                bottom_overlap = data[:, -next_overlap:, :]
-                                data = data[:, :-next_overlap, :]
-
-                        else:
-                            if tile.y != min_y:
-                                data = data[:, overlaps[y, z] // 2:, :]
-                            if tile.y != max_y:
-                                data = data[:, : -
-                                            (next_overlap // 2 + next_overlap % 2), :]
+                            data = da.concatenate(
+                                [blended, data], axis=1)
+                        if tile.y != max_y:
+                            bottom_overlap = data[:, -next_overlap:, :]
+                            data = data[:, :-next_overlap, :]
 
                     ystart = sum(
                         expected_sy[min_y + y_inner] for y_inner in range(rel_y)) - \
@@ -732,39 +495,25 @@ def convert_spool_or_zarr(
                             for y_inner in range(min(rel_y+1, max_y)))
                     zstart = sum(expected_sz[min_z + z_inner]
                                  for z_inner in range(rel_z))
-                    if rel_y != 0 and not blend:
-                        ystart += overlaps[y, z] // 2
 
                     data = da.rechunk(data, array._array.chunks)
 
                     print(data.shape)
 
-                    slicer = (
-                        slice(zstart, zstart + data.shape[0]),
-                        slice(ystart, ystart + data.shape[1]),
-                        slice(x, x2),
-                    )
-
                     logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
-                    if y >= checkpoint:
-                        if number_workers is not None:
-                            with dask.config.set(number_workers=number_workers,
-                                                 threads_per_worker=threads_per_worker):
-                                with ProgressBar():
-                                    da.to_zarr(data, array._array,
-                                               region=slicer)
-                        else:
-                            with ProgressBar():
-                                da.to_zarr(data, array._array,
-                                           region=slicer)
+                    if x >= checkpoint:
+                        logger.info(f"starting write {y}")
+                        array[zstart:(
+                            zstart + data.shape[0]), ystart:(ystart + data.shape[1]), x:x2] = data
 
                 else:
                     raise ValueError(f"missing tile (z:{z}, y:{y})")
-    omz.generate_pyramid(levels=zarr_config.levels,
-                         copy_config=general_config,
-                         copy_zarr_config=zarr_config,
-                         x_min=start,
-                         x_max=end)
+    for s in range(start, end, x_chunks):
+        omz.generate_pyramid(levels=zarr_config.levels,
+                             copy_config=general_config,
+                             copy_zarr_config=zarr_config,
+                             x_min=s,
+                             x_max=s+x_chunks)
     omz.write_ome_metadata(
         axes=["z", "y", "x"],
         space_scale=voxel_size,
