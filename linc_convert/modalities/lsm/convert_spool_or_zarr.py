@@ -88,17 +88,19 @@ TileInfo = namedtuple(
 )
 
 
-def _write_checkpoint(filename: str, value: int) -> None:
+def _write_checkpoint(filename: str, x: int, y: int) -> None:
     with open(filename, "w") as f:
-        f.write(f"{value}\n")
+        f.write(f"{x},{y}\n")
 
 
-def _read_checkpoint(filename: str, default: int) -> int:
+def _read_checkpoint(filename: str, default_x: int, default_y: int) -> Tuple[int, int]:
     try:
         with open(filename, "r") as f:
-            return int(f.read().strip())
+            content = f.read().strip()
+            x_str, y_str = content.split(",")
+            return int(x_str), int(y_str)
     except (FileNotFoundError, ValueError):
-        return default
+        return default_x, default_y
 
 
 def prompt_dandi_api_key() -> str:
@@ -394,10 +396,12 @@ def convert_spool_or_zarr(
         chunks[2]
     end = min(expected_sx, x_chunk_end *
               chunks[2] if x_chunk_end else expected_sx)
-    checkpoint = start
+    checkpoint_x, checkpoint_y = start, min_y
     if checkpoint_file is not None:
-        checkpoint = _read_checkpoint(checkpoint_file, start)
-    if checkpoint == start:
+        checkpoint_x, checkpoint_y = _read_checkpoint(
+            checkpoint_file, start, min_y
+        )
+    if checkpoint_x == start and checkpoint_y == min_y:
         try:
             array = omz.create_array("0", shape=fullshape,
                                      zarr_config=zarr_config, dtype=dtype)
@@ -412,7 +416,7 @@ def convert_spool_or_zarr(
     logger.info("Writing level 0 array with shape %s", fullshape)
     bottom_overlap = None
     for z in z_tiles:
-        for x in range(checkpoint, end,
+        for x in range(checkpoint_x, end,
                        x_chunks):
             x2 = min(expected_sx, x+x_chunks)
             for y in range(min_y, max_y+1):
@@ -501,7 +505,7 @@ def convert_spool_or_zarr(
                     print(data.shape)
 
                     logger.info(f"Storing Tile z:{z}, y:{y}, x:{x}-{x2}")
-                    if x >= checkpoint:
+                    if x > checkpoint_x or y >= checkpoint_y:
                         logger.info(f"starting write {y}")
                         array[zstart:(
                             zstart + data.shape[0]), ystart:(ystart + data.shape[1]), x:x2] = data
