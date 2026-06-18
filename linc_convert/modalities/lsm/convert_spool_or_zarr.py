@@ -120,16 +120,17 @@ def open_tile_reader(
     """Read a tile from the path and apply skew if needed."""
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
-            return da.asarray(ZarrPythonGroup.open(path)["0"], chunks=chunks)
+            return da.asarray(ZarrPythonGroup.open(path)["0"],
+                              chunks=chunks if chunks is not None else (128, 128, 128))
         return da.asarray(ZarrPythonGroup.open_dandi(
             dandiset_id=dandiset_id,
             asset_path=path,
             api_key=api_key,
-        )["0"], chunks=chunks)
+        )["0"], chunks=chunks if chunks is not None else (128, 128, 128))
 
     return da.asarray(
         SpoolSetInterpreter(path, f"{path}_info.mat").assemble_cropped(),
-        chunks=chunks)
+        chunks=chunks if chunks is not None else (128, 128, 128))
 
 
 def discover_tile_paths(inp: str,
