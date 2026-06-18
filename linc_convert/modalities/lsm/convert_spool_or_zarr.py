@@ -113,8 +113,8 @@ def prompt_dandi_api_key() -> str:
 def open_tile_reader(
     path: str,
     *,
-    dandiset_id: Optional[str],
-    api_key: Optional[str],
+    dandiset_id: Optional[str] = None,
+    api_key: Optional[str] = None,
     chunks: Optional[Tuple[int, ...]] = None,
 ) -> da.Array:
     """Read a tile from the path and apply skew if needed."""
