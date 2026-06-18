@@ -14,7 +14,7 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
     camera_channel_map,
     get_camera_info,
-    load_mask_and_thr,
+    load_mask_and_thresholds,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,8 +205,8 @@ def get_all_affines(
     cam_info_1 = get_camera_info(scan_parameters, 1)
     cam_info_2 = get_camera_info(scan_parameters, 2)
 
-    masks_1, thrs_1 = load_mask_and_thr(name_1, mip_dir, cam_info_1)
-    masks_2, thrs_2 = load_mask_and_thr(name_2, mip_dir, cam_info_2)
+    masks_1, thrs_1 = load_mask_and_thresholds(name_1, mip_dir, cam_info_1)
+    masks_2, thrs_2 = load_mask_and_thresholds(name_2, mip_dir, cam_info_2)
 
     vol_1 = crop_volume_channels(reader_1, cam_info_1)
     vol_2 = crop_volume_channels(reader_2, cam_info_2)
