@@ -24,7 +24,7 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
     camera_channel_map,
     get_camera_info,
-    load_mask_and_thr,
+    load_mask_and_thresholds,
     load_scan_parameters,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.registration import (
@@ -142,9 +142,7 @@ def preprocess(
 
         # Load per-channel volumes
         vol_channels = crop_volume_channels(reader, cam_info)
-
-        # ✅ FIXED: correct argument (name vs path)
-        masks, thrs = load_mask_and_thr(name, mip_dir, cam_info)
+        masks, thrs = load_mask_and_thresholds(name, mip_dir, cam_info)
 
         for ch in camera_channel_map[camera_id]:
             output_path = f"{general_config.out}/{ch}/{name}.ome.zarr"
