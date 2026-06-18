@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+import tifffile
 import yaml
-from glymur import tiff
 
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     crop_mip_channels,
@@ -87,7 +87,7 @@ def load_mask_and_thresholds(
     if not os.path.exists(mip_path):
         raise FileNotFoundError(f"Missing YX MIP file: {mip_path}")
 
-    raw_mip = tiff.imread(mip_path).astype(np.float32)
+    raw_mip = tifffile.imread(mip_path).astype(np.float32)
 
     # Crop MIP per channel
     mip_channels = crop_mip_channels(raw_mip, cam_info)
