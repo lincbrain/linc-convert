@@ -103,12 +103,12 @@ def preprocess(
         inp_cm2, dandiset_id=dandiset_id, api_key=api_key)
 
     # Compute inter-camera affines using selected tile
-    affines = get_all_affines(
-        tile_paths_1[file_num],
-        tile_paths_2[file_num],
-        scan_parameters,
-        mip_dir,
-    )
+    # affines = get_all_affines(
+    #    tile_paths_1[file_num],
+    #    tile_paths_2[file_num],
+    #    scan_parameters,
+    #    mip_dir,
+    # )
 
     # Select camera-specific tiles
     tile_paths = tile_paths_1 if camera_id == 1 else tile_paths_2
@@ -161,7 +161,7 @@ def preprocess(
             # Processing pipeline
             vol = vol_channels[ch]
             vol = stripe_skew_corr(vol, mask, thr, camera_id, scan_parameters)
-            vol = apply_affine(vol, affines[camera_id][ch])
+            # vol = apply_affine(vol, affines[camera_id][ch])
 
             # Write Zarr
             tmp_path = output_path + ".tmp"
@@ -174,7 +174,7 @@ def preprocess(
                 dtype=np.uint16,
             )
 
-            vol = da.rechunk(vol, out._array.shards or chunk)
+            vol = da.rechunk(vol, (256, 256, 256))
 
             with ProgressBar():
                 da.to_zarr(vol, out._array)
