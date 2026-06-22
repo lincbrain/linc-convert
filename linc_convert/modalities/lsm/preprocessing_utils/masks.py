@@ -74,7 +74,7 @@ def compute_tissue_mask(
 
 def components_over_threshold_filled(
     mask: np.ndarray,
-    min_size: int = 100,
+    min_size: int = 1000,
     connectivity: int = 1,
 ) -> np.ndarray:
     """
@@ -84,7 +84,7 @@ def components_over_threshold_filled(
     ----------
     mask : np.ndarray
         2D boolean array.
-    min_size : int, default=25
+    min_size : int, default=1000
         Minimum component size to keep.
     connectivity : int, default=1
         Connectivity definition:
