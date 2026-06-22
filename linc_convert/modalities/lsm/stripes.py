@@ -115,8 +115,8 @@ def create(
     tile_paths_2 = discover_tile_paths(
         inp_cm2, dandiset_id=dandiset_id, api_key=api_key)
 
-    affines = get_all_affines(tile_paths_1[file_num],
-                              tile_paths_2[file_num], scanParameters, mip_dir)
+    # affines = get_all_affines(tile_paths_1[file_num],
+    #                          tile_paths_2[file_num], scanParameters, mip_dir)
 
     tile_paths = tile_paths_1 if camera_id == 1 else tile_paths_2
 
@@ -158,14 +158,14 @@ def create(
 
                     vol = vol_channels[i]
                     vol = preprocess(vol, mask, thr, camera_id, scanParameters)
-                    vol = apply_affine(vol, affines[camera_id][i])
+                    # vol = apply_affine(vol, affines[camera_id][i])
 
                     omz = ZarrPythonGroup.from_config(
                         output_name+".tmp", zarr_config)
                     out = omz.create_array("0", shape=vol.shape,
                                            zarr_config=zarr_config, dtype=np.uint16)
                     vol = da.rechunk(
-                        vol, chunk)
+                        vol, (256, 256, 256))
                     with ProgressBar():
                         da.to_zarr(vol, out._array)
                     omz.generate_pyramid(levels=zarr_config.levels)
