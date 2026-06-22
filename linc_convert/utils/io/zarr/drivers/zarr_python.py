@@ -310,6 +310,98 @@ class ZarrPythonGroup(ZarrGroup):
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
 
+    def generate_pyramid_staged(
+        self,
+        levels: int = -1,
+        ndim: int = 3,
+        mode: Literal["mean", "median"] | Callable = "mean",
+        no_pyramid_axis: Optional[int] = None,
+        copy_config: Optional[GeneralConfig] = None,
+        copy_zarr_config: Optional[ZarrConfig] = None,
+    ) -> list[list[int]]:
+        """
+        Generate a pyramid, writing the first two levels 4 x-chunks at a
+        time and the remaining levels in a single pass each.
+
+        Levels 1 and 2 are written in windows of 4 chunks along x (using
+        `generate_pyramid`'s region-by-region path via `copy_config`/
+        `copy_zarr_config`, `x_min`, and `x_max`), one window at a time,
+        covering both levels per window. Any remaining levels (3 and
+        beyond) are then generated all at once, with no x-windowing.
+
+        Parameters
+        ----------
+        levels : int
+            Total number of pyramid levels to generate. By default, stop
+            when all dimensions are smaller than their corresponding
+            chunk size.
+        ndim : int
+            Number of spatial dimensions.
+        mode : {"mean", "median"}
+            Function to be used for down-sampling, either a callable or
+            mean or median.
+        no_pyramid_axis : int | None
+            Axis to leave unsampled.
+        copy_config : GeneralConfig, optional
+            Output configuration used for the windowed (levels 1-2) path.
+            Required to actually get x-chunked writes; if omitted, levels
+            1-2 fall back to a single full-width call.
+        copy_zarr_config : ZarrConfig, optional
+            Zarr configuration paired with `copy_config`.
+
+        Returns
+        -------
+        shapes : list[list[int]]
+            Shapes of each level, from finest to coarsest.
+        """
+        base = self["0"]
+        chunk_size = base.chunks[-ndim:]
+        x_chunk = chunk_size[2]
+        full_x = base.shape[-1]
+
+        if levels == -1:
+            levels = 9
+
+        staged_levels = min(2, levels)
+        all_shapes: list[list[int]] = [list(base.shape[-ndim:])]
+
+        if copy_config is not None and staged_levels > 0:
+            window = 4 * x_chunk
+            for x_min in range(0, full_x, window):
+                x_max = min(full_x, x_min + window)
+                all_shapes = self.generate_pyramid(
+                    levels=staged_levels,
+                    ndim=ndim,
+                    mode=mode,
+                    no_pyramid_axis=no_pyramid_axis,
+                    copy_config=copy_config,
+                    copy_zarr_config=copy_zarr_config,
+                    x_min=x_min,
+                    x_max=x_max,
+                    level_start=1,
+                )
+        elif staged_levels > 0:
+            # No copy_config provided: can't take the windowed path, so
+            # just generate levels 1-2 in one go.
+            all_shapes = self.generate_pyramid(
+                levels=staged_levels,
+                ndim=ndim,
+                mode=mode,
+                no_pyramid_axis=no_pyramid_axis,
+                level_start=1,
+            )
+
+        if levels > staged_levels:
+            all_shapes = self.generate_pyramid(
+                levels=levels,
+                ndim=ndim,
+                mode=mode,
+                no_pyramid_axis=no_pyramid_axis,
+                level_start=staged_levels + 1,
+            )
+
+        return all_shapes
+
     def generate_pyramid(
         self,
         levels: int = -1,
