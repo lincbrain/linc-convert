@@ -12,9 +12,11 @@ Assumptions baked into this version:
   so no filename regex is needed.
 - Every tile has the same shape, so we don't need to pre-scan all of them;
   we only correct one tile up front to learn the corrected mosaic geometry.
-- There is no chunking along x: each tile is read, corrected, blended, and
-  written as a single unit, which is also what keeps memory use to one
-  "chunk" (one tile) at a time.
+- Each tile is read, corrected, blended, and written one x-chunk at a
+  time (`x_chunk_size` wide), rather than loading the whole tile into
+  memory at once -- this is what keeps memory use to roughly one x-slab
+  at a time, even when the destination zarr array's own chunks are very
+  large.
 - Cross-camera affine registration (``get_all_affines``) is removed; it
   isn't currently working, so this pipeline only does background removal
   and stripe/skew correction.
@@ -202,8 +204,7 @@ def _corrected_volume(
 
     Building this graph does not read or correct any data yet; nothing is
     materialized until the caller calls `.compute()` on it (or a slice of
-    it), which is what lets us keep only one tile's worth of corrected data
-    resident in memory at a time.
+    it).
     """
     reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
 
@@ -235,32 +236,7 @@ def _read_checkpoint(filename: str, default_y: int) -> int:
 
 
 def load_y_coordinates(coords_yaml_path: str) -> List[float]:
-    """Load per-tile absolute y positions from a coordinates YAML file.
-
-    The file is expected to have the structure produced by the tile
-    registration step, in particular a top-level ``coordinates`` key:
-
-        coordinates:
-        - - {x: 0.0, y: 0.0}
-        - - {x: 0.0, y: 522.0}
-        - - {x: 0.0, y: 1044.0}
-          ...
-
-    i.e. a list with one single-element sub-list per tile, each holding
-    an ``{x, y}`` mapping. The x values are ignored; only the y position
-    of each tile (already in corrected, post stripe/skew-correction pixel
-    space) is used.
-
-    Parameters
-    ----------
-    coords_yaml_path : str
-        Path to the coordinates YAML file for one channel.
-
-    Returns
-    -------
-    list of float
-        Absolute y position of each tile, in on-disk tile order.
-    """
+    """Load per-tile absolute y positions from a coordinates YAML file."""
     with open(coords_yaml_path, "r") as f:
         coords = yaml.safe_load(f)
 
@@ -268,13 +244,7 @@ def load_y_coordinates(coords_yaml_path: str) -> List[float]:
 
 
 def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
-    """Build a checkpoint file path for one channel's mosaic.
-
-    Strips a trailing ``.ome.zarr`` suffix from `general_config.out` if
-    present (as an actual suffix removal, not `str.rstrip`, which treats
-    its argument as a set of characters and would otherwise eat unrelated
-    trailing characters from the path).
-    """
+    """Build a checkpoint file path for one channel's mosaic."""
     out = general_config.out.rstrip("/")
     if out.endswith(".ome.zarr"):
         out = out[: -len(".ome.zarr")]
@@ -297,6 +267,7 @@ def pipeline(
     coords_yaml_ch1: str,
     coords_yaml_ch2: str,
     *,
+    x_chunk_size: int = 512,
     voxel_size: List[float] = [1, 1, 1],
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
@@ -310,6 +281,11 @@ def pipeline(
     Per-tile y placement (and therefore overlap) comes from a coordinates
     YAML file, one per channel, rather than a single constant overlap
     value -- this allows tile spacing to vary across the mosaic.
+
+    Each tile is processed and written one x-chunk at a time (width
+    `x_chunk_size`), rather than loading the whole tile into memory --
+    this keeps peak memory roughly bounded to one x-slab regardless of
+    how large the destination zarr array's own chunks are.
 
     Parameters
     ----------
@@ -329,6 +305,9 @@ def pipeline(
         absolute y position.
     coords_yaml_ch2 : str
         Same as `coords_yaml_ch1`, for the second channel.
+    x_chunk_size : int, default=512
+        Width, in pixels along x, of each slab that is computed,
+        blended, and written at a time.
     voxel_size : list of float
         Voxel size along X, Y and Z, in microns.
     general_config : GeneralConfig, optional
@@ -428,7 +407,10 @@ def pipeline(
             "Writing channel %s, level 0 array with shape %s", ch, fullshape
         )
 
-        bottom_overlap = None
+        # `bottom_overlap_slabs` holds the trailing y-overlap rows from the
+        # previous tile, one small x-slab at a time, in the same x-chunk
+        # order used below -- never a full-tile-width array.
+        bottom_overlap_slabs: List[Optional[np.ndarray]] = []
 
         for index, path in enumerate(tile_paths):
             gc.collect()
@@ -450,9 +432,6 @@ def pipeline(
                     scan_parameters=scan_parameters,
                 )
 
-                with ProgressBar():
-                    data = lazy_vol.compute()  # plain numpy array
-
                 is_first = index == 0 or index == checkpoint
                 is_last = index == num_tiles - 1
 
@@ -471,37 +450,73 @@ def pipeline(
                         - int(round(y_coords[index]))
                     )
 
-                if not is_first and overlap_with_prev and overlap_with_prev > 0:
-                    t = np.linspace(0, 1, overlap_with_prev)
-                    ramp = (1 - np.cos(np.pi * t)) / 2
-                    ramp_inverse = (1 + np.cos(np.pi * t)) / 2
-                    ramp = ramp[None, :, None]
-                    ramp_inverse = ramp_inverse[None, :, None]
-
-                    top_overlap = data[:, :overlap_with_prev, :]
-                    data = data[:, overlap_with_prev:, :]
-
-                    blended = bottom_overlap * ramp_inverse + top_overlap * ramp
-                    data = np.concatenate([blended, data], axis=1)
-
-                if not is_last and overlap_with_next and overlap_with_next > 0:
-                    bottom_overlap = data[:, -overlap_with_next:, :].copy()
-                    data = data[:, :-overlap_with_next, :]
-                elif not is_last:
-                    # No positive overlap with the next tile (e.g. a gap,
-                    # or exactly adjacent tiles) -- nothing to carry
-                    # forward for blending.
-                    bottom_overlap = None
-
                 zstart = 0
+                new_bottom_overlap_slabs: List[Optional[np.ndarray]] = []
 
-                if index > checkpoint:
-                    logger.info(f"Storing tile {index} at y:{ystart}")
-                    array[
-                        zstart: zstart + data.shape[0],
-                        ystart: ystart + data.shape[1],
-                        0: data.shape[2],
-                    ] = data
+                x_starts = list(range(0, corrected_sx, x_chunk_size))
+                for slab_idx, x0 in enumerate(x_starts):
+                    x1 = min(corrected_sx, x0 + x_chunk_size)
+
+                    # Only this slab's worth of the tile is computed --
+                    # not the whole tile.
+                    with ProgressBar():
+                        data = lazy_vol[:, :, x0:x1].compute()
+
+                    bottom_overlap_slab = (
+                        bottom_overlap_slabs[slab_idx]
+                        if bottom_overlap_slabs
+                        else None
+                    )
+
+                    if (
+                        not is_first
+                        and overlap_with_prev
+                        and overlap_with_prev > 0
+                    ):
+                        t = np.linspace(0, 1, overlap_with_prev)
+                        ramp = (1 - np.cos(np.pi * t)) / 2
+                        ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                        ramp = ramp[None, :, None]
+                        ramp_inverse = ramp_inverse[None, :, None]
+
+                        top_overlap = data[:, :overlap_with_prev, :]
+                        data = data[:, overlap_with_prev:, :]
+
+                        blended = (
+                            bottom_overlap_slab * ramp_inverse
+                            + top_overlap * ramp
+                        )
+                        data = np.concatenate([blended, data], axis=1)
+
+                    if (
+                        not is_last
+                        and overlap_with_next
+                        and overlap_with_next > 0
+                    ):
+                        new_bottom_overlap_slabs.append(
+                            data[:, -overlap_with_next:, :].copy()
+                        )
+                        data = data[:, :-overlap_with_next, :]
+                    elif not is_last:
+                        # No positive overlap with the next tile -- nothing
+                        # to carry forward for this slab.
+                        new_bottom_overlap_slabs.append(None)
+
+                    if index > checkpoint:
+                        logger.info(
+                            f"Storing tile {index} at y:{ystart}, "
+                            f"x:{x0}-{x1}"
+                        )
+                        array[
+                            zstart: zstart + data.shape[0],
+                            ystart: ystart + data.shape[1],
+                            x0:x1,
+                        ] = data
+
+                    del data
+                    gc.collect()
+
+                bottom_overlap_slabs = new_bottom_overlap_slabs
 
                 logger.info(f"{name} done")
                 _write_checkpoint(checkpoint_file, index)
