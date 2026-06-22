@@ -1,5 +1,6 @@
 """ZarrIO Implementation using the zarr-python library."""
 
+import gc
 import logging
 from math import ceil
 from numbers import Number
@@ -360,13 +361,13 @@ class ZarrPythonGroup(ZarrGroup):
         full_x = base.shape[-1]
 
         if levels == -1:
-            levels = 9
+            levels = 10
 
         staged_levels = min(2, levels)
         all_shapes: list[list[int]] = [list(base.shape[-ndim:])]
 
         if copy_config is not None and staged_levels > 0:
-            window = 4 * x_chunk
+            window = 32 * x_chunk
             for x_min in range(0, full_x, window):
                 x_max = min(full_x, x_min + window)
                 all_shapes = self.generate_pyramid(
@@ -380,6 +381,7 @@ class ZarrPythonGroup(ZarrGroup):
                     x_max=x_max,
                     level_start=1,
                 )
+                gc.collect()
         elif staged_levels > 0:
             # No copy_config provided: can't take the windowed path, so
             # just generate levels 1-2 in one go.
