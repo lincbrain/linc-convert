@@ -351,6 +351,8 @@ def pipeline(
 
         for index, path in enumerate(tile_paths):
             if index >= checkpoint:
+                omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
+                array = omz["0"]
                 name = tile_name(path)
                 logger.info(f"[{index}] Processing {name}")
 
