@@ -174,12 +174,12 @@ def _corrected_volume(
     return vol
 
 
-def _write_checkpoint(filename: int, y: int) -> None:
+def _write_checkpoint(filename: str, y: int) -> None:
     with open(filename, "w") as f:
         f.write(f"{y}\n")
 
 
-def _read_checkpoint(filename: str, default_y: int) -> Tuple[int, int]:
+def _read_checkpoint(filename: str, default_y: int) -> int:
     try:
         with open(filename, "r") as f:
             content = f.read().strip()
@@ -187,6 +187,20 @@ def _read_checkpoint(filename: str, default_y: int) -> Tuple[int, int]:
             return int(y_str)
     except (FileNotFoundError, ValueError):
         return default_y
+
+
+def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
+    """Build a checkpoint file path for one channel's mosaic.
+
+    Strips a trailing ``.ome.zarr`` suffix from `general_config.out` if
+    present (as an actual suffix removal, not `str.rstrip`, which treats
+    its argument as a set of characters and would otherwise eat unrelated
+    trailing characters from the path).
+    """
+    out = general_config.out.rstrip("/")
+    if out.endswith(".ome.zarr"):
+        out = out[: -len(".ome.zarr")]
+    return f"{out}_{ch}.dat"
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +290,6 @@ def preprocess(
     tile_paths = discover_tile_paths(
         inp, dandiset_id=dandiset_id, api_key=api_key
     )
-    _read_checkpoint()
 
     num_tiles = len(tile_paths)
 
@@ -314,7 +327,7 @@ def preprocess(
 
         out_dir = f"{general_config.out}/{ch}"
         omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
-        checkpoint_file = inp.rstrip("/") + ch + ".dat"
+        checkpoint_file = _checkpoint_path(general_config, ch)
         checkpoint = _read_checkpoint(checkpoint_file, -1)
 
         try:
@@ -335,11 +348,9 @@ def preprocess(
         )
 
         bottom_overlap = None
-        cur = 0
 
         for index, path in enumerate(tile_paths):
-            cur += 1
-            if cur > checkpoint:
+            if index >= checkpoint:
                 name = tile_name(path)
                 logger.info(f"[{index}] Processing {name}")
 
@@ -363,7 +374,7 @@ def preprocess(
                 with ProgressBar():
                     data = lazy_vol.compute()  # plain numpy array
 
-                is_first = index == 0
+                is_first = index == 0 or index == checkpoint
                 is_last = index == num_tiles - 1
 
                 if (overlap and (not is_first or not is_last)) and num_tiles > 1:
@@ -388,14 +399,16 @@ def preprocess(
                     (index * overlap if index > 0 else 0)
                 zstart = 0
 
-                logger.info(f"Storing tile {index} at y:{ystart}")
-                array[
-                    zstart: zstart + data.shape[0],
-                    ystart: ystart + data.shape[1],
-                    0: data.shape[2],
-                ] = data
+                if index > checkpoint:
+                    logger.info(f"Storing tile {index} at y:{ystart}")
+                    array[
+                        zstart: zstart + data.shape[0],
+                        ystart: ystart + data.shape[1],
+                        0: data.shape[2],
+                    ] = data
 
                 logger.info(f"{name} done")
+                _write_checkpoint(checkpoint_file, index)
 
         omz.generate_pyramid_staged(
             levels=zarr_config.levels,
