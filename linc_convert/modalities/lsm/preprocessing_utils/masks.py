@@ -4,7 +4,7 @@ from scipy import ndimage
 
 def compute_tissue_mask(
     img: np.ndarray,
-    downsample: int = 8,
+    downsample: int = 4,
     clip_high_percentile: float = 99.9,
 ) -> tuple[np.ndarray, float]:
     """
@@ -41,7 +41,7 @@ def compute_tissue_mask(
     # -------------------------
     # Use bright region at right edge (heuristic)
     edge_region = img_f[::downsample, -500:]
-    threshold = np.percentile(edge_region, 98) * 1.1
+    threshold = np.percentile(edge_region, 98)
 
     # Downsampled image
     small = img_f[::downsample, ::downsample]
@@ -67,22 +67,25 @@ def compute_tissue_mask(
     # -------------------------
     # Post-process mask
     # -------------------------
-    mask = largest_component_filled(mask)
+    mask = components_over_threshold_filled(mask)
 
     return mask, threshold
 
 
-def largest_component_filled(
+def components_over_threshold_filled(
     mask: np.ndarray,
+    min_size: int = 100,
     connectivity: int = 1,
 ) -> np.ndarray:
     """
-    Keep only the largest connected component in a binary mask and fill holes within it.
+    Keep all connected components larger than `min_size` and fill holes.
 
     Parameters
     ----------
     mask : np.ndarray
         2D boolean array.
+    min_size : int, default=25
+        Minimum component size to keep.
     connectivity : int, default=1
         Connectivity definition:
         - 1 → 4-connectivity
@@ -91,12 +94,7 @@ def largest_component_filled(
     Returns
     -------
     np.ndarray
-        Cleaned binary mask (largest component with holes filled).
-
-    Raises
-    ------
-    ValueError
-        If mask is not 2D or connectivity is invalid.
+        Cleaned binary mask (all components > min_size, holes filled).
     """
     if mask.ndim != 2:
         raise ValueError("mask must be a 2D array")
@@ -107,8 +105,7 @@ def largest_component_filled(
     elif connectivity == 2:
         structure = np.ones((3, 3), dtype=int)
     else:
-        raise ValueError(
-            "connectivity must be 1 (4-connectivity) or 2 (8-connectivity)")
+        raise ValueError("connectivity must be 1 or 2")
 
     # Label connected components
     labeled, num_features = ndimage.label(mask, structure=structure)
@@ -116,11 +113,14 @@ def largest_component_filled(
     if num_features == 0:
         return mask.copy()
 
-    # Find largest component
+    # Compute component sizes
     sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
-    largest_label = int(np.argmax(sizes) + 1)
 
-    largest = labeled == largest_label
+    # Keep only components larger than min_size
+    keep_labels = {i + 1 for i, s in enumerate(sizes) if s > min_size}
+
+    # Build output mask
+    filtered = np.isin(labeled, list(keep_labels))
 
     # Fill holes
-    return ndimage.binary_fill_holes(largest)
+    return ndimage.binary_fill_holes(filtered)
