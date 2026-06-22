@@ -267,7 +267,7 @@ def pipeline(
     coords_yaml_ch1: str,
     coords_yaml_ch2: str,
     *,
-    x_chunk_size: int = 8192,
+    x_chunk_size: int = 16384,
     voxel_size: List[float] = [1, 1, 1],
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
