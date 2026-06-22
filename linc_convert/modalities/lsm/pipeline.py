@@ -412,6 +412,8 @@ def pipeline(
                 logger.info(f"{name} done")
                 _write_checkpoint(checkpoint_file, index)
 
+        omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
+        array = omz["0"]
         omz.generate_pyramid_staged(
             levels=zarr_config.levels,
             copy_config=general_config,
