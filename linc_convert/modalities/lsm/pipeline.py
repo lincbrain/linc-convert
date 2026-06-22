@@ -109,20 +109,57 @@ def open_tile_reader(
 
 def discover_tile_paths(
     inp: str,
+    camera_id: int,
     *,
     dandiset_id: Optional[str],
     api_key: Optional[str],
 ) -> List[str]:
-    """Get all tile paths from the input location, in on-disk order.
+    """Get all tile paths for one camera from the input location, in
+    on-disk order.
 
     Tiles are assumed to be laid out along a single axis (y) in the order
     they're returned here -- the index of a path in this list *is* its
-    y-position, so no filename parsing is needed.
+    y-position, so no filename parsing is needed beyond filtering by
+    camera.
+
+    Tile names are expected to contain a camera token of the form
+    ``acq-camera-01``, ``acq-camera-02``, etc. (zero-padded to two
+    digits), e.g.:
+
+        sub-MF283_sample-slice052_chunk-0019_acq-camera-01.ome.zarr
+
+    Only tiles matching `camera_id` are returned.
+
+    Parameters
+    ----------
+    inp : str
+        Path (local directory, or DANDI asset path prefix) to search.
+    camera_id : int
+        Camera number to filter tiles by (e.g. 1 -> "acq-camera-01").
+    dandiset_id : str, optional
+        If provided, tiles are listed from DANDI instead of local disk.
+    api_key : str, optional
+        DANDI API key, required when `dandiset_id` is provided.
+
+    Returns
+    -------
+    list of str
+        Matching tile paths, sorted.
+
+    Raises
+    ------
+    ValueError
+        If no tiles are found, or none match the requested camera.
     """
+    camera_token = f"acq-camera-{camera_id:02d}"
+
     if dandiset_id is None:
-        paths = sorted(glob(os.path.join(inp, "*.ome.zarr")))
+        paths = sorted(glob(os.path.join(inp, f"*{camera_token}*.ome.zarr")))
         if not paths:
-            raise ValueError("No tile folders found in input directory")
+            raise ValueError(
+                f"No tile folders found for camera {camera_id} "
+                f"(token '{camera_token}') in input directory"
+            )
         return paths
 
     with DandiAPIClient(
@@ -137,10 +174,14 @@ def discover_tile_paths(
             asset.path
             for asset in dandiset.get_assets_with_path_prefix(str(prefix))
             if len(PurePosixPath(asset.path).parts) == depth + 1
+            and camera_token in PurePosixPath(asset.path).name
         )
 
     if not paths:
-        raise ValueError("No tile assets found in DANDI dataset")
+        raise ValueError(
+            f"No tile assets found for camera {camera_id} "
+            f"(token '{camera_token}') in DANDI dataset"
+        )
 
     return paths
 
@@ -321,7 +362,7 @@ def pipeline(
 
     inp = inp_cm1 if camera_id == 1 else inp_cm2
     tile_paths = discover_tile_paths(
-        inp, dandiset_id=dandiset_id, api_key=api_key
+        inp, camera_id, dandiset_id=dandiset_id, api_key=api_key
     )
 
     num_tiles = len(tile_paths)
