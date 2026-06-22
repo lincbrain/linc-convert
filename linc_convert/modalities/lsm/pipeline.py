@@ -56,8 +56,8 @@ from linc_convert.utils.zarr_config import (
 )
 
 logger = logging.getLogger(__name__)
-preprocess = cyclopts.App(name="preprocess", help_format="markdown")
-lsm.command(preprocess)
+pipeline = cyclopts.App(name="pipeline", help_format="markdown")
+lsm.command(pipeline)
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +208,9 @@ def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@preprocess.default
+@pipeline.default
 @autoconfig
-def preprocess(
+def pipeline(
     inp_cm1: str,
     inp_cm2: str,
     mip_dir: str,

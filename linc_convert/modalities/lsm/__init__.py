@@ -5,7 +5,7 @@ try:
 
     __all__ = [
         "cli",
-        "preprocess",
+        "pipeline",
         "mosaic",
         "multi_slice",
         "spool",
@@ -23,7 +23,7 @@ try:
         mip,
         mosaic,
         multi_slice,
-        preprocess,
+        pipeline,
         pyramid,
         single_volume,
         spool,
