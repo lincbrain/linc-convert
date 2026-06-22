@@ -18,8 +18,11 @@ Assumptions baked into this version:
 - Cross-camera affine registration (``get_all_affines``) is removed; it
   isn't currently working, so this pipeline only does background removal
   and stripe/skew correction.
+- Per-tile y placement comes from a coordinates YAML file (one per
+  channel) rather than a single constant overlap value.
 """
 
+import gc
 import getpass
 import logging
 import os
@@ -31,6 +34,7 @@ from typing import Callable, List, Literal, Optional, Tuple
 import cyclopts
 import dask.array as da
 import numpy as np
+import yaml
 from dandi.dandiapi import DandiAPIClient
 from dask.diagnostics import ProgressBar
 
@@ -189,6 +193,39 @@ def _read_checkpoint(filename: str, default_y: int) -> int:
         return default_y
 
 
+def load_y_coordinates(coords_yaml_path: str) -> List[float]:
+    """Load per-tile absolute y positions from a coordinates YAML file.
+
+    The file is expected to have the structure produced by the tile
+    registration step, in particular a top-level ``coordinates`` key:
+
+        coordinates:
+        - - {x: 0.0, y: 0.0}
+        - - {x: 0.0, y: 522.0}
+        - - {x: 0.0, y: 1044.0}
+          ...
+
+    i.e. a list with one single-element sub-list per tile, each holding
+    an ``{x, y}`` mapping. The x values are ignored; only the y position
+    of each tile (already in corrected, post stripe/skew-correction pixel
+    space) is used.
+
+    Parameters
+    ----------
+    coords_yaml_path : str
+        Path to the coordinates YAML file for one channel.
+
+    Returns
+    -------
+    list of float
+        Absolute y position of each tile, in on-disk tile order.
+    """
+    with open(coords_yaml_path, "r") as f:
+        coords = yaml.safe_load(f)
+
+    return [entry[0]["y"] for entry in coords["coordinates"]]
+
+
 def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
     """Build a checkpoint file path for one channel's mosaic.
 
@@ -216,8 +253,9 @@ def pipeline(
     mip_dir: str,
     yaml_path: str,
     camera_id: int,
+    coords_yaml_ch1: str,
+    coords_yaml_ch2: str,
     *,
-    overlap: int = 192,
     voxel_size: List[float] = [1, 1, 1],
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
@@ -228,19 +266,9 @@ def pipeline(
     Correct volumetric tile data and stream it directly into a single
     blended OME-Zarr mosaic along the y axis.
 
-    This pipeline:
-    1. Loads scan parameters and discovers tile paths for the chosen camera,
-       in on-disk order (tiles are assumed to lie along y in that order)
-    2. Corrects one tile to learn the post-correction tile shape, and
-       estimates the full mosaic shape from that shape, the tile count,
-       and the requested overlap
-    3. For each tile in order: reads and corrects it (background mask,
-       stripe/skew correction), blends its y-overlap with its neighbor,
-       and writes it directly into the destination array
-
-    No per-tile intermediate `.ome.zarr` is ever written to disk, and only
-    one tile's worth of corrected data is held in memory at a time (there
-    is no chunking along x; each tile is processed as a single unit).
+    Per-tile y placement (and therefore overlap) comes from a coordinates
+    YAML file, one per channel, rather than a single constant overlap
+    value -- this allows tile spacing to vary across the mosaic.
 
     Parameters
     ----------
@@ -254,8 +282,12 @@ def pipeline(
         Path to scan parameter YAML file.
     camera_id : int
         Camera to process (1 or 2).
-    overlap : int
-        Number of pixels of y-overlap between consecutive tiles.
+    coords_yaml_ch1 : str
+        Path to the coordinates YAML file for the first channel of the
+        chosen camera (see `camera_channel_map`), giving each tile's
+        absolute y position.
+    coords_yaml_ch2 : str
+        Same as `coords_yaml_ch1`, for the second channel.
     voxel_size : list of float
         Voxel size along X, Y and Z, in microns.
     general_config : GeneralConfig, optional
@@ -272,7 +304,8 @@ def pipeline(
     FileNotFoundError
         If a required MIP file is missing.
     ValueError
-        If camera_id is not 1 or 2.
+        If camera_id is not 1 or 2, or a coordinates file doesn't have
+        an entry for every discovered tile.
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
@@ -296,16 +329,24 @@ def pipeline(
     def tile_name(path: str) -> str:
         return os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
 
-    for ch in camera_channel_map[camera_id]:
+    channels = camera_channel_map[camera_id]
+    if len(channels) != 2:
+        raise ValueError(
+            f"Expected exactly 2 channels for camera {camera_id}, "
+            f"got {len(channels)}: {channels}"
+        )
+    coords_yaml_by_channel = dict(
+        zip(channels, [coords_yaml_ch1, coords_yaml_ch2]))
 
-        # --- Estimate the corrected mosaic shape from a single sample tile.
-        #
-        # Stripe/skew correction changes a tile's shape relative to its
-        # raw, on-disk shape, so we can't use the raw reader shape directly.
-        # All tiles are assumed to share the same shape, so we correct just
-        # the first tile to learn the corrected (z, y, x) shape, and
-        # extrapolate the full mosaic from that one tile's size, the tile
-        # count, and the requested overlap -- without loading every tile.
+    for ch in channels:
+
+        y_coords = load_y_coordinates(coords_yaml_by_channel[ch])
+        if len(y_coords) != num_tiles:
+            raise ValueError(
+                f"Coordinates file for channel {ch} has {len(y_coords)} "
+                f"tile entries, but {num_tiles} tiles were discovered."
+            )
+
         sample_path = tile_paths[0]
         sample_vol = _corrected_volume(
             sample_path,
@@ -321,27 +362,26 @@ def pipeline(
         corrected_sz, corrected_sy, corrected_sx = sample_vol.shape
 
         full_x = corrected_sx
-        full_y = num_tiles * corrected_sy - (num_tiles - 1) * overlap
+        full_y = int(round(y_coords[-1])) + corrected_sy
         full_z = corrected_sz
         fullshape = (full_z, full_y, full_x)
 
         out_dir = f"{general_config.out}/{ch}"
-        omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
+
         checkpoint_file = _checkpoint_path(general_config, ch)
         checkpoint = _read_checkpoint(checkpoint_file, -1)
 
         try:
             if checkpoint == -1:
+                omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
                 array = omz.create_array(
                     "0",
                     shape=fullshape,
                     zarr_config=zarr_config,
                     dtype=np.uint16,
                 )
-            else:
-                array = omz["0"]
         except Exception:
-            array = omz["0"]
+            logger.info("already exists")
 
         logger.info(
             "Writing channel %s, level 0 array with shape %s", ch, fullshape
@@ -350,17 +390,13 @@ def pipeline(
         bottom_overlap = None
 
         for index, path in enumerate(tile_paths):
+            gc.collect()
             if index >= checkpoint:
                 omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
                 array = omz["0"]
                 name = tile_name(path)
                 logger.info(f"[{index}] Processing {name}")
 
-                # Build the lazy corrected volume graph for this tile, then
-                # compute it -- one tile is one chunk, so this is the single
-                # point where pixel data for this tile becomes resident in
-                # memory. Tile 0's graph was already built above (to learn the
-                # mosaic geometry), so reuse it instead of building it twice.
                 lazy_vol = sample_vol if index == 0 else _corrected_volume(
                     path,
                     dandiset_id=dandiset_id,
@@ -379,26 +415,43 @@ def pipeline(
                 is_first = index == 0 or index == checkpoint
                 is_last = index == num_tiles - 1
 
-                if (overlap and (not is_first or not is_last)) and num_tiles > 1:
-                    if not is_first:
-                        t = np.linspace(0, 1, overlap)
-                        ramp = (1 - np.cos(np.pi * t)) / 2
-                        ramp_inverse = (1 + np.cos(np.pi * t)) / 2
-                        ramp = ramp[None, :, None]
-                        ramp_inverse = ramp_inverse[None, :, None]
+                ystart = int(round(y_coords[index]))
 
-                        top_overlap = data[:, :overlap, :]
-                        data = data[:, overlap:, :]
+                overlap_with_prev = None
+                if not is_first:
+                    overlap_with_prev = corrected_sy - (
+                        int(round(y_coords[index]))
+                        - int(round(y_coords[index - 1]))
+                    )
+                overlap_with_next = None
+                if not is_last:
+                    overlap_with_next = corrected_sy - (
+                        int(round(y_coords[index + 1]))
+                        - int(round(y_coords[index]))
+                    )
 
-                        blended = bottom_overlap * ramp_inverse + top_overlap * ramp
-                        data = np.concatenate([blended, data], axis=1)
+                if not is_first and overlap_with_prev and overlap_with_prev > 0:
+                    t = np.linspace(0, 1, overlap_with_prev)
+                    ramp = (1 - np.cos(np.pi * t)) / 2
+                    ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                    ramp = ramp[None, :, None]
+                    ramp_inverse = ramp_inverse[None, :, None]
 
-                    if not is_last:
-                        bottom_overlap = data[:, -overlap:, :]
-                        data = data[:, :-overlap, :]
+                    top_overlap = data[:, :overlap_with_prev, :]
+                    data = data[:, overlap_with_prev:, :]
 
-                ystart = index * corrected_sy - \
-                    (index * overlap if index > 0 else 0)
+                    blended = bottom_overlap * ramp_inverse + top_overlap * ramp
+                    data = np.concatenate([blended, data], axis=1)
+
+                if not is_last and overlap_with_next and overlap_with_next > 0:
+                    bottom_overlap = data[:, -overlap_with_next:, :].copy()
+                    data = data[:, :-overlap_with_next, :]
+                elif not is_last:
+                    # No positive overlap with the next tile (e.g. a gap,
+                    # or exactly adjacent tiles) -- nothing to carry
+                    # forward for blending.
+                    bottom_overlap = None
+
                 zstart = 0
 
                 if index > checkpoint:
@@ -412,6 +465,7 @@ def pipeline(
                 logger.info(f"{name} done")
                 _write_checkpoint(checkpoint_file, index)
 
+        gc.collect()
         omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
         array = omz["0"]
         omz.generate_pyramid_staged(
