@@ -497,7 +497,7 @@ class ZarrPythonGroup(ZarrGroup):
                                 arr.shards or arr.chunks).persist()
                             with ProgressBar():
                                 arr._array[ceil(
-                                    z/2):ceil(z2/2), ceil(y/2):ceil(y2/2), ceil(x/2):ceil(x2/2)] = dat2
+                                    z/2):ceil(z2/2), ceil(y/2):ceil(y2/2), ceil(x/2):ceil(x2/2)] = dat2.compute()
                 x_max = ceil(x_max/2)
                 x_min = ceil(x_min/2)
             else:
