@@ -260,8 +260,7 @@ def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
 @pipeline.default
 @autoconfig
 def pipeline(
-    inp_cm1: str,
-    inp_cm2: str,
+    inp: str,
     mip_dir: str,
     yaml_path: str,
     camera_id: int,
@@ -340,7 +339,6 @@ def pipeline(
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
-    inp = inp_cm1 if camera_id == 1 else inp_cm2
     tile_paths = discover_tile_paths(
         inp, camera_id, dandiset_id=dandiset_id, api_key=api_key
     )
