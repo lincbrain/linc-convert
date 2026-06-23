@@ -495,15 +495,9 @@ class ZarrPythonGroup(ZarrGroup):
                                 dat2, ndim, no_pyramid_axis, window)
                             dat2 = dat2.rechunk(
                                 arr.shards or arr.chunks).persist()
-                            slicer = (
-                                slice(ceil(z/2), ceil(z2/2)),
-                                slice(ceil(y/2), ceil(y2/2)),
-                                slice(ceil(x/2), ceil(x2/2)),
-                            )
                             with ProgressBar():
                                 arr._array[ceil(
                                     z/2):ceil(z2/2), ceil(y/2):ceil(y2/2), ceil(x/2):ceil(x2/2)] = dat2
-                                da.to_zarr(dat2, arr._array, region=slicer)
                 x_max = ceil(x_max/2)
                 x_min = ceil(x_min/2)
             else:
