@@ -530,6 +530,7 @@ def pipeline(
             levels=zarr_config.levels,
             copy_config=copy_config,
             copy_zarr_config=zarr_config,
+            checkpoint_path=out_dir+"_pyr_checkpoint.dat"
         )
 
         omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
