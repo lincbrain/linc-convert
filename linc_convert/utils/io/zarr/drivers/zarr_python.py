@@ -466,8 +466,17 @@ class ZarrPythonGroup(ZarrGroup):
             spatial_shape = next_level_shape(spatial_shape, no_pyramid_axis)
             all_shapes.append(spatial_shape)
             logger.info(f"Compute level {lvl} with shape {spatial_shape}")
-            arr = self.create_array_from_base(
-                str(lvl), (*batch_shape, *spatial_shape))
+            try:
+                arr = self.create_array(
+                    str(lvl),
+                    shape=(*batch_shape, *spatial_shape),
+                    zarr_config=copy_zarr_config,
+                    dtype=np.uint16,
+                )
+                # arr = self[str(lvl)]
+            except:
+                arr = self.create_array_from_base(
+                    str(lvl), (*batch_shape, *spatial_shape))
             dat = da.from_array(self[str(lvl - 1)],
                                 chunks=self[str(lvl - 1)].chunks)
             if copy_config is not None:
