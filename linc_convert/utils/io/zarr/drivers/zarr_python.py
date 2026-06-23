@@ -412,7 +412,9 @@ class ZarrPythonGroup(ZarrGroup):
         any_work_done = False
 
         if checkpoint_file is None:
-            checkpoint_file = f"{str(self.store_path).rstrip('/')}_pyramid.checkpoint"
+            store_path = urlparse(str(self.store_path)
+                                  ).path or str(self.store_path)
+            checkpoint_file = f"{store_path.rstrip('/')}_pyramid.checkpoint"
 
         state = self._read_pyramid_checkpoint(checkpoint_file)
 
