@@ -314,59 +314,30 @@ class ZarrPythonGroup(ZarrGroup):
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
 
-    class PyramidCheckpoint:
-        def __init__(self, path: str):
-            self.path = path
-            self.state: Dict[str, Any] = {
-                "completed_levels": [],
-                "windows_done": {},
-                "level_chunks_done": {}
-            }
-            self._load()
+    def _read_pyramid_checkpoint(checkpoint_file: str) -> dict:
+        """Load pyramid-generation checkpoint state, or return a fresh state
+        if no checkpoint file exists yet (or it can't be parsed).
+        """
+        default_state = {
+            "done_x_windows": [],
+            "staged_fallback_done": False,
+            "remaining_levels_done": False,
+        }
+        try:
+            with open(checkpoint_file, "r") as f:
+                state = json.load(f)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError):
+            return default_state
 
-        def _load(self):
-            if os.path.exists(self.path):
-                with open(self.path, "r") as f:
-                    self.state.update(json.load(f))
+        # Be defensive about a partially-written or older-format checkpoint.
+        for key, default_value in default_state.items():
+            state.setdefault(key, default_value)
+        return state
 
-        def save(self):
-            tmp = self.path + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(self.state, f, indent=2)
-            os.replace(tmp, self.path)
-
-        # ---- level tracking ----
-        def is_level_done(self, lvl: int) -> bool:
-            return lvl in self.state["completed_levels"]
-
-        def mark_level_done(self, lvl: int):
-            if lvl not in self.state["completed_levels"]:
-                self.state["completed_levels"].append(lvl)
-                self.save()
-
-        # ---- window tracking ----
-        def is_window_done(self, lvl: int, x_min: int, x_max: int) -> bool:
-            return [x_min, x_max] in self.state["windows_done"].get(str(lvl), [])
-
-        def mark_window_done(self, lvl: int, x_min: int, x_max: int):
-            lvl_key = str(lvl)
-            self.state["windows_done"].setdefault(lvl_key, [])
-            self.state["windows_done"][lvl_key].append([x_min, x_max])
-            self.save()
-
-        # ---- chunk tracking (optional deep resume) ----
-        def chunk_key(self, z, y, x):
-            return f"z{z}_y{y}_x{x}"
-
-        def is_chunk_done(self, lvl, z, y, x):
-            return self.chunk_key(z, y, x) in self.state["level_chunks_done"].get(str(lvl), [])
-
-        def mark_chunk_done(self, lvl, z, y, x):
-            lvl_key = str(lvl)
-            self.state["level_chunks_done"].setdefault(lvl_key, [])
-            self.state["level_chunks_done"][lvl_key].append(
-                self.chunk_key(z, y, x))
-            self.save()
+    def _write_pyramid_checkpoint(checkpoint_file: str, state: dict) -> None:
+        """Persist pyramid-generation checkpoint state."""
+        with open(checkpoint_file, "w") as f:
+            json.dump(state, f)
 
     def generate_pyramid_staged(
         self,
@@ -376,16 +347,57 @@ class ZarrPythonGroup(ZarrGroup):
         no_pyramid_axis: Optional[int] = None,
         copy_config: Optional[GeneralConfig] = None,
         copy_zarr_config: Optional[ZarrConfig] = None,
-        checkpoint_path: Optional[str] = None,
+        checkpoint_file: Optional[str] = None,
     ) -> list[list[int]]:
         """
-        Same as before, but with optional checkpoint/resume support via file path.
+        Generate a pyramid, writing the first two levels 4 x-chunks at a
+        time and the remaining levels in a single pass each.
+
+        Levels 1 and 2 are written in windows of 4 chunks along x (using
+        `generate_pyramid`'s region-by-region path via `copy_config`/
+        `copy_zarr_config`, `x_min`, and `x_max`), one window at a time,
+        covering both levels per window. Any remaining levels (3 and
+        beyond) are then generated all at once, with no x-windowing.
+
+        If interrupted and re-run, this resumes from a checkpoint file:
+        x-windows already written are skipped, and either of the two
+        single-shot passes (the no-`copy_config` levels-1-2 fallback, and
+        the final "remaining levels" pass) are skipped if they already
+        completed. Skipping a completed unit of work here is safe because
+        `create_array`/`create_array_from_base` no longer overwrite an array
+        that already exists -- the checkpoint only avoids redoing work, it
+        isn't needed for correctness.
+
+        Parameters
+        ----------
+        levels : int
+            Total number of pyramid levels to generate. By default, stop
+            when all dimensions are smaller than their corresponding
+            chunk size.
+        ndim : int
+            Number of spatial dimensions.
+        mode : {"mean", "median"}
+            Function to be used for down-sampling, either a callable or
+            mean or median.
+        no_pyramid_axis : int | None
+            Axis to leave unsampled.
+        copy_config : GeneralConfig, optional
+            Output configuration used for the windowed (levels 1-2) path.
+            Required to actually get x-chunked writes; if omitted, levels
+            1-2 fall back to a single full-width call.
+        copy_zarr_config : ZarrConfig, optional
+            Zarr configuration paired with `copy_config`.
+        checkpoint_file : str, optional
+            Path to a checkpoint file used to resume an interrupted run.
+            Defaults to a file derived from this group's own store path
+            if not given.
+
+        Returns
+        -------
+        shapes : list[list[int]]
+            Shapes of each level, from finest to coarsest.
         """
-
-        # ✅ lazy import (so no dependency if unused)
-        ckpt = self.PyramidCheckpoint(
-            checkpoint_path) if checkpoint_path else None
-
+        logger = logging.getLogger("PyramidGenerationStaged")
         base = self["0"]
         chunk_size = base.chunks[-ndim:]
         x_chunk = chunk_size[2]
@@ -395,26 +407,26 @@ class ZarrPythonGroup(ZarrGroup):
             levels = 10
 
         staged_levels = min(2, levels)
-        all_shapes: list[list[int]] = [list(base.shape[-ndim:])]
+        spatial_shape = list(base.shape[-ndim:])
+        all_shapes: list[list[int]] = [spatial_shape]
+        any_work_done = False
 
-        # ---------------------------------------
-        # ✅ Levels 1–2 (windowed)
-        # ---------------------------------------
+        if checkpoint_file is None:
+            checkpoint_file = f"{str(self.store_path).rstrip('/')}_pyramid.checkpoint"
+
+        state = self._read_pyramid_checkpoint(checkpoint_file)
+
         if copy_config is not None and staged_levels > 0:
             window = 64 * x_chunk
-
             for x_min in range(0, full_x, window):
                 x_max = min(full_x, x_min + window)
 
-                # ✅ Skip completed windows
-                if ckpt:
-                    done_lvl1 = ckpt.is_window_done(1, x_min, x_max)
-                    done_lvl2 = ckpt.is_window_done(2, x_min, x_max)
-
-                    if staged_levels == 1 and done_lvl1:
-                        continue
-                    if staged_levels == 2 and done_lvl1 and done_lvl2:
-                        continue
+                if x_min in state["done_x_windows"]:
+                    logger.info(
+                        f"Skipping x-window {x_min}-{x_max} "
+                        f"(already completed per checkpoint)"
+                    )
+                    continue
 
                 all_shapes = self.generate_pyramid(
                     levels=staged_levels,
@@ -426,58 +438,62 @@ class ZarrPythonGroup(ZarrGroup):
                     x_min=x_min,
                     x_max=x_max,
                     level_start=1,
-                    checkpoint_path=checkpoint_path,  # ✅ propagate
                 )
-
-                # ✅ mark window complete
-                if ckpt:
-                    ckpt.mark_window_done(1, x_min, x_max)
-                    if staged_levels >= 2:
-                        ckpt.mark_window_done(2, x_min, x_max)
-
+                any_work_done = True
                 gc.collect()
 
-        # ---------------------------------------
-        # ✅ fallback (no windowing)
-        # ---------------------------------------
+                state["done_x_windows"].append(x_min)
+                self._write_pyramid_checkpoint(checkpoint_file, state)
+
         elif staged_levels > 0:
-            if not ckpt or any(
-                not ckpt.is_level_done(lvl)
-                for lvl in range(1, staged_levels + 1)
-            ):
+            if not state["staged_fallback_done"]:
+                # No copy_config provided: can't take the windowed path,
+                # so just generate levels 1-2 in one go.
                 all_shapes = self.generate_pyramid(
                     levels=staged_levels,
                     ndim=ndim,
                     mode=mode,
                     no_pyramid_axis=no_pyramid_axis,
                     level_start=1,
-                    checkpoint_path=checkpoint_path,
+                )
+                any_work_done = True
+                state["staged_fallback_done"] = True
+                self._write_pyramid_checkpoint(checkpoint_file, state)
+            else:
+                logger.info(
+                    "Skipping levels 1-2 fallback pass "
+                    "(already completed per checkpoint)"
                 )
 
-                if ckpt:
-                    for lvl in range(1, staged_levels + 1):
-                        ckpt.mark_level_done(lvl)
-
-        # ---------------------------------------
-        # ✅ Remaining levels (3+)
-        # ---------------------------------------
         if levels > staged_levels:
-            for lvl in range(staged_levels + 1, levels + 1):
-
-                if ckpt and ckpt.is_level_done(lvl):
-                    continue
-
+            if not state["remaining_levels_done"]:
                 all_shapes = self.generate_pyramid(
                     levels=levels,
                     ndim=ndim,
                     mode=mode,
                     no_pyramid_axis=no_pyramid_axis,
-                    level_start=lvl,
-                    checkpoint_path=checkpoint_path,
+                    level_start=staged_levels + 1,
+                )
+                any_work_done = True
+                state["remaining_levels_done"] = True
+                self._write_pyramid_checkpoint(checkpoint_file, state)
+            else:
+                logger.info(
+                    "Skipping remaining-levels pass "
+                    "(already completed per checkpoint)"
                 )
 
-                if ckpt:
-                    ckpt.mark_level_done(lvl)
+        if not any_work_done:
+            # Every unit of work was already done on a previous run, so
+            # `all_shapes` was never reassigned from a real call -- rebuild
+            # it ourselves using the same per-level shape progression
+            # `generate_pyramid` relies on, so the return value is still
+            # correct.
+            shape = spatial_shape
+            all_shapes = [shape]
+            for _ in range(1, levels + 1):
+                shape = next_level_shape(shape, no_pyramid_axis)
+                all_shapes.append(shape)
 
         return all_shapes
 
