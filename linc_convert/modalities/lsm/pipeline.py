@@ -412,115 +412,115 @@ def pipeline(
         # previous tile, one small x-slab at a time, in the same x-chunk
         # order used below -- never a full-tile-width array.
         bottom_overlap_slabs: List[Optional[np.ndarray]] = []
+        if len(tile_paths) > checkpoint + 1:
+            for index, path in enumerate(tile_paths):
+                gc.collect()
+                if index >= checkpoint:
+                    omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
+                    array = omz["0"]
+                    name = tile_name(path)
+                    logger.info(f"[{index}] Processing {name}")
 
-        for index, path in enumerate(tile_paths):
-            gc.collect()
-            if index >= checkpoint:
-                omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
-                array = omz["0"]
-                name = tile_name(path)
-                logger.info(f"[{index}] Processing {name}")
-
-                lazy_vol = sample_vol if index == 0 else _corrected_volume(
-                    path,
-                    dandiset_id=dandiset_id,
-                    api_key=api_key,
-                    mip_dir=mip_dir,
-                    name=name,
-                    camera_id=camera_id,
-                    ch=ch,
-                    cam_info=cam_info,
-                    scan_parameters=scan_parameters,
-                )
-
-                is_first = index == 0 or index == checkpoint
-                is_last = index == num_tiles - 1
-
-                ystart = int(round(y_coords[index]))
-
-                overlap_with_prev = None
-                if not is_first:
-                    overlap_with_prev = corrected_sy - (
-                        int(round(y_coords[index]))
-                        - int(round(y_coords[index - 1]))
-                    )
-                overlap_with_next = None
-                if not is_last:
-                    overlap_with_next = corrected_sy - (
-                        int(round(y_coords[index + 1]))
-                        - int(round(y_coords[index]))
+                    lazy_vol = sample_vol if index == 0 else _corrected_volume(
+                        path,
+                        dandiset_id=dandiset_id,
+                        api_key=api_key,
+                        mip_dir=mip_dir,
+                        name=name,
+                        camera_id=camera_id,
+                        ch=ch,
+                        cam_info=cam_info,
+                        scan_parameters=scan_parameters,
                     )
 
-                zstart = 0
-                new_bottom_overlap_slabs: List[Optional[np.ndarray]] = []
+                    is_first = index == 0 or index == checkpoint
+                    is_last = index == num_tiles - 1
 
-                x_starts = list(range(0, corrected_sx, x_chunk_size))
-                for slab_idx, x0 in enumerate(x_starts):
-                    x1 = min(corrected_sx, x0 + x_chunk_size)
+                    ystart = int(round(y_coords[index]))
 
-                    # Only this slab's worth of the tile is computed --
-                    # not the whole tile.
-                    with ProgressBar():
-                        data = lazy_vol[:, :, x0:x1].compute()
-
-                    bottom_overlap_slab = (
-                        bottom_overlap_slabs[slab_idx]
-                        if bottom_overlap_slabs
-                        else None
-                    )
-
-                    if (
-                        not is_first
-                        and overlap_with_prev
-                        and overlap_with_prev > 0
-                    ):
-                        t = np.linspace(0, 1, overlap_with_prev)
-                        ramp = (1 - np.cos(np.pi * t)) / 2
-                        ramp_inverse = (1 + np.cos(np.pi * t)) / 2
-                        ramp = ramp[None, :, None]
-                        ramp_inverse = ramp_inverse[None, :, None]
-
-                        top_overlap = data[:, :overlap_with_prev, :]
-                        data = data[:, overlap_with_prev:, :]
-
-                        blended = (
-                            bottom_overlap_slab * ramp_inverse
-                            + top_overlap * ramp
+                    overlap_with_prev = None
+                    if not is_first:
+                        overlap_with_prev = corrected_sy - (
+                            int(round(y_coords[index]))
+                            - int(round(y_coords[index - 1]))
                         )
-                        data = np.concatenate([blended, data], axis=1)
-
-                    if (
-                        not is_last
-                        and overlap_with_next
-                        and overlap_with_next > 0
-                    ):
-                        new_bottom_overlap_slabs.append(
-                            data[:, -overlap_with_next:, :].copy()
+                    overlap_with_next = None
+                    if not is_last:
+                        overlap_with_next = corrected_sy - (
+                            int(round(y_coords[index + 1]))
+                            - int(round(y_coords[index]))
                         )
-                        data = data[:, :-overlap_with_next, :]
-                    elif not is_last:
-                        # No positive overlap with the next tile -- nothing
-                        # to carry forward for this slab.
-                        new_bottom_overlap_slabs.append(None)
 
-                    if index > checkpoint:
-                        logger.info(
-                            f"Storing tile {index} at y:{ystart}, "
-                            f"x:{x0}-{x1}"
+                    zstart = 0
+                    new_bottom_overlap_slabs: List[Optional[np.ndarray]] = []
+
+                    x_starts = list(range(0, corrected_sx, x_chunk_size))
+                    for slab_idx, x0 in enumerate(x_starts):
+                        x1 = min(corrected_sx, x0 + x_chunk_size)
+
+                        # Only this slab's worth of the tile is computed --
+                        # not the whole tile.
+                        with ProgressBar():
+                            data = lazy_vol[:, :, x0:x1].compute()
+
+                        bottom_overlap_slab = (
+                            bottom_overlap_slabs[slab_idx]
+                            if bottom_overlap_slabs
+                            else None
                         )
-                        array[
-                            zstart: zstart + data.shape[0],
-                            ystart: ystart + data.shape[1],
-                            x0:x1,
-                        ] = data
 
-                    del data
-                    gc.collect()
+                        if (
+                            not is_first
+                            and overlap_with_prev
+                            and overlap_with_prev > 0
+                        ):
+                            t = np.linspace(0, 1, overlap_with_prev)
+                            ramp = (1 - np.cos(np.pi * t)) / 2
+                            ramp_inverse = (1 + np.cos(np.pi * t)) / 2
+                            ramp = ramp[None, :, None]
+                            ramp_inverse = ramp_inverse[None, :, None]
 
-                bottom_overlap_slabs = new_bottom_overlap_slabs
+                            top_overlap = data[:, :overlap_with_prev, :]
+                            data = data[:, overlap_with_prev:, :]
 
-                logger.info(f"{name} done")
-                _write_checkpoint(checkpoint_file, index)
+                            blended = (
+                                bottom_overlap_slab * ramp_inverse
+                                + top_overlap * ramp
+                            )
+                            data = np.concatenate([blended, data], axis=1)
+
+                        if (
+                            not is_last
+                            and overlap_with_next
+                            and overlap_with_next > 0
+                        ):
+                            new_bottom_overlap_slabs.append(
+                                data[:, -overlap_with_next:, :].copy()
+                            )
+                            data = data[:, :-overlap_with_next, :]
+                        elif not is_last:
+                            # No positive overlap with the next tile -- nothing
+                            # to carry forward for this slab.
+                            new_bottom_overlap_slabs.append(None)
+
+                        if index > checkpoint:
+                            logger.info(
+                                f"Storing tile {index} at y:{ystart}, "
+                                f"x:{x0}-{x1}"
+                            )
+                            array[
+                                zstart: zstart + data.shape[0],
+                                ystart: ystart + data.shape[1],
+                                x0:x1,
+                            ] = data
+
+                        del data
+                        gc.collect()
+
+                    bottom_overlap_slabs = new_bottom_overlap_slabs
+
+                    logger.info(f"{name} done")
+                    _write_checkpoint(checkpoint_file, index)
 
         gc.collect()
         omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
