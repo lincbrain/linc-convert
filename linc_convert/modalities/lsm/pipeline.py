@@ -24,6 +24,7 @@ Assumptions baked into this version:
   channel) rather than a single constant overlap value.
 """
 
+from dataclasses import replace
 import gc
 import getpass
 import logging
@@ -524,8 +525,7 @@ def pipeline(
         gc.collect()
         omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
         array = omz["0"]
-        copy_config = general_config.copy()
-        copy_config.out = out_dir
+        copy_config = replace(general_config, out=out_dir)
         omz.generate_pyramid_staged(
             levels=zarr_config.levels,
             copy_config=copy_config,
