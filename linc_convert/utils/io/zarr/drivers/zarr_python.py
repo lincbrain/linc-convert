@@ -485,7 +485,7 @@ class ZarrPythonGroup(ZarrGroup):
                             logger.info(
                                 f"writting pyramid level {lvl}, chunks starting at {z} {y} {x}")
                             x2 = min(x_max, x + chunks[2]*64)
-                            y2 = min(dat.shape[1], y + chunks[1]*32)
+                            y2 = min(dat.shape[1], y + chunks[1]*128)
                             z2 = min(dat.shape[0], z + chunks[0]*8)
                             dat2 = da.from_array(ZarrPythonGroup.from_config(
                                 copy_config.out, copy_zarr_config)[str(lvl - 1)],
