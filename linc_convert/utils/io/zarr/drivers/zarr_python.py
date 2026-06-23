@@ -367,7 +367,7 @@ class ZarrPythonGroup(ZarrGroup):
         all_shapes: list[list[int]] = [list(base.shape[-ndim:])]
 
         if copy_config is not None and staged_levels > 0:
-            window = 32 * x_chunk
+            window = 64 * x_chunk
             for x_min in range(0, full_x, window):
                 x_max = min(full_x, x_min + window)
                 all_shapes = self.generate_pyramid(
@@ -479,14 +479,14 @@ class ZarrPythonGroup(ZarrGroup):
                     chunks[1] = chunks[1][0]
                 if isinstance(dat.chunks[0], Tuple):
                     chunks[0] = chunks[0][0]
-                for x in range(x_min, x_max, chunks[2]*32):
-                    for y in range(0, dat.shape[1], chunks[1]*16):
-                        for z in range(0, dat.shape[0], chunks[0]*4):
+                for x in range(x_min, x_max, chunks[2]*64):
+                    for y in range(0, dat.shape[1], chunks[1]*32):
+                        for z in range(0, dat.shape[0], chunks[0]*8):
                             logger.info(
                                 f"writting pyramid level {lvl}, chunks starting at {z} {y} {x}")
-                            x2 = min(x_max, x + chunks[2]*32)
-                            y2 = min(dat.shape[1], y + chunks[1]*16)
-                            z2 = min(dat.shape[0], z + chunks[0]*4)
+                            x2 = min(x_max, x + chunks[2]*64)
+                            y2 = min(dat.shape[1], y + chunks[1]*32)
+                            z2 = min(dat.shape[0], z + chunks[0]*8)
                             dat2 = da.from_array(ZarrPythonGroup.from_config(
                                 copy_config.out, copy_zarr_config)[str(lvl - 1)],
                                 chunks=self[str(lvl - 1)].chunks)
