@@ -473,10 +473,8 @@ class ZarrPythonGroup(ZarrGroup):
                     zarr_config=copy_zarr_config,
                     dtype=np.uint16,
                 )
-                # arr = self[str(lvl)]
             except:
-                arr = self.create_array_from_base(
-                    str(lvl), (*batch_shape, *spatial_shape))
+                arr = self[str(lvl)]
             dat = da.from_array(self[str(lvl - 1)],
                                 chunks=self[str(lvl - 1)].chunks)
             if copy_config is not None:
