@@ -20,6 +20,7 @@ from typing import (
     Union,
     Unpack,
 )
+from urllib.parse import urlparse
 
 import dask.array as da
 import numpy as np
