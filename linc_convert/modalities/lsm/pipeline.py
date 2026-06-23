@@ -524,9 +524,11 @@ def pipeline(
         gc.collect()
         omz = ZarrPythonGroup.from_config(out_dir, zarr_config)
         array = omz["0"]
+        copy_config = general_config.copy()
+        copy_config.out = out_dir
         omz.generate_pyramid_staged(
             levels=zarr_config.levels,
-            copy_config=general_config,
+            copy_config=copy_config,
             copy_zarr_config=zarr_config,
         )
 
