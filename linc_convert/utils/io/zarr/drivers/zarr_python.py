@@ -314,7 +314,7 @@ class ZarrPythonGroup(ZarrGroup):
         """Open a Zarr group."""
         return cls(zarr.open_group(*args, **kwargs))
 
-    def _read_pyramid_checkpoint(checkpoint_file: str) -> dict:
+    def _read_pyramid_checkpoint(self, checkpoint_file: str) -> dict:
         """Load pyramid-generation checkpoint state, or return a fresh state
         if no checkpoint file exists yet (or it can't be parsed).
         """
@@ -334,7 +334,7 @@ class ZarrPythonGroup(ZarrGroup):
             state.setdefault(key, default_value)
         return state
 
-    def _write_pyramid_checkpoint(checkpoint_file: str, state: dict) -> None:
+    def _write_pyramid_checkpoint(self, checkpoint_file: str, state: dict) -> None:
         """Persist pyramid-generation checkpoint state."""
         with open(checkpoint_file, "w") as f:
             json.dump(state, f)
