@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 
+import dask
 import dask.array as da
 import numpy as np
 from dask_image.ndinterp import affine_transform
@@ -10,72 +11,48 @@ from scipy.ndimage import convolve
 # ---------------------------------------------------------------------
 
 
-def compute_corr_zy_from_pixel_mask(
-    vol: da.Array,
-    mask: np.ndarray,
-    tissue_frac_min: float,
-    threshold: float,
-    kernel_size: int = 5,
+def _corr_zy_postprocess(
+    corr: np.ndarray,
+    counts: np.ndarray,
+    min_pixels: int,
+    kernel_size: int,
 ) -> np.ndarray:
     """
-    Compute a (Z, Y) intensity correction map from a 3D volume.
+    Numpy-only post-processing for the (Z, Y) correction map.
 
-    The workflow:
-    1. Mask invalid pixels
-    2. Remove low-intensity values
-    3. Collapse along X using median
-    4. Filter low-quality rows
-    5. Apply 2D smoothing
+    This is the part of the correction-map computation that can't be
+    expressed as plain dask-array operations: boolean-indexed in-place
+    assignment, a scalar fallback derived from a global nanmedian, and
+    2D convolution via `scipy.ndimage`. It's called through
+    `dask.delayed` on the *lazy* `corr`/`counts` dask arrays (see
+    `compute_corr_zy_from_pixel_mask`), so it becomes one node in the
+    same task graph as the rest of the correction pipeline rather than
+    a separate eager step -- this lets the caller compute the
+    correction map and the corrected volume together, in a single pass
+    over the source data, instead of two independent passes.
 
     Parameters
     ----------
-    vol : dask.array.Array
-        Input volume with shape (Z, Y, X).
-    mask : np.ndarray
-        Binary mask of shape (Y, X) or (Z, Y, X).
-    tissue_frac_min : float
-        Minimum fraction of valid pixels required per row.
-    threshold : float
-        Intensity threshold below which values are ignored.
-    kernel_size : int, default=5
-        Size of smoothing kernel.
+    corr : np.ndarray
+        (Z, Y) median intensity per row (already collapsed over X).
+    counts : np.ndarray
+        (Z, Y) count of valid (finite, above-threshold) pixels per row.
+    min_pixels : int
+        Minimum number of valid pixels required per row (rows below
+        this are treated as low-quality and replaced with a fallback).
+    kernel_size : int
+        Size of the smoothing kernel.
 
     Returns
     -------
     np.ndarray
-        Correction map of shape (Z, Y).
+        Smoothed (Z, Y) correction map, scaled by 1/1000, float32.
     """
-    vol = vol.astype(np.float32)
-    Z, Y, X = vol.shape
-
-    # -------------------------
-    # Broadcast mask
-    # -------------------------
-    mask_da = da.from_array(mask, chunks=vol.chunks[1:])
-
-    if mask.shape == (Y, X):
-        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
-    elif mask.shape != (Z, Y, X):
-        raise ValueError(
-            f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
-
-    # -------------------------
-    # Apply mask + threshold
-    # -------------------------
-    masked = da.where(mask_da, vol, np.nan)
-    masked = da.where((masked < threshold) | ~
-                      da.isfinite(masked), np.nan, masked)
-
-    # Collapse along X
-    corr = da.nanmedian(masked, axis=2)
-    counts = da.sum(da.isfinite(masked), axis=2)
-
-    corr, counts = da.compute(corr, counts)
+    corr = corr.copy()
 
     # -------------------------
     # Remove low-quality rows
     # -------------------------
-    min_pixels = int(tissue_frac_min * X)
     corr[counts < min_pixels] = np.nan
 
     valid_per_z = np.sum(np.isfinite(corr), axis=1)
@@ -106,9 +83,88 @@ def compute_corr_zy_from_pixel_mask(
     return (corr_smooth / 1000).astype(np.float32)
 
 
+def compute_corr_zy_from_pixel_mask(
+    vol: da.Array,
+    mask: np.ndarray,
+    tissue_frac_min: float,
+    threshold: float,
+    kernel_size: int = 5,
+) -> da.Array:
+    """
+    Compute a (Z, Y) intensity correction map from a 3D volume, lazily.
+
+    The workflow:
+    1. Mask invalid pixels
+    2. Remove low-intensity values
+    3. Collapse along X using median
+    4. Filter low-quality rows
+    5. Apply 2D smoothing
+
+    This stays entirely lazy: it returns a dask array, built from a
+    `dask.delayed` node wrapping the small amount of numpy-only
+    post-processing (boolean masking, the global-fallback nanmedian, and
+    `scipy.ndimage.convolve`, none of which have a natural dask-array
+    form). Nothing is read from `vol` until the caller actually calls
+    `.compute()` -- and if the caller computes this correction map
+    together with other outputs derived from the same `vol` (as
+    `stripe_skew_corr` does), dask's scheduler shares the upstream
+    read/mask/reduction work between them instead of repeating it.
+
+    Parameters
+    ----------
+    vol : dask.array.Array
+        Input volume with shape (Z, Y, X).
+    mask : np.ndarray
+        Binary mask of shape (Y, X) or (Z, Y, X).
+    tissue_frac_min : float
+        Minimum fraction of valid pixels required per row.
+    threshold : float
+        Intensity threshold below which values are ignored.
+    kernel_size : int, default=5
+        Size of smoothing kernel.
+
+    Returns
+    -------
+    dask.array.Array
+        Lazy correction map of shape (Z, Y), float32.
+    """
+    vol = vol.astype(np.float32)
+    Z, Y, X = vol.shape
+
+    # -------------------------
+    # Broadcast mask
+    # -------------------------
+    mask_da = da.from_array(mask, chunks=vol.chunks[1:])
+
+    if mask.shape == (Y, X):
+        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
+    elif mask.shape != (Z, Y, X):
+        raise ValueError(
+            f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
+
+    # -------------------------
+    # Apply mask + threshold
+    # -------------------------
+    masked = da.where(mask_da, vol, np.nan)
+    masked = da.where((masked < threshold) | ~
+                      da.isfinite(masked), np.nan, masked)
+
+    # Collapse along X -- stays lazy.
+    corr = da.nanmedian(masked, axis=2)
+    counts = da.sum(da.isfinite(masked), axis=2)
+
+    min_pixels = int(tissue_frac_min * X)
+
+    corr_smooth = dask.delayed(_corr_zy_postprocess)(
+        corr, counts, min_pixels, kernel_size
+    )
+
+    return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
+
+
 def apply_corr_zy_lazy(
     vol: da.Array,
-    corr_zy: np.ndarray,
+    corr_zy: "da.Array | np.ndarray",
     eps: float = 1e-6,
 ) -> da.Array:
     """
@@ -118,8 +174,9 @@ def apply_corr_zy_lazy(
     ----------
     vol : dask.array.Array
         Input volume (Z, Y, X).
-    corr_zy : np.ndarray
-        Correction map (Z, Y).
+    corr_zy : dask.array.Array or np.ndarray
+        Correction map (Z, Y). May be a lazy dask array (the common case)
+        or an already-computed numpy array.
     eps : float, default=1e-6
         Small value to avoid division by zero.
 
@@ -130,7 +187,10 @@ def apply_corr_zy_lazy(
     """
     vol = vol.astype(np.float32)
 
-    corr_da = da.from_array(corr_zy.astype(np.float32))
+    if isinstance(corr_zy, np.ndarray):
+        corr_da = da.from_array(corr_zy.astype(np.float32))
+    else:
+        corr_da = corr_zy.astype(np.float32)
     corr_da = corr_da[:, :, None]  # (Z, Y, 1)
 
     corrected = vol / (corr_da + eps)
@@ -149,6 +209,12 @@ def skew_correction_affine_dask(
 ) -> da.Array:
     """
     Apply shear-based skew correction to a volume.
+
+    The shear couples only Z and X (output X depends on input Z; output
+    Y and Z each depend only on their own input axis) -- so this is
+    always safe to apply to any Y-range of a volume independently; it
+    never needs neighboring Y data to produce correct output for the
+    rows it's given.
 
     Parameters
     ----------
@@ -247,6 +313,11 @@ def skew_correct_volume_lazy(
     - transpose to (Y,Z,X)
     - affine shear correction
     - transpose back
+
+    This is correct on any Y-slice of a tile independently -- the shear
+    never mixes Y with Z or X, so callers don't need to pass any
+    position/offset information for it to behave correctly on a partial
+    Y-range; whatever rows are in `vol` are corrected as themselves.
 
     Parameters
     ----------
@@ -378,12 +449,27 @@ def stripe_skew_corr(
     3. Apply correction
     4. Apply skew correction
 
+    The correction map (step 1) and the corrected output (steps 2-4) are
+    built as a single lazy dask graph sharing the same source `vol` --
+    nothing is read from `vol` until the caller calls `.compute()` on
+    the returned array, at which point the source is read once, not
+    twice (the correction map doesn't force its own separate eager pass
+    over the data).
+
+    `vol` and `mask` may be the whole tile or any Y-slice of it -- none
+    of these four steps mix Y with Z or X, so this is correct (not an
+    approximation) on a partial Y-range, with one caveat: the "bad row"
+    fallback value and edge-smoothing kernel inside the correction-map
+    step use statistics over whatever Y-range they're given, so calling
+    this per Y-chunk uses chunk-local statistics rather than whole-tile
+    statistics for that part specifically.
+
     Parameters
     ----------
     vol : dask.array.Array
-        Input volume (Z, Y, X).
+        Input volume (Z, Y, X), or a Y-slice of it.
     mask : np.ndarray
-        Binary mask.
+        Binary mask, matching `vol`'s Y-range.
     threshold : float
         Intensity threshold.
     camera_id : int
