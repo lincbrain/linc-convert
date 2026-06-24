@@ -150,7 +150,7 @@ def compute_corr_zy_from_pixel_mask(
                       da.isfinite(masked), np.nan, masked)
 
     # Collapse along X -- stays lazy.
-    corr = da.nanmedian(masked, axis=2)
+    corr = da.nanmedian(masked[:, :, ::8], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
 
     min_pixels = int(tissue_frac_min * X)
