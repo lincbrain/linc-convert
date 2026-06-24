@@ -399,6 +399,8 @@ def pipeline(
 
     for ch in channels:
 
+        channel_timer = time.time()
+
         y_coords = load_y_coordinates(coords_yaml_by_channel[ch])
         if len(y_coords) != num_tiles:
             raise ValueError(
@@ -473,7 +475,9 @@ def pipeline(
 
                 name = tile_name(path)
                 logger.info(f"[{index}] Processing {name}")
+                tile_timer = time.time()
 
+                open_timer = time.time()
                 if index == 0:
                     raw_vol, mask, thr = (
                         sample_raw_vol, sample_mask, sample_thr
@@ -488,6 +492,10 @@ def pipeline(
                         ch=ch,
                         cam_info=cam_info,
                     )
+                logger.info(
+                    f"[{index}] open reader + mask/threshold: "
+                    f"{time.time() - open_timer:.2f}s"
+                )
 
                 is_first = index == 0 or index == checkpoint
                 is_last = index == num_tiles - 1
@@ -534,9 +542,12 @@ def pipeline(
                         y0, y1,
                     )
 
+                    compute_timer = time.time()
                     with ProgressBar():
                         data = lazy_chunk.compute()  # plain numpy array
+                    compute_elapsed = time.time() - compute_timer
 
+                    blend_timer = time.time()
                     # Blend the leading edge of this chunk if it falls
                     # within [0, overlap_with_prev).
                     if overlap_with_prev > 0 and y0 < overlap_with_prev:
@@ -548,6 +559,7 @@ def pipeline(
                             carry_slice * ramp_inv_slice
                             + data[:, :blend_len, :] * ramp_slice
                         )
+                    blend_elapsed = time.time() - blend_timer
 
                     # Split this chunk into what's safe to write now vs.
                     # what must be withheld (trailing overlap with the
@@ -562,21 +574,27 @@ def pipeline(
                             data[:, :split, :], data[:, split:, :]
                         )
 
+                    out_ystart = ystart + y0
+                    write_elapsed = 0.0
                     if (
                         to_write is not None
                         and to_write.shape[1] > 0
                         and index > checkpoint
                     ):
-                        out_ystart = ystart + y0
-                        logger.info(
-                            f"Storing tile {index} at y:{out_ystart}, "
-                            f"chunk y0:{y0}-{y1}"
-                        )
+                        write_timer = time.time()
                         array[
                             zstart: zstart + to_write.shape[0],
                             out_ystart: out_ystart + to_write.shape[1],
                             0: to_write.shape[2],
                         ] = to_write
+                        write_elapsed = time.time() - write_timer
+
+                    logger.info(
+                        f"[{index}] chunk y0:{y0}-{y1} (out y:{out_ystart}) -- "
+                        f"compute: {compute_elapsed:.2f}s, "
+                        f"blend: {blend_elapsed:.2f}s, "
+                        f"write: {write_elapsed:.2f}s"
+                    )
 
                     if to_withhold is not None:
                         trailing_buffer = (
@@ -593,15 +611,22 @@ def pipeline(
 
                 carry = trailing_buffer
 
-                logger.info(f"{name} done")
+                logger.info(
+                    f"{name} done in {time.time() - tile_timer:.2f}s"
+                )
                 _write_checkpoint(checkpoint_file, index)
 
         gc.collect()
         copy_config = replace(general_config, out=out_dir)
+        pyramid_timer = time.time()
         omz.generate_pyramid_staged(
             levels=zarr_config.levels,
             copy_config=copy_config,
             copy_zarr_config=zarr_config,
+        )
+        logger.info(
+            f"Pyramid generation for channel {ch}: "
+            f"{(time.time() - pyramid_timer) / 60:.2f} minutes"
         )
 
         omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
@@ -614,6 +639,11 @@ def pipeline(
                 nii_config=nii_config,
             )
             omz.write_nifti_header(header)
+
+        logger.info(
+            f"Channel {ch} completed in "
+            f"{(time.time() - channel_timer) / 60:.2f} minutes"
+        )
 
     end_timer = time.time()
     length = end_timer - start_timer
