@@ -38,6 +38,7 @@ import gc
 import getpass
 import logging
 import os
+import random
 import time
 from dataclasses import replace
 from glob import glob
@@ -53,8 +54,10 @@ from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
+    compute_corr_zy_from_pixel_mask,
     crop_volume_channels,
     stripe_skew_corr,
+    stripe_skew_corr_apply,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
     camera_channel_map,
@@ -231,9 +234,111 @@ def _open_raw_channel_volume_and_mask(
     return vol_channels[ch], masks[ch], thrs[ch]
 
 
+def _sample_global_corr_zy(
+    tile_paths: List[str],
+    *,
+    dandiset_id: Optional[str],
+    api_key: Optional[str],
+    mip_dir: str,
+    ch: str,
+    cam_info,
+    camera_id: int,
+    scan_parameters: dict,
+    sample_pool_start: int = 10,
+    sample_pool_end: int = 20,
+    num_samples: int = 3,
+    seed: int = 0,
+) -> np.ndarray:
+    """
+    Estimate one (Z, Y) stripe-correction map by averaging it over a
+    handful of randomly-sampled tiles, instead of computing it fresh for
+    every tile.
+
+    This assumes the correction map captures a property of the imaging
+    system (e.g. illumination striping) that's stable across tiles,
+    rather than something that depends heavily on each tile's own
+    tissue content -- under that assumption, computing it once (from a
+    small, averaged sample) and reusing it everywhere is both faster
+    (it removes a full (Z, Y, X) reduction from every tile but the
+    sampled few) and likely *more* robust than any single tile's
+    estimate, since averaging reduces noise.
+
+    The sampled tile indices are chosen with a fixed seed, so the same
+    tiles are picked every run for a given pool/count/seed -- this
+    matters for the checkpoint/resume system: a resumed run must use the
+    same correction map as the original run, or tiles written before
+    and after a resume would be corrected inconsistently.
+
+    Parameters
+    ----------
+    tile_paths : list of str
+        All tile paths for this camera, in order.
+    dandiset_id, api_key, mip_dir, ch, cam_info, camera_id, scan_parameters
+        Passed straight through to the per-tile open/correction-map
+        helpers.
+    sample_pool_start, sample_pool_end : int, default=10, 20
+        Inclusive range of tile indices to sample from. Clamped to the
+        available tile indices if the pool would otherwise be out of
+        range (e.g. fewer than `sample_pool_end` tiles total).
+    num_samples : int, default=3
+        Number of distinct tiles to sample and average.
+    seed : int, default=0
+        Seed for the (deterministic, reproducible) random tile
+        selection.
+
+    Returns
+    -------
+    np.ndarray
+        Averaged (Z, Y) correction map, float32.
+    """
+    num_tiles = len(tile_paths)
+    pool_start = max(0, min(sample_pool_start, num_tiles - 1))
+    pool_end = max(pool_start, min(sample_pool_end, num_tiles - 1))
+    pool = list(range(pool_start, pool_end + 1))
+
+    if len(pool) < num_samples:
+        logger.info(
+            f"Sample pool [{pool_start}, {pool_end}] has only "
+            f"{len(pool)} tile(s); using all of them instead of "
+            f"{num_samples}."
+        )
+        sample_indices = pool
+    else:
+        rng = random.Random(seed)
+        sample_indices = sorted(rng.sample(pool, num_samples))
+
+    logger.info(
+        f"Sampling correction map from tiles at indices {sample_indices} "
+        f"(channel {ch})"
+    )
+
+    corr_maps = []
+    for idx in sample_indices:
+        path = tile_paths[idx]
+        name = os.path.basename(
+            path.rstrip("/").replace(".ome.zarr", "")
+        )
+        vol, mask, thr = _open_raw_channel_volume_and_mask(
+            path,
+            dandiset_id=dandiset_id,
+            api_key=api_key,
+            mip_dir=mip_dir,
+            name=name,
+            ch=ch,
+            cam_info=cam_info,
+        )
+        corr_lazy = compute_corr_zy_from_pixel_mask(vol, mask, 0.02, thr)
+        with ProgressBar():
+            corr_maps.append(corr_lazy.compute())
+        del vol, mask
+        gc.collect()
+
+    return np.mean(np.stack(corr_maps, axis=0), axis=0).astype(np.float32)
+
+
 def _corrected_y_chunk(
     vol: da.Array,
-    mask: np.ndarray,
+    corr_zy: np.ndarray,
     threshold: float,
     camera_id: int,
     scan_parameters: dict,
@@ -241,22 +346,22 @@ def _corrected_y_chunk(
     y1: int,
 ) -> da.Array:
     """Build the lazy corrected dask array for one Y-chunk [y0, y1) of an
-    already-opened tile/channel volume.
+    already-opened tile/channel volume, using an already-computed (Z, Y)
+    correction map (e.g. from `_sample_global_corr_zy`) rather than
+    computing one from this chunk's own data.
 
-    `vol` and `mask` are sliced to [y0, y1) here, then run through the
-    full correction pipeline -- since none of the correction steps mix Y
-    with Z or X, this is exact (not an approximation) for whatever rows
-    are in this chunk; no absolute-position information is needed by the
-    correction itself, only for slicing the right rows out of `vol` and
-    `mask` in the first place.
+    `vol` and `corr_zy` are sliced to [y0, y1) here, then run through
+    the threshold/apply/skew-correct pipeline -- since none of these
+    steps mix Y with Z or X, this is exact for whatever rows are in this
+    chunk.
 
     Nothing is read from `vol` until the caller calls `.compute()`.
     """
     vol_chunk = vol[:, y0:y1, :]
-    mask_chunk = mask[:, y0:y1, :] if mask.ndim == 3 else mask[y0:y1, :]
+    corr_chunk = corr_zy[:, y0:y1]
 
-    return stripe_skew_corr(
-        vol_chunk, mask_chunk, threshold, camera_id, scan_parameters
+    return stripe_skew_corr_apply(
+        vol_chunk, corr_chunk, threshold, camera_id, scan_parameters
     )
 
 
@@ -425,8 +530,30 @@ def pipeline(
             sample_raw_vol, sample_mask, sample_thr, camera_id, scan_parameters
         )
         corrected_sz, corrected_sy, corrected_sx = sample_corrected.shape
-        del sample_corrected
+        del sample_corrected, sample_raw_vol, sample_mask
         gc.collect()
+
+        # --- Estimate one global (Z, Y) correction map from a handful of
+        # sampled tiles, instead of computing it fresh for every tile.
+        # This assumes the stripe pattern is a stable property of the
+        # imaging system (confirmed), so a small averaged sample
+        # generalizes across tiles while skipping a full (Z, Y, X)
+        # reduction for every tile but the few sampled.
+        global_corr_timer = time.time()
+        global_corr_zy = _sample_global_corr_zy(
+            tile_paths,
+            dandiset_id=dandiset_id,
+            api_key=api_key,
+            mip_dir=mip_dir,
+            ch=ch,
+            cam_info=cam_info,
+            camera_id=camera_id,
+            scan_parameters=scan_parameters,
+        )
+        logger.info(
+            f"Global correction map sampled in "
+            f"{time.time() - global_corr_timer:.2f}s"
+        )
 
         full_x = corrected_sx
         full_y = int(round(y_coords[-1])) + corrected_sy
@@ -478,20 +605,15 @@ def pipeline(
                 tile_timer = time.time()
 
                 open_timer = time.time()
-                if index == 0:
-                    raw_vol, mask, thr = (
-                        sample_raw_vol, sample_mask, sample_thr
-                    )
-                else:
-                    raw_vol, mask, thr = _open_raw_channel_volume_and_mask(
-                        path,
-                        dandiset_id=dandiset_id,
-                        api_key=api_key,
-                        mip_dir=mip_dir,
-                        name=name,
-                        ch=ch,
-                        cam_info=cam_info,
-                    )
+                raw_vol, _mask_unused, thr = _open_raw_channel_volume_and_mask(
+                    path,
+                    dandiset_id=dandiset_id,
+                    api_key=api_key,
+                    mip_dir=mip_dir,
+                    name=name,
+                    ch=ch,
+                    cam_info=cam_info,
+                )
                 logger.info(
                     f"[{index}] open reader + mask/threshold: "
                     f"{time.time() - open_timer:.2f}s"
@@ -538,8 +660,8 @@ def pipeline(
                     y1 = min(corrected_sy, y0 + y_chunk_size)
 
                     lazy_chunk = _corrected_y_chunk(
-                        raw_vol, mask, thr, camera_id, scan_parameters,
-                        y0, y1,
+                        raw_vol, global_corr_zy, thr, camera_id,
+                        scan_parameters, y0, y1,
                     )
 
                     compute_timer = time.time()
