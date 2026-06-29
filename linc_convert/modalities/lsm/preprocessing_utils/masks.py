@@ -41,7 +41,7 @@ def compute_tissue_mask(
     # -------------------------
     # Use bright region at right edge (heuristic)
     edge_region = img_f[::downsample, -500:]
-    threshold = np.percentile(edge_region, 98)*1.1
+    threshold = min(np.percentile(edge_region, 98)*1.1, 130)
 
     # Downsampled image
     small = img_f[::downsample, ::downsample]
