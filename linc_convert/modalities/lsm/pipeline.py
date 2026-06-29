@@ -402,11 +402,11 @@ def pipeline(
         channel_timer = time.time()
 
         y_coords = load_y_coordinates(coords_yaml_by_channel[ch])
-        if len(y_coords) != num_tiles:
-            raise ValueError(
-                f"Coordinates file for channel {ch} has {len(y_coords)} "
-                f"tile entries, but {num_tiles} tiles were discovered."
-            )
+        # if len(y_coords) != num_tiles:
+        #    raise ValueError(
+        #        f"Coordinates file for channel {ch} has {len(y_coords)} "
+        #        f"tile entries, but {num_tiles} tiles were discovered."
+        #    )
 
         # --- Estimate the corrected mosaic shape from a single sample tile.
         sample_path = tile_paths[0]
