@@ -83,8 +83,8 @@ def convert(
     if nii_config.nii:
         header = build_nifti_header(
             zgroup=zgroup,
-            voxel_size_zyx=[1, 1, 1],
-            unit="um",
+            voxel_size_zyx=tuple(voxel_size),
+            unit="micrometer",
             nii_config=nii_config,
         )
         zgroup.write_nifti_header(header)
