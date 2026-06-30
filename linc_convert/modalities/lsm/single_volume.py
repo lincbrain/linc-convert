@@ -76,6 +76,8 @@ def convert(
         inp_data = da.rechunk(inp_data, dataset.chunks)
 
     da.store(inp_data, dataset)
+    voxel_size = list(map(float, reversed(voxel_size)))
+    # Generate Zarr pyramid and metadata
     zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
     zgroup.write_ome_metadata(axes=["z", "y", "x"], space_unit=to_ome_unit("um"))
