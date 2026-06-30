@@ -37,11 +37,12 @@ def _compute_zarr_layout(
         else:
             chunk_tc = (1 if zarr_config.chunk_time else shape[0],)
             shard_tc = (chunk_tc[0] if zarr_config.shard_time else shape[0],)
-    elif ndim == 3:
+    elif ndim == 3 or ndim == 2:
         chunk_tc = tuple()
         shard_tc = tuple()
+   
     else:
-        raise ValueError("Zarr layout only supports 3+ dimensions.")
+        raise ValueError("Zarr layout only supports 2+ dimensions.")
 
     chunk = zarr_config.chunk
     if len(chunk) > ndim:
