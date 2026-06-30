@@ -273,8 +273,7 @@ class SpoolSetInterpreter:
     # this is the modified version for lsm pipeline
     def assemble_cropped(self) -> da.Array:
         """
-        Assemble and transpose the volume, then crop to original depth
-        with a lazy Dask array.
+        Assemble and transpose the volume, then crop to original depth.
 
         Returns
         -------
