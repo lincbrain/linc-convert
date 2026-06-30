@@ -44,6 +44,8 @@ def convert(
     ----------
     inp
         Path to the input tiff file
+    voxel_size
+        Voxel size along the X, Y and Z dimensions, in microns.
     general_config
         General configuration
     zarr_config
