@@ -16,6 +16,7 @@ import cyclopts
 import dask.array as da
 import numpy as np
 from PIL import Image
+
 # internals
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.spool import SpoolSetInterpreter
