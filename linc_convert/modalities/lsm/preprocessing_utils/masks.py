@@ -33,34 +33,46 @@ def compute_tissue_mask(
     threshold : float
         Intensity threshold used for segmentation.
     """
-    # Convert to float (no copy if already float)
-    img_f = img.astype(np.float32, copy=False)
-
+    # Slice the small regions out of the ORIGINAL array first, and only
+    # cast those small slices to float32 -- casting the whole image up
+    # front would allocate a full-size float32 copy (4x the memory of a
+    # uint16 input) just to immediately throw most of it away via
+    # slicing.
     # -------------------------
     # Estimate threshold
     # -------------------------
     # Use bright region at right edge (heuristic)
-    edge_region = img_f[::downsample, -500::downsample]
-    threshold = min(np.median(edge_region)*1.05, 130)
+    edge_region = img[::downsample, -500::downsample].astype(np.float32)
+    threshold = min(np.median(edge_region) * 1.05, 130)
+    del edge_region
 
-    # Downsampled image
-    small = img_f[::downsample, ::downsample]
+    # Downsampled image (small, cast only this slice -- and copy here,
+    # since .astype() on a different dtype already copies, so this is
+    # safe to mutate in place below without touching `img`)
+    small = img[::downsample, ::downsample].astype(np.float32)
 
-    # Clip extreme intensities
+    # Clip extreme intensities, in place (safe: `small` is already an
+    # owned copy from .astype() above, not a view into `img`)
     clip_val = np.percentile(small, clip_high_percentile)
-    small_clipped = np.minimum(small, clip_val)
+    np.minimum(small, clip_val, out=small)
 
     # Threshold
-    tissue_small = small_clipped > threshold
+    tissue_small = small > threshold
+    del small
 
     # -------------------------
     # Upsample mask
     # -------------------------
-    mask = np.repeat(
-        np.repeat(tissue_small, downsample, axis=0),
-        downsample,
-        axis=1,
-    )
+    # A single broadcast+reshape instead of two chained np.repeat calls:
+    # the chained version allocates one full-size-ish intermediate array
+    # for the axis-0 repeat, then a second one for the axis-1 repeat, so
+    # both are briefly resident at once. broadcast_to is a zero-copy
+    # view; only the final reshape allocates, and only once.
+    h, w = tissue_small.shape
+    mask = np.broadcast_to(
+        tissue_small[:, None, :, None], (h, downsample, w, downsample)
+    ).reshape(h * downsample, w * downsample)
+    del tissue_small
 
     mask = mask[: img.shape[0], : img.shape[1]]
 
@@ -109,18 +121,27 @@ def components_over_threshold_filled(
 
     # Label connected components
     labeled, num_features = ndimage.label(mask, structure=structure)
-
     if num_features == 0:
         return mask.copy()
 
-    # Compute component sizes
-    sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
+    # Compute component sizes. np.bincount on the label array is
+    # significantly faster than ndimage.sum(mask, labeled, ...) here:
+    # every labeled pixel is, by construction, a foreground (mask=True)
+    # pixel, so a plain occurrence count over the label array gives the
+    # exact same sizes as weighting by `mask`, without ndimage.sum's
+    # more general (and slower) weighted-reduction machinery.
+    sizes = np.bincount(labeled.ravel(), minlength=num_features + 1)[1:]
 
-    # Keep only components larger than min_size
-    keep_labels = {i + 1 for i, s in enumerate(sizes) if s > min_size}
-
-    # Build output mask
-    filtered = np.isin(labeled, list(keep_labels))
+    # Keep only components larger than min_size, via a small lookup
+    # table indexed by label value, rather than
+    # np.isin(labeled, list(keep_labels)). The lookup table is sized to
+    # the number of components, not the image -- much smaller than
+    # anything proportional to `labeled` itself, and the final indexing
+    # step (`keep_lookup[labeled]`) is a single fast fancy-index pass.
+    keep_lookup = np.zeros(num_features + 1, dtype=bool)
+    keep_lookup[1:] = sizes > min_size
+    filtered = keep_lookup[labeled]
+    del labeled
 
     # Fill holes
     return ndimage.binary_fill_holes(filtered)
