@@ -44,14 +44,15 @@ h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
 tensorstore = { version = "*", optional = true }
+dask-image = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile"]
+lsm = ["tifffile", "dask-image"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 ts = ["tensorstore"]
-all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore"]
+all = ["glymur", "tifffile", "h5py", "scipy", "wkw", "tensorstore", "dask-image"]
 
 [tool.poetry.group.dev]
 optional = true
@@ -61,6 +62,8 @@ mypy = "^1.9.0"
 pre-commit = "^3.7.0"
 pytest-cov = "^5.0.0"
 ruff = "^0.3.4"
+scikit-image = "*"
+pooch = "*"
 
 [tool.poetry.group.docs]
 optional = true
@@ -74,6 +77,11 @@ pythonpath = [
 testpaths = [
   "tests"
 ]
+markers = [
+  "heavy: marks tests as slow or data-intensive",
+  "golden: regenerate golden Zarr archives"
+]
+addopts = "-m 'not heavy and not golden'"
 
 [tool.mypy]
 ignore_missing_imports = true
