@@ -8,6 +8,7 @@ dependencies:
   - numpy
   - glymur
   - zarr
+  - dandi
   - nibabel
   - tifffile
   - pytest

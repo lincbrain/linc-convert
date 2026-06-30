@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skimage
+import skimage.data
+import zarr
 
 DOWNLOAD_CMD = [
     "dandi",
@@ -51,6 +53,33 @@ def spool_dat(tmp_path):
             image = brain[z - y, y - 1][None, ...]
 
             write_zyla_spool_set(image, out_path, images_per_file=128)
+
+    return tmp_path
+
+
+@pytest.fixture
+def spool_dat_zarr(tmp_path):
+    brain = skimage.data.brain()
+    brain = brain.reshape(10, 4, 64, 256)
+
+    for y in range(1, 4):
+        out_path = tmp_path / f"test_run{y:02d}_y{y:02d}_HR.ome.zarr"
+
+        data = np.stack(
+            [brain[z - y, y - 1] for z in range(1, 11)],
+            axis=0,
+        )
+
+        root = zarr.open_group(out_path, mode="w")
+
+        arr = root.create_array(
+            "0",
+            shape=data.shape,
+            dtype=data.dtype,
+            chunks=(1, 64, 256),
+        )
+
+        arr[:] = data
 
     return tmp_path
 

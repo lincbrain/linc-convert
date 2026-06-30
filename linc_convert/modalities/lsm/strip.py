@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 strip = cyclopts.App(name="strip", help_format="markdown")
 lsm.command(strip)
 
+
 def _save_mip_image(result: da.Array, mip_image_output: str) -> None:
     """Save the maximum intensity projection of the result as an image."""
     mip = da.nanmax(result, axis=0)
