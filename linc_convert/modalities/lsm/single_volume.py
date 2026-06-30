@@ -1,4 +1,4 @@
-""" Converts TIFF to OME-Zarr or NIfTI-Zarr. """
+"""Converts TIFF to OME-Zarr or NIfTI-Zarr."""
 
 import logging
 import os
