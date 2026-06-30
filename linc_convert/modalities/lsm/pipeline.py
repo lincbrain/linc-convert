@@ -42,7 +42,7 @@ import time
 from dataclasses import replace
 from glob import glob
 from pathlib import PurePosixPath
-from typing import Callable, List, Literal, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cyclopts
 import dask.array as da
