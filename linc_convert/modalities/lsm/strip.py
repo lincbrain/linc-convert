@@ -58,7 +58,7 @@ def convert(
     Parameters
     ----------
     inp
-        Path to the stripe directory, which contains a
+        Path to the strip directory, which contains a
         collection of files named `*spool.dat`.
     info_file
         Path to the info file (.mat), which contains the information
