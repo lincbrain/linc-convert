@@ -29,6 +29,7 @@ lsm.command(single_volume)
 def convert(
     inp: str,
     *,
+    voxel_size: list[float] = (1, 1, 1),
     general_config: GeneralConfig = None,
     zarr_config: ZarrConfig = None,
     nii_config: NiftiConfig = None,
