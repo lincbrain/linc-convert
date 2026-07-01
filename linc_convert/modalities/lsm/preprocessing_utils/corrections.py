@@ -146,8 +146,8 @@ def compute_corr_zy_from_pixel_mask(
     # Apply mask + threshold
     # -------------------------
     masked = da.where(mask_da, vol, np.nan)
-    masked = da.where((masked < threshold) | ~
-                      da.isfinite(masked), np.nan, masked)
+    # masked = da.where((masked < threshold) | ~
+    #                  da.isfinite(masked), np.nan, masked)
 
     # Collapse along X -- stays lazy.
     corr = da.nanmedian(masked[:, :, ::8], axis=2)
