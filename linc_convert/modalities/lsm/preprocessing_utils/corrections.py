@@ -133,11 +133,11 @@ def compute_corr_zy(
     # -------------------------
     # Broadcast mask
     # -------------------------
-    # masked = da.where((masked < threshold) | ~
-    #                  da.isfinite(masked), np.nan, masked)
+    masked = da.where((vol < threshold*0.8) | ~
+                      da.isfinite(vol), np.nan, vol)
 
     # Collapse along X -- stays lazy.
-    corr = da.nanmedian(vol[:, :, ::8], axis=2)
+    corr = da.nanmedian(masked[:, :, ::8], axis=2)
     corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
     counts = da.sum(da.isfinite(vol), axis=2)
 
