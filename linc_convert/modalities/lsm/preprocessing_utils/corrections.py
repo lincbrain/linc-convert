@@ -146,8 +146,8 @@ def compute_corr_zy_from_pixel_mask(
     # Apply mask + threshold
     # -------------------------
     masked = da.where(mask_da, vol, np.nan)
-    # masked = da.where((masked < threshold) | ~
-    #                  da.isfinite(masked), np.nan, masked)
+    masked = da.where((masked < threshold) | ~
+                      da.isfinite(masked), np.nan, masked)
 
     # Collapse along X -- stays lazy.
     corr = da.nanmedian(masked[:, :, ::8], axis=2)
@@ -492,7 +492,7 @@ def stripe_skew_corr(
         threshold,
     )
 
-    vol = da.where(vol < threshold, 0, vol)
+    # vol = da.where(vol < threshold, 0, vol)
     vol = apply_corr_zy_lazy(vol, corr_zy)
     vol = skew_correct_volume_lazy(vol, scan_parameters, camera_id)
 
