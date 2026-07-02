@@ -87,7 +87,7 @@ def compute_corr_zy(
     vol: da.Array,
     tissue_frac_min: float,
     threshold: float,
-    kernel_size: int = 9,
+    kernel_size: int = 5,
 ) -> da.Array:
     """
     Compute a (Z, Y) intensity correction map from a 3D volume, lazily.
