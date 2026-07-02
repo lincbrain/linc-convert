@@ -113,9 +113,6 @@ class PrdSetInterpreter:
 
         n_frames = (usable + self.gap_bytes) // self.stride_bytes
 
-        # The last file in a set is often partial, so a file may hold up to
-        # expectedFramesPerFullFile frames; more than that signals that the
-        # geometry (header/gap/frame size) is wrong.
         if n_frames > self.expectedFramesPerFullFile:
             raise ValueError(
                 f"Found {n_frames} frames, more than the expected "
