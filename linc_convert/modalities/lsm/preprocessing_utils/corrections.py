@@ -83,9 +83,8 @@ def _corr_zy_postprocess(
     return (corr_smooth / 1000).astype(np.float32)
 
 
-def compute_corr_zy_from_pixel_mask(
+def compute_corr_zy(
     vol: da.Array,
-    mask: np.ndarray,
     tissue_frac_min: float,
     threshold: float,
     kernel_size: int = 5,
@@ -134,25 +133,13 @@ def compute_corr_zy_from_pixel_mask(
     # -------------------------
     # Broadcast mask
     # -------------------------
-    mask_da = da.from_array(mask, chunks=vol.chunks[1:])
-
-    if mask.shape == (Y, X):
-        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
-    elif mask.shape != (Z, Y, X):
-        raise ValueError(
-            f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
-
-    # -------------------------
-    # Apply mask + threshold
-    # -------------------------
-    masked = da.where(mask_da, vol, np.nan)
     # masked = da.where((masked < threshold) | ~
     #                  da.isfinite(masked), np.nan, masked)
 
     # Collapse along X -- stays lazy.
-    corr = da.nanmedian(masked[:, :, ::8], axis=2)
+    corr = da.nanmedian(vol[:, :, ::8], axis=2)
     corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
-    counts = da.sum(da.isfinite(masked), axis=2)
+    counts = da.sum(da.isfinite(vol), axis=2)
 
     min_pixels = int(tissue_frac_min * X)
 
@@ -485,15 +472,30 @@ def stripe_skew_corr(
     dask.array.Array
         Corrected volume.
     """
-    corr_zy = compute_corr_zy_from_pixel_mask(
-        vol,
-        mask,
+    Z, Y, X = vol.shape
+    mask_da = da.from_array(mask, chunks=vol.chunks[1:])
+
+    if mask.shape == (Y, X):
+        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
+    elif mask.shape != (Z, Y, X):
+        raise ValueError(
+            f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
+
+    # -------------------------
+    # Apply mask + threshold
+    # -------------------------
+    masked = da.where(mask_da, vol, np.nan)
+
+    corr_zy = compute_corr_zy(
+        masked,
         tissue_frac_min,
         threshold,
     )
 
+    masked = da.where(mask_da, vol, 0)
+
     # vol = da.where(vol < threshold, 0, vol)
-    vol = apply_corr_zy_lazy(vol, corr_zy)
+    vol = apply_corr_zy_lazy(masked, corr_zy)
     vol = skew_correct_volume_lazy(vol, scan_parameters, camera_id)
 
     return vol
