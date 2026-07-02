@@ -524,7 +524,8 @@ def pipeline(
                     f"{time.time() - open_timer:.2f}s"
                 )
 
-                is_first = index == 0 or index == checkpoint
+                is_first = index == 0 or index == checkpoint or (
+                    chunk_min is not None and index == chunk_min)
                 is_last = index == num_tiles - 1 or index == effective_max
 
                 ystart = int(round(y_coords[index]))
