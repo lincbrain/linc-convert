@@ -312,6 +312,8 @@ def pipeline(
     zarr_config: Optional[ZarrConfig] = None,
     nii_config: Optional[NiftiConfig] = None,
     dandiset_id: Optional[str] = None,
+    chunk_min: Optional[int] = None,
+    chunk_max: Optional[int] = None,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -358,6 +360,14 @@ def pipeline(
         NIfTI header configuration.
     dandiset_id : str, optional
         If provided, tiles are loaded from DANDI instead of local disk.
+    chunk_min : int, optional
+        First tile index to process (inclusive). If omitted, processing
+        starts from tile 0. Useful for splitting a large mosaic across
+        multiple Slurm jobs by tile range.
+    chunk_max : int, optional
+        Last tile index to process (inclusive). If omitted, processing
+        runs through the final tile. Combined with `chunk_min`, allows
+        a specific contiguous range of tiles to be handled in one job.
 
     Raises
     ------
@@ -467,11 +477,28 @@ def pipeline(
         # tile.
         carry: Optional[np.ndarray] = None
 
+        # Clamp the tile range to [chunk_min, chunk_max] if provided.
+        # These compose with the checkpoint: we process tiles that are
+        # both within the requested range AND past the checkpoint.
+        effective_min = max(chunk_min if chunk_min is not None else 0, 0)
+        effective_max = min(
+            chunk_max if chunk_max is not None else num_tiles - 1,
+            num_tiles - 1,
+        )
+
+        if chunk_min is not None or chunk_max is not None:
+            logger.info(
+                f"Processing tile range [{effective_min}, {effective_max}] "
+                f"(chunk_min={chunk_min}, chunk_max={chunk_max})"
+            )
+
         if len(tile_paths) > checkpoint + 1:
             for index, path in enumerate(tile_paths):
                 gc.collect()
-                if index < checkpoint:
+                if index < checkpoint or index < effective_min:
                     continue
+                if index > effective_max:
+                    break
 
                 name = tile_name(path)
                 logger.info(f"[{index}] Processing {name}")
@@ -498,7 +525,7 @@ def pipeline(
                 )
 
                 is_first = index == 0 or index == checkpoint
-                is_last = index == num_tiles - 1
+                is_last = index == num_tiles - 1 or index == effective_max
 
                 ystart = int(round(y_coords[index]))
 
