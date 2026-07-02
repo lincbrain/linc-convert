@@ -78,7 +78,7 @@ def _corr_zy_postprocess(
     corr_smooth = num / (den + 1e-6)
 
     # Preserve invalid regions
-    corr_smooth[~valid] = 99999999.0
+    corr_smooth[corr_smooth < 5] = 99999999.0
 
     return (corr_smooth / 1000).astype(np.float32)
 
@@ -87,7 +87,7 @@ def compute_corr_zy(
     vol: da.Array,
     tissue_frac_min: float,
     threshold: float,
-    kernel_size: int = 5,
+    kernel_size: int = 9,
 ) -> da.Array:
     """
     Compute a (Z, Y) intensity correction map from a 3D volume, lazily.
@@ -133,7 +133,7 @@ def compute_corr_zy(
     # -------------------------
     # Broadcast mask
     # -------------------------
-    masked = da.where((vol < threshold*0.8) | ~
+    masked = da.where((vol < threshold*1.05) | ~
                       da.isfinite(vol), np.nan, vol)
 
     # Collapse along X -- stays lazy.

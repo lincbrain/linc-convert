@@ -43,7 +43,7 @@ def compute_tissue_mask(
     # -------------------------
     # Use bright region at right edge (heuristic)
     edge_region = img[::downsample, -5000::downsample].astype(np.float32)
-    threshold = min(np.median(edge_region) * 1.1, 130)
+    threshold = min(np.median(edge_region), 120)
     del edge_region
 
     # Downsampled image (small, cast only this slice -- and copy here,
@@ -57,7 +57,7 @@ def compute_tissue_mask(
     np.minimum(small, clip_val, out=small)
 
     # Threshold
-    tissue_small = small > threshold
+    tissue_small = small > threshold*1.2
     del small
 
     # -------------------------
