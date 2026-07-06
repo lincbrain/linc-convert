@@ -552,14 +552,8 @@ def pipeline(
                 withhold_from = corrected_sy - overlap_with_next
 
                 if overlap_with_prev > 0:
-                    t = np.linspace(0, 1, overlap_with_prev)
-                    # Power-curve blend: both ramps change rapidly at the
-                    # start of the overlap and slowly at the end.
-                    # ramp (incoming tile weight):   0 -> 1, fast rise early
-                    # ramp_inverse (carry weight):   1 -> 0, fast drop early
-                    # ramp + ramp_inverse = 1 everywhere by construction.
-                    ramp = t ** 0.4
-                    ramp_inverse = 1 - t ** 0.4
+                    ramp = (1 - np.cos(np.pi * t)) / 2
+                    ramp_inverse = (1 + np.cos(np.pi * t)) / 2
                     ramp = ramp[None, :, None]
                     ramp_inverse = ramp_inverse[None, :, None]
 
