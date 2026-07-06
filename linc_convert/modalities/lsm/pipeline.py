@@ -552,6 +552,7 @@ def pipeline(
                 withhold_from = corrected_sy - overlap_with_next
 
                 if overlap_with_prev > 0:
+                    t = np.linspace(0, 1, overlap_with_prev)
                     ramp = (1 - np.cos(np.pi * t)) / 2
                     ramp_inverse = (1 + np.cos(np.pi * t)) / 2
                     ramp = ramp[None, :, None]
