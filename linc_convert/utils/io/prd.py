@@ -31,6 +31,8 @@ from dask import delayed
 
 
 class PrdSetInterpreter:
+    """Assemble prd files into a single 3D volume with a Dask array."""
+
     def __init__(
         self, prd_set_path: str | PathLike[str]
     ) -> None:
@@ -86,12 +88,11 @@ class PrdSetInterpreter:
 
     @staticmethod
     def get_prd_files(path: str) -> List[str]:
-        """Return the `.prd` files for `prd_set_path`, in acquisition order.
-        """
+        """Return the `.prd` files for `prd_set_path`, in acquisition order."""
         if not os.path.isdir(path):
             raise FileNotFoundError(f"Not a directory: {path}")
     
-        def acquisition_key(p: str):
+        def acquisition_key(p: str) -> int:
             # Sort by the trailing integer so ss_stack_9 precedes ss_stack_10.
             m = re.search(r"ss_stack_(\d+)\.prd$", p)
             return int(m.group(1)) if m else float("inf")
@@ -105,8 +106,7 @@ class PrdSetInterpreter:
         return file_list
 
     def _frames_in_file(self, path: str) -> int:
-        """Number of frames in a single `.prd` file (no gap after last)."""
-
+        """Return the number of frames in a single `.prd` file."""
         usable = os.path.getsize(path) - self.header_bytes
         if usable < self.bytes_per_frame:
             raise ValueError(f"File too small to contain one frame: {path}")
@@ -127,9 +127,11 @@ class PrdSetInterpreter:
 
         data = np.fromfile(path, dtype=self.dtype, offset=self.header_bytes)
 
-        # Pad the final gap so that the array can be reshaped into a clean (n_frames, pixels_per_stride) grid.
+        # Pad the final gap so that the array can be reshaped into a clean grid
+        # (n_frames, pixels_per_stride).
         data = np.concatenate([data, np.zeros(self.pixels_per_gap, dtype=self.dtype)])
-        frames = data.reshape(n_frames, self.pixels_per_stride)[:, : self.pixels_per_frame]
+        frames = data.reshape(n_frames, 
+                             self.pixels_per_stride)[:, : self.pixels_per_frame]
         return frames.reshape(n_frames, self.height, self.width)
 
     def assemble(self) -> da.Array:
