@@ -1,7 +1,7 @@
 """Load Kinetix `.prd` image stacks from local disk.
 
 A `.prd` file is:
-    [ header ][ frame 0 ][ gap ][ frame 1 ][ gap ] ... [ frame N-1 ]
+    [ header ][ frame 0 ][ gap ][ frame 1 ][ gap ] ... [ frame N-1 ] [ padding ]
 
 Each frame is `width * height` little-endian uint16 pixels stored row-major.
 There is a `gap` of padding bytes between frames but not after the last one.
@@ -47,16 +47,12 @@ class PrdSetInterpreter:
         self.header_bytes = metadata["headerBytes"]
         self.expectedFramesPerFullFile = metadata["expectedFramesPerFullFile"]
         self.gap_bytes = metadata["gapBytes"]
-
+        
         self.dtype = np.dtype(self.data_type)
         self.bytes_per_pixel = self.dtype.itemsize
         self.pixels_per_frame = self.width * self.height
         self.bytes_per_frame = self.pixels_per_frame * self.bytes_per_pixel
         self.stride_bytes = self.bytes_per_frame + self.gap_bytes
-
-        # Pixel-space geometry, used when slicing frames out of a file.
-        self.pixels_per_gap = self.gap_bytes // self.bytes_per_pixel
-        self.pixels_per_stride = self.pixels_per_frame + self.pixels_per_gap
 
     @staticmethod
     def read_kinetix_metadata(path: str) -> dict:
@@ -122,16 +118,22 @@ class PrdSetInterpreter:
         return n_frames
 
     def _load_prd_file(self, path: str) -> np.ndarray:
-        """Load one `.prd` file into a `(n_frames, height, width)` array."""
+        """Load one .prd file into a (n_frames, height, width) array.
+
+        Seek to each frame's offset and stack them, skipping the inter-frame
+        gaps and any trailing padding.
+        """
         n_frames = self._frames_in_file(path)
 
-        data = np.fromfile(path, dtype=self.dtype, offset=self.header_bytes)
+        frames = np.empty((n_frames, self.pixels_per_frame), dtype="<u2")
+        
+        with open(path, "rb") as fh:
+            for i in range(n_frames):
+                fh.seek(self.header_bytes + i * self.stride_bytes)
+                frames[i] = np.fromfile(fh,
+                                        dtype="<u2",
+                                        count=self.pixels_per_frame)
 
-        # Pad the final gap so that the array can be reshaped into a clean grid
-        # (n_frames, pixels_per_stride).
-        data = np.concatenate([data, np.zeros(self.pixels_per_gap, dtype=self.dtype)])
-        frames = data.reshape(n_frames, 
-                             self.pixels_per_stride)[:, : self.pixels_per_frame]
         return frames.reshape(n_frames, self.height, self.width)
 
     def assemble(self) -> da.Array:
