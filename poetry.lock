@@ -1859,7 +1859,7 @@ virtualenv = ">=20.10.0"
 name = "pyarrow"
 version = "23.0.1"
 description = "Python library for Apache Arrow"
-optional = false
+optional = true
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
