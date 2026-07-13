@@ -867,7 +867,7 @@ files = [
 name = "lxml"
 version = "6.1.0"
 description = "Powerful and Pythonic XML processing library combining libxml2/libxslt with the ElementTree API."
-optional = false
+optional = true
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
