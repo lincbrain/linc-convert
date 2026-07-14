@@ -235,7 +235,7 @@ def skew_correction_affine_dask(
         vol_yzx,
         matrix=affine_inv,
         offset=0,
-        order=1,
+        order=3,
         mode="constant",
         cval=0.0,
         output_shape=(y, z, x_out),
@@ -262,7 +262,7 @@ def apply_affine(vol_yzx: da.Array, affine: np.ndarray) -> da.Array:
     return affine_transform(
         vol_yzx,
         matrix=np.linalg.inv(affine),
-        order=1,
+        order=3,
         mode="constant",
         cval=0.0,
     )
