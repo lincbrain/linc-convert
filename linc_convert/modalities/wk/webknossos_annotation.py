@@ -171,7 +171,13 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    omz.attrs["multiscales"] = omz_data.attrs["multiscales"]
+    src_attrs = dict(omz_data.attrs)
+    multiscales = src_attrs["ome"]["multiscales"] if "ome" in src_attrs else src_attrs["multiscales"]
+
+    if zarr_config.ome_version == "0.5":
+        omz.attrs["ome"] = {"version": "0.5", "multiscales": multiscales}
+    else:
+        omz.attrs["multiscales"] = multiscales
 
 
 def get_mask_name(level: int) -> str:
