@@ -30,8 +30,13 @@ def multi_slice_jp2(tmp_path):
 def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
     expected_zarr = f"data/df_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.zarr"
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
-            multi_slice_jp2, out=str(output), zarr_version=zarr_version, driver=driver
+            multi_slice_jp2,
+            out=str(output),
+            zarr_version=zarr_version,
+            ome_version=ome_version,
+            driver=driver,
     )
     assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
@@ -40,10 +45,12 @@ def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
 def test_df_multi_slice_regen_golden(tmp_path, multi_slice_jp2, zarr_version):
     expected_zarr = f"data/df_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.zarr"
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
             multi_slice_jp2,
             out=str(output),
             zarr_version=zarr_version,
+            ome_version=ome_version,
     )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))
