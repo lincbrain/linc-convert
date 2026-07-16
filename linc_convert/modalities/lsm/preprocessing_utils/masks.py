@@ -16,7 +16,7 @@ def compute_tissue_mask_otsu(img_u16, downsample=8, clip_high_percentile=99,
     med = np.median(small)
     p98 = np.percentile(small, 98)
     if p98 / (med + 1e-6) < bimodal_ratio:
-        return np.zeros(img_u16.shape, dtype=bool)
+        return np.zeros(img_u16.shape, dtype=bool), 9999.0
 
     small_2d = img[::downsample, ::downsample]
     hi = np.percentile(small_2d, clip_high_percentile)
