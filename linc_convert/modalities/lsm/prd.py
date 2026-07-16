@@ -1,7 +1,7 @@
 """Convert Kinetix .prd image(s) to OME-Zarr/NIfTI-Zarr.
 
 A .prd file is a stack of uint16 frames with a fixed header
-and inter-frame gap, and padding at the end. The input is a directory of 
+and inter-frame gap, and padding at the end. The input is a directory of
 `ss_stack_*.prd` files, which are concatenated along the acquisition order.
 
 Example input files can be found at
@@ -66,10 +66,7 @@ def convert(
     # Initialize Zarr group and array
     zgroup = from_config(general_config.out, zarr_config)
     array = zgroup.create_array(
-        "0", 
-        shape=volume.shape,
-        zarr_config=zarr_config, 
-        dtype=reader.dtype
+        "0", shape=volume.shape, zarr_config=zarr_config, dtype=reader.dtype
     )
     logger.info(general_config.out)
 
@@ -78,9 +75,12 @@ def convert(
     else:
         volume = da.rechunk(volume, array.chunks)
 
-    logger.info("Write level 0 for %d file(s) with shape: "
-                "%d total_frames, %d height, %d width.",
-                len(reader.prd_files), *volume.shape)
+    logger.info(
+        "Write level 0 for %d file(s) with shape: "
+        "%d total_frames, %d height, %d width.",
+        len(reader.prd_files),
+        *volume.shape,
+    )
     da.store(volume, array, compute=True)
 
     voxel_size = list(map(float, reversed(voxel_size)))
