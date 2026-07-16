@@ -23,7 +23,7 @@ def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
         tissue_small = small_c > thr
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
-    return tissue[:img.shape[0], :img.shape[1]]
+    return tissue[:img.shape[0], :img.shape[1]], thr
 
 
 def compute_tissue_mask(
