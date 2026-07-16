@@ -32,6 +32,11 @@ Assumptions baked into this version:
   and stripe/skew correction.
 - Per-tile y placement comes from a coordinates YAML file (one per
   channel) rather than a single constant overlap value.
+- Scan/crop parameters come from a YAML file whose crop definitions are
+  organized into slice-range "configEpochs" (see
+  ``preprocessing_utils.io``). A single pipeline run processes tiles
+  belonging to one physical slice, given via `slice_number`, and the
+  matching configEpoch's crop definitions are used for the whole run.
 """
 
 import gc
@@ -57,8 +62,8 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     stripe_skew_corr,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
-    camera_channel_map,
     get_camera_info,
+    get_channel_names,
     load_mask_and_thresholds,
     load_scan_parameters,
 )
@@ -303,6 +308,7 @@ def pipeline(
     mip_dir: str,
     yaml_path: str,
     camera_id: int,
+    slice_number: int,
     coords_yaml_ch1: str,
     coords_yaml_ch2: str,
     *,
@@ -338,12 +344,18 @@ def pipeline(
     mip_dir : str
         Directory containing YX MIP TIFF files used for mask generation.
     yaml_path : str
-        Path to scan parameter YAML file.
+        Path to scan parameter YAML file. Crop definitions in this file
+        are organized into slice-range "configEpochs"; the epoch that
+        covers `slice_number` is used for this entire run.
     camera_id : int
         Camera to process (1 or 2).
+    slice_number : int
+        Physical slice number being processed by this run. Used to
+        select the configEpoch (and therefore the crop definitions and
+        channel layout) that applies to this slice.
     coords_yaml_ch1 : str
         Path to the coordinates YAML file for the first channel of the
-        chosen camera (see `camera_channel_map`), giving each tile's
+        chosen camera (see `get_channel_names`), giving each tile's
         absolute y position.
     coords_yaml_ch2 : str
         Same as `coords_yaml_ch1`, for the second channel.
@@ -385,7 +397,7 @@ def pipeline(
     voxel_size = list(map(float, reversed(voxel_size)))
 
     scan_parameters = load_scan_parameters(yaml_path)
-    cam_info = get_camera_info(scan_parameters, camera_id)
+    cam_info = get_camera_info(scan_parameters, camera_id, slice_number)
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
@@ -398,7 +410,7 @@ def pipeline(
     def tile_name(path: str) -> str:
         return os.path.basename(path.rstrip("/").replace(".ome.zarr", ""))
 
-    channels = camera_channel_map[camera_id]
+    channels = get_channel_names(scan_parameters, camera_id)
     if len(channels) != 2:
         raise ValueError(
             f"Expected exactly 2 channels for camera {camera_id}, "
