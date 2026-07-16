@@ -133,12 +133,11 @@ def compute_corr_zy(
     # -------------------------
     # Broadcast mask
     # -------------------------
-    masked = da.where((vol < threshold*1.05) | ~
+    masked = da.where((vol < threshold) | ~
                       da.isfinite(vol), np.nan, vol)
 
     # Collapse along X -- stays lazy.
     corr = da.nanmedian(masked[:, :, ::8], axis=2)
-    corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
     counts = da.sum(da.isfinite(masked), axis=2)
 
     min_pixels = int(tissue_frac_min * X)

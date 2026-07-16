@@ -4,7 +4,7 @@ from skimage.filters import threshold_otsu
 
 
 def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
-                             clip_hi_pct: float = 99.9,
+                             clip_hi_pct: float = 99,
                              fallback_pct: float = 70.0) -> np.ndarray:
     img = img_u16.astype(np.float32, copy=False)
     small = img[::ds, ::ds]
