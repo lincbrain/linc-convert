@@ -234,7 +234,7 @@ def skew_correction_affine_dask(
         vol_yzx,
         matrix=affine_inv,
         offset=0,
-        order=3,
+        order=1,
         mode="constant",
         cval=0.0,
         output_shape=(y, z, x_out),
