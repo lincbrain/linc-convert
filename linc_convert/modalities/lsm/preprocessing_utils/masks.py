@@ -3,24 +3,27 @@ from scipy import ndimage
 from skimage.filters import threshold_otsu
 
 
-def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
-                             clip_hi_pct: float = 99,
-                             fallback_pct: float = 70.0) -> np.ndarray:
+def compute_tissue_mask_otsu(img_u16, ds=8, clip_hi_pct=99, fallback_pct: float = 70.0,
+                             bimodal_ratio=1.2):
     img = img_u16.astype(np.float32, copy=False)
-    small = img[::ds, ::ds]
+    small = img[::ds, ::ds].ravel()
 
-    hi = np.percentile(small, clip_hi_pct)
-    small_c = np.minimum(small, hi)
+    # Check for bimodality before running Otsu.
+    # On a unimodal (all-background) tile, p99 is close to the median.
+    # On a real tile with tissue, p99 is in the bright tissue mode,
+    # well above the median. A ratio below ~2.5 strongly suggests
+    # a single background distribution with no real tissue.
+    med = np.median(small)
+    p98 = np.percentile(small, 98)
+    if p98 / (med + 1e-6) < bimodal_ratio:
+        return np.zeros(img_u16.shape, dtype=bool)
 
-    try:
-        thr = threshold_otsu(small_c)
-    except Exception:
-        thr = np.percentile(small_c, fallback_pct)
+    small_2d = img[::ds, ::ds]
+    hi = np.percentile(small_2d, clip_hi_pct)
+    small_c = np.minimum(small_2d, hi)
 
+    thr = threshold_otsu(small_c)
     tissue_small = small_c > thr
-    if tissue_small.mean() < 0.002:
-        thr = np.percentile(small_c, fallback_pct)
-        tissue_small = small_c > thr
 
     tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
     return tissue[:img.shape[0], :img.shape[1]], thr
