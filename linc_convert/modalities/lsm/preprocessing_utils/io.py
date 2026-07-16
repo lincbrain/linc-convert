@@ -11,6 +11,7 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
 )
 from linc_convert.modalities.lsm.preprocessing_utils.masks import (
     compute_tissue_mask,
+    compute_tissue_mask_otsu,
 )
 
 # ---------------------------------------------------------------------
@@ -51,7 +52,7 @@ def load_mask_and_thresholds(
     cam_info: List[dict],
     *,
     downsample: int = 8,
-    clip_high_percentile: float = 99.9,
+    clip_high_percentile: float = 99.0,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, float]]:
     """
     Load MIP image and compute tissue masks + thresholds per channel.
@@ -96,7 +97,7 @@ def load_mask_and_thresholds(
     thresholds: Dict[str, float] = {}
 
     for ch, mip in mip_channels.items():
-        mask, thr = compute_tissue_mask(
+        mask, thr = compute_tissue_mask_otsu(
             mip,
             downsample=downsample,
             clip_high_percentile=clip_high_percentile,

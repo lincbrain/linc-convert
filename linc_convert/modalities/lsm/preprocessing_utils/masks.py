@@ -1,5 +1,29 @@
 import numpy as np
 from scipy import ndimage
+from skimage.filters import threshold_otsu
+
+
+def compute_tissue_mask_otsu(img_u16: np.ndarray, ds: int = 8,
+                             clip_hi_pct: float = 99.9,
+                             fallback_pct: float = 70.0) -> np.ndarray:
+    img = img_u16.astype(np.float32, copy=False)
+    small = img[::ds, ::ds]
+
+    hi = np.percentile(small, clip_hi_pct)
+    small_c = np.minimum(small, hi)
+
+    try:
+        thr = threshold_otsu(small_c)
+    except Exception:
+        thr = np.percentile(small_c, fallback_pct)
+
+    tissue_small = small_c > thr
+    if tissue_small.mean() < 0.002:
+        thr = np.percentile(small_c, fallback_pct)
+        tissue_small = small_c > thr
+
+    tissue = np.repeat(np.repeat(tissue_small, ds, axis=0), ds, axis=1)
+    return tissue[:img.shape[0], :img.shape[1]]
 
 
 def compute_tissue_mask(
@@ -57,7 +81,7 @@ def compute_tissue_mask(
     np.minimum(small, clip_val, out=small)
 
     # Threshold
-    tissue_small = small > threshold*1.2
+    tissue_small = small > threshold*1.4
     del small
 
     # -------------------------
