@@ -38,7 +38,6 @@ def _corr_zy_postprocess(
     den = convolve(valid.astype(np.float32), kernel, mode="nearest")
 
     corr_smooth = num / (den + 1e-6)
-    corr_smooth[corr_smooth < 5] = 99999999.0
 
     return (corr_smooth / 1000).astype(np.float32)
 
@@ -288,7 +287,7 @@ def stripe_skew_corr(
     threshold: float,
     camera_id: int,
     scan_parameters: dict,
-    tissue_frac_min: float = 0.02,
+    tissue_frac_min: float = 0.01,
 ) -> da.Array:
     Z, Y, X = vol.shape
     mask_da = da.from_array(mask, chunks=vol.chunks[1:])
