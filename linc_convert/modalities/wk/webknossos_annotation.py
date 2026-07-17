@@ -147,7 +147,7 @@ def convert(
                 subdat_size[-2] < max_load and subdat_size[-1] < max_load
             ):
                 array[
-                0, idx, top: top + subdat_size[-2], left: left + subdat_size[-1]
+                    0, idx, top : top + subdat_size[-2], left : left + subdat_size[-1]
                 ] = data[...]
             else:
                 ni = ceildiv(subdat_size[-2], max_load)
@@ -162,17 +162,21 @@ def convert(
                         start_y, end_y = (j * max_load,)
                         min((j + 1) * max_load, subdat_size[-1])
                         array[
-                        0,
-                        idx,
-                        top + start_x: top + end_x,
-                        left + start_y: left + end_y,
+                            0,
+                            idx,
+                            top + start_x : top + end_x,
+                            left + start_y : left + end_y,
                         ] = data[start_x:end_x, start_y:end_y]
                 print("")
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
     src_attrs = dict(omz_data.attrs)
-    multiscales = src_attrs["ome"]["multiscales"] if "ome" in src_attrs else src_attrs["multiscales"]
+    multiscales = (
+        src_attrs["ome"]["multiscales"]
+        if "ome" in src_attrs
+        else src_attrs["multiscales"]
+    )
 
     if zarr_config.ome_version == "0.5":
         omz.attrs["ome"] = {"version": "0.5", "multiscales": multiscales}
