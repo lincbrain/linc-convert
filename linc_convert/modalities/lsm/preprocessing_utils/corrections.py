@@ -288,7 +288,7 @@ def stripe_skew_corr(
     threshold: float,
     camera_id: int,
     scan_parameters: dict,
-    tissue_frac_min: float = 0.005,
+    tissue_frac_min: float = 0.02,
 ) -> da.Array:
     Z, Y, X = vol.shape
     mask_da = da.from_array(mask, chunks=vol.chunks[1:])
