@@ -18,7 +18,7 @@ from typing import (
 
 from cyclopts import Parameter
 
-DriverLike: TypeAlias = Literal["zarr-python", "tensorstore", "zarrita"]
+DriverLike: TypeAlias = Literal["zarr-python", "tensorstore"]
 
 @Parameter(name="*")
 @dataclass
@@ -77,7 +77,7 @@ class ZarrConfig:
     overwrite
         when no name is supplied and using default output name, if overwrite is set,
         it won't ask if overwrite
-    driver : {"zarr-python", "tensorstore", "zarrita"}
+    driver : {"zarr-python", "tensorstore"}
         library used for Zarr IO Operation
     """
 
