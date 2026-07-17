@@ -1,5 +1,6 @@
 """Configuration related to output Zarr Archive."""
 import inspect
+import types
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from functools import wraps
 from os import PathLike
@@ -129,7 +130,7 @@ class GeneralConfig:
         If True, set log_level to "debug".
     """
 
-    out: Annotated[str, Parameter(name=["--out", "-o"])] = None
+    out: Annotated[str | None, Parameter(name=["--out", "-o"])] = None
     max_load: int = 1024
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False
@@ -237,7 +238,7 @@ def autoconfig(func: Callable) -> Callable:
         if get_origin(tp) is Annotated:
             tp = get_args(tp)[0]
         # Handle Optional[T] / Union[T, None]
-        if get_origin(tp) is Union:
+        if get_origin(tp) in (Union, types.UnionType):
             cand = [t for t in get_args(tp) if t is not type(None)]  # noqa: E721
             if len(cand) == 1:
                 tp = cand[0]

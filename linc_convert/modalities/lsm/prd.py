@@ -36,9 +36,9 @@ def convert(
     inp: str,
     *,
     voxel_size: list[float] = (1, 1, 1),
-    general_config: GeneralConfig = None,
-    zarr_config: ZarrConfig = None,
-    nii_config: NiftiConfig = None,
+    general_config: GeneralConfig | None = None,
+    zarr_config: ZarrConfig | None = None,
+    nii_config: NiftiConfig | None = None,
 ) -> None:
     """
     Convert Kinetix .prd file(s) into a pyramidal OME-Zarr or NIfTI-Zarr.
