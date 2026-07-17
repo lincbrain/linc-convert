@@ -38,11 +38,14 @@ def wk_annotation(tmp_path):
 def test_wkw(tmp_path, wk_annotation, zarr_version, driver):
     expected_zarr = f"data/wkw_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "wkw.nii.zarr"
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
     webknossos_annotation.convert(
         str(wk_annotation / "wkw"),
         str(wk_annotation / "image.nii.zarr"),
         out=str(output),
         dic="{}",
+        zarr_version=zarr_version,
+        ome_version=ome_version,
     )
     assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
@@ -51,11 +54,14 @@ def test_wkw(tmp_path, wk_annotation, zarr_version, driver):
 def test_wkw_regen_golden(tmp_path, wk_annotation, zarr_version):
     expected_zarr = f"data/wkw_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "wkw.nii.zarr"
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
     webknossos_annotation.convert(
         str(wk_annotation / "wkw"),
         str(wk_annotation / "image.nii.zarr"),
         out=str(output),
         dic="{}",
+        zarr_version=zarr_version,
+        ome_version=ome_version,
     )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

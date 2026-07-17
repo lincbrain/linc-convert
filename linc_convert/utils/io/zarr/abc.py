@@ -247,7 +247,7 @@ class ZarrGroup(ZarrNode):
         levels: Optional[int] = None,
         no_pool: Optional[int] = None,
         multiscales_type: str = "",
-        ome_version: Literal["0.4", "0.5"] = "0.4",
+        ome_version: Literal["0.4", "0.5"] = "0.5",
     ) -> None:
         """
         Write OME-compatible metadata into this group.

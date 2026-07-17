@@ -167,6 +167,7 @@ def convert(
         space_scale=[1.0] + list(get_pixelsize(j2k)),
         multiscales_type="jpeg2000",
         no_pool=0,
+        ome_version=zarr_config.ome_version,
     )
 
     # Write NIfTI-Zarr header

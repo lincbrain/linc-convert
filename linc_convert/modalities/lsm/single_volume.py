@@ -80,7 +80,11 @@ def convert(
     # Generate Zarr pyramid and metadata
     zgroup.generate_pyramid(mode="mean", no_pyramid_axis=zarr_config.no_pyramid_axis)
     logger.info("Write OME-Zarr multiscale metadata")
-    zgroup.write_ome_metadata(axes=["z", "y", "x"], space_unit=to_ome_unit("um"))
+    zgroup.write_ome_metadata(
+        axes=["z", "y", "x"],
+        space_unit=to_ome_unit("um"),
+        ome_version=zarr_config.ome_version,
+    )
 
     if nii_config.nii:
         header = build_nifti_header(

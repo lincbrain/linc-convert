@@ -39,7 +39,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"wk\""
+markers = "extra == \"wk\" or extra == \"all\""
 files = [
     {file = "cffi-2.0.0-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44"},
     {file = "cffi-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49"},
@@ -443,7 +443,7 @@ description = "Distributed image processing"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "dask_image-2025.11.0-py3-none-any.whl", hash = "sha256:4834ece8d7133f8cd7d4e672f7f5a598c9057e687b20f14f3121360e3e1690b4"},
     {file = "dask_image-2025.11.0.tar.gz", hash = "sha256:45cf1a9c3a8a1c143c75d43f1494e4fe0827564d3ec6efb93618fb04603ba0b3"},
@@ -580,7 +580,7 @@ description = ""
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"df\""
+markers = "extra == \"df\" or extra == \"all\""
 files = [
     {file = "Glymur-0.13.6-py3-none-any.whl", hash = "sha256:34347b1e0443b58c73ed3c7bc3c66cff1e5974a26e81c73d98792c438729165c"},
     {file = "Glymur-0.13.6.tar.gz", hash = "sha256:18f1f3536fd76cd7fa92de4629950bee55522bdf8a4e94706ac34226d615ac5c"},
@@ -644,7 +644,7 @@ description = "Read and write HDF5 files from Python"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"psoct\""
+markers = "extra == \"psoct\" or extra == \"all\""
 files = [
     {file = "h5py-3.15.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:67e59f6c2f19a32973a40f43d9a088ae324fe228c8366e25ebc57ceebf093a6b"},
     {file = "h5py-3.15.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0e2f471688402c3404fa4e13466e373e622fd4b74b47b56cfdff7cc688209422"},
@@ -870,7 +870,7 @@ description = "Powerful and Pythonic XML processing library combining libxml2/li
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"df\""
+markers = "extra == \"df\" or extra == \"all\""
 files = [
     {file = "lxml-6.1.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:41dcc4c7b10484257cbd6c37b83ddb26df2b0e5aff5ac00d095689015af868ec"},
     {file = "lxml-6.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:a31286dbb5e74c8e9a5344465b77ab4c5bd511a253b355b5ca2fae7e579fafec"},
@@ -1129,7 +1129,7 @@ description = "ml_dtypes is a stand-alone implementation of several NumPy dtype 
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"ts\""
+markers = "extra == \"ts\" or extra == \"all\""
 files = [
     {file = "ml_dtypes-0.5.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:b95e97e470fe60ed493fd9ae3911d8da4ebac16bd21f87ffa2b7c588bf22ea2c"},
     {file = "ml_dtypes-0.5.4-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b4b801ebe0b477be666696bda493a9be8356f1f0057a57f1e35cd26928823e5a"},
@@ -1329,14 +1329,14 @@ zstd = ["pyzstd (>=0.14.3)"]
 
 [[package]]
 name = "nifti-zarr"
-version = "1.0.0rc5"
+version = "1.0.0rc7"
 description = "Nifti-Zarr conversion tools in Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "nifti_zarr-1.0.0rc5-py3-none-any.whl", hash = "sha256:2b5ebea77bb647123dd520d8e2a6d0337f4f5b0cb445ed07f6fb41febfc74856"},
-    {file = "nifti_zarr-1.0.0rc5.tar.gz", hash = "sha256:203cb6035f08d421e0f566ede1fcbbb14d1aabc3bcdc738e666f6bc647f3a0f3"},
+    {file = "nifti_zarr-1.0.0rc7-py3-none-any.whl", hash = "sha256:f1f3b36aefac635e4105a6854a0fc4fc20a192074a8eba825100ab0aa005cfe8"},
+    {file = "nifti_zarr-1.0.0rc7.tar.gz", hash = "sha256:bd906d230f679f31644e0dbc363d915004afd9d2e30b1d90c155c81d379a4a9e"},
 ]
 
 [package.dependencies]
@@ -1352,6 +1352,7 @@ zarr = ">=2"
 http = ["fsspec[http]", "nibabel (>=5)"]
 s3 = ["fsspec[s3]", "nibabel (>=5)"]
 test = ["jsondiff", "jsonschema", "pooch", "pytest"]
+validate = ["ome-zarr-models (>=1.3)"]
 
 [[package]]
 name = "nodeenv"
@@ -1511,7 +1512,7 @@ description = "Powerful data structures for data analysis, time series, and stat
 optional = true
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "pandas-3.0.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:d64ce01eb9cdca96a15266aa679ae50212ec52757c79204dbc7701a222401850"},
     {file = "pandas-3.0.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:613e13426069793aa1ec53bdcc3b86e8d32071daea138bbcf4fa959c9cdaa2e2"},
@@ -1764,7 +1765,7 @@ description = "Python Image Sequence"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "pims-0.7.tar.gz", hash = "sha256:55907a4c301256086d2aa4e34a5361b9109f24e375c2071e1117b9491e82946b"},
 ]
@@ -1857,7 +1858,7 @@ description = "Python library for Apache Arrow"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "pyarrow-23.0.1-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:3fab8f82571844eb3c460f90a75583801d14ca0cc32b1acc8c361650e006fd56"},
     {file = "pyarrow-23.0.1-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:3f91c038b95f71ddfc865f11d5876c42f343b4495535bd262c7b321b0b94507c"},
@@ -1918,7 +1919,7 @@ description = "C parser in Python"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "(extra == \"all\" or extra == \"wk\") and implementation_name != \"PyPy\""
+markers = "implementation_name != \"PyPy\" and (extra == \"wk\" or extra == \"all\")"
 files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
@@ -1986,7 +1987,7 @@ description = "Extensions to the standard Python datetime module"
 optional = true
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
@@ -2307,7 +2308,7 @@ description = "Python 2 and 3 compatibility utilities"
 optional = true
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
@@ -2320,7 +2321,7 @@ description = "A lazy-loading, fancy-sliceable iterable."
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"lsm\""
+markers = "extra == \"lsm\" or extra == \"all\""
 files = [
     {file = "slicerator-1.1.0-py3-none-any.whl", hash = "sha256:167668d48c6d3a5ba0bd3d54b2688e81ee267dc20aef299e547d711e6f3c441a"},
     {file = "slicerator-1.1.0.tar.gz", hash = "sha256:44010a7f5cd87680c07213b5cabe81d1fb71252962943e5373ee7d14605d6046"},
@@ -2333,7 +2334,7 @@ description = "Read and write large, multi-dimensional arrays"
 optional = true
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"ts\""
+markers = "extra == \"ts\" or extra == \"all\""
 files = [
     {file = "tensorstore-0.1.80-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:246641a8780ee5e04e88bc95c8e31faac6471bab1180d1f5cdc9804b29a77c04"},
     {file = "tensorstore-0.1.80-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:7451b30f99d9f31a2b9d70e6ef61815713dc782c58c6d817f91781341e4dac05"},
@@ -2442,7 +2443,7 @@ description = "Provider of IANA time zone data"
 optional = true
 python-versions = ">=2"
 groups = ["main"]
-markers = "(sys_platform == \"win32\" or sys_platform == \"emscripten\") and (extra == \"all\" or extra == \"lsm\")"
+markers = "(sys_platform == \"win32\" or sys_platform == \"emscripten\") and (extra == \"lsm\" or extra == \"all\")"
 files = [
     {file = "tzdata-2025.3-py2.py3-none-any.whl", hash = "sha256:06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1"},
     {file = "tzdata-2025.3.tar.gz", hash = "sha256:de39c2ca5dc7b0344f2eba86f49d614019d29f060fc4ebc8a417896a620b56a7"},
@@ -2516,7 +2517,7 @@ description = ""
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"wk\""
+markers = "extra == \"wk\" or extra == \"all\""
 files = [
     {file = "wkw-1.1.24-py3-none-macosx_10_9_universal2.whl", hash = "sha256:4967cc8d2564b1a3539fe755943b7c11ef69a4bd0ab3d67ac56a83513221e3ab"},
     {file = "wkw-1.1.24-py3-none-manylinux2014_x86_64.whl", hash = "sha256:aba4e708f055e21d67a4d983298b2c33c696742c255c40d4f15b08138de14ed7"},
@@ -2589,4 +2590,4 @@ wk = ["wkw"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "055e482a24d50e703d0cfd745f2e7e0e86363b7b42ad1e6cb181e8eb43f223f7"
+content-hash = "b818e4c7aa78cc33b8e694f7922efe15d5da282da2d8e036bed50d2e6de0e339"
