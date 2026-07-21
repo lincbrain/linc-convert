@@ -88,14 +88,14 @@ def load_mask_and_thresholds(
     masks: Dict[str, np.ndarray] = {}
     thresholds: Dict[str, float] = {}
 
-    for ch, mip in mip_channels.items():
-        mask, thr = compute_tissue_mask_otsu(
+    for out_ch, mip in mip_channels.items():
+        mask, thr = compute_tissue_mask(
             mip,
             downsample=downsample,
             clip_high_percentile=clip_high_percentile,
         )
-        masks[ch] = mask
-        thresholds[ch] = thr
+        masks[out_ch] = mask
+        thresholds[out_ch] = thr
 
     return masks, thresholds
 
