@@ -13,9 +13,9 @@ def compute_tissue_mask_otsu(img_u16, downsample=8, clip_high_percentile=99,
     # On a real tile with tissue, p99 is in the bright tissue mode,
     # well above the median. A ratio below ~1.2 strongly suggests
     # a single background distribution with no real tissue.
-    med = np.median(small)
+    p2 = np.percentile(small, 2)
     p98 = np.percentile(small, 98)
-    if p98 / (med + 1e-6) < bimodal_ratio:
+    if p98 / (p2 + 1e-6) < bimodal_ratio:
         return np.zeros(img_u16.shape, dtype=bool), 9999.0
 
     small_2d = img[::downsample, ::downsample]
@@ -34,6 +34,7 @@ def compute_tissue_mask(
     img: np.ndarray,
     downsample: int = 4,
     clip_high_percentile: float = 99.9,
+    x_range=5000
 ) -> tuple[np.ndarray, float]:
     """
     Generate a binary tissue mask from a 2D image using thresholding and largest-component filtering.
@@ -70,7 +71,7 @@ def compute_tissue_mask(
     # Estimate threshold
     # -------------------------
     # Use bright region at right edge (heuristic)
-    edge_region = img[::downsample, -5000::downsample].astype(np.float32)
+    edge_region = img[::downsample, -x_range::downsample].astype(np.float32)
     threshold = min(np.median(edge_region), 120)
     del edge_region
 
