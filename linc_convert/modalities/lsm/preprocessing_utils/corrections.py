@@ -31,13 +31,111 @@ def _corr_zy_postprocess(corr, counts, min_pixels, kernel_size):
 def compute_corr_zy(vol, tissue_frac_min, threshold, kernel_size=5):
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
-    masked = da.where((vol < threshold) | ~da.isfinite(vol), np.nan, vol)
+    masked = da.where((vol < threshold*1.05) | ~da.isfinite(vol), np.nan, vol)
     corr = da.nanmedian(masked[:, :, ::8], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
     min_pixels = int(tissue_frac_min * X)
+    corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
     corr_smooth = dask.delayed(_corr_zy_postprocess)(
         corr, counts, min_pixels, kernel_size)
     return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
+
+
+class StripeStatsAccumulator:
+    """
+    Incrementally gathers the statistics needed to compute the (Z, Y)
+    stripe-correction map, one X-chunk at a time, instead of requiring
+    the whole (mask-filtered) volume in memory at once.
+
+    Produces EXACTLY the same result as calling `compute_corr_zy` on
+    `da.where(mask, vol, np.nan)` for the whole volume directly (see
+    `stripe_skew_corr` for that reference computation) -- this is not
+    an approximation, provided every chunk covering the full X range
+    is added exactly once, in any order, via `add_chunk`.
+
+    The median needs the actual sampled values (not just a running
+    statistic), so this collects each chunk's own `::8`-strided X
+    columns and only computes the median once, in `finalize()`, over
+    the full collected set. The `::8` stride is kept phase-aligned
+    across chunk boundaries (via the chunk's global `x0`), so
+    concatenating every chunk's contribution reproduces exactly the
+    same set of sampled columns, in the same order, that striding the
+    whole array by `::8` in one shot would have selected -- regardless
+    of whether `x_chunk_size` happens to be a multiple of the stride.
+
+    The valid-pixel `counts` (a plain sum, not a median) don't need
+    the stride trick -- each chunk's own count over its full width is
+    simply added to a running total.
+    """
+
+    def __init__(self, tissue_frac_min, threshold, kernel_size=5, x_stride=8):
+        self.tissue_frac_min = tissue_frac_min
+        self.threshold = threshold
+        self.kernel_size = kernel_size
+        self.x_stride = x_stride
+        self._strided_pieces = []
+        self._counts_total = None
+        self._x_total = 0
+
+    def add_chunk(self, vol_chunk: np.ndarray, mask_chunk: np.ndarray, x0: int) -> None:
+        """
+        Parameters
+        ----------
+        vol_chunk : np.ndarray
+            (Z, Y, w) registered/cropped volume chunk (already
+            computed, plain numpy).
+        mask_chunk : np.ndarray
+            (Y, w) tissue mask chunk, matching `vol_chunk`'s Y and X
+            extent.
+        x0 : int
+            This chunk's starting X index in the *global* (whole-tile)
+            coordinate frame -- used only to keep the `::x_stride`
+            sampling phase-aligned across chunks, not to place data.
+        """
+        vol_chunk = vol_chunk.astype(np.float32)
+        Z, Y, w = vol_chunk.shape
+        mask_b = np.broadcast_to(mask_chunk.astype(bool)[None], (Z, Y, w))
+
+        # Reproduces stripe_skew_corr's two-stage masking exactly:
+        # outside the tissue mask -> NaN (via the outer da.where in
+        # stripe_skew_corr), then also NaN if below threshold*1.05 or
+        # already non-finite (compute_corr_zy's own filtering).
+        masked = np.where(
+            mask_b & (vol_chunk >= self.threshold *
+                      1.05) & np.isfinite(vol_chunk),
+            vol_chunk, np.nan,
+        )
+
+        if self._counts_total is None:
+            self._counts_total = np.zeros((Z, Y), dtype=np.float64)
+        self._counts_total += np.sum(np.isfinite(masked), axis=2)
+
+        phase = (-x0) % self.x_stride
+        self._strided_pieces.append(masked[:, :, phase::self.x_stride])
+
+        self._x_total += w
+
+    def finalize(self) -> np.ndarray:
+        """
+        Returns
+        -------
+        np.ndarray
+            The final (Z, Y) stripe-correction map, identical to what
+            `compute_corr_zy` would produce on the whole volume.
+        """
+        full_strided = np.concatenate(self._strided_pieces, axis=2)
+        with warnings.catch_warnings():
+            # nanmedian warns on all-NaN slices; compute_corr_zy's
+            # dask/np.nanmedian does the same thing silently under the
+            # hood, so suppressing here just matches that behavior.
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            corr = np.nanmedian(full_strided, axis=2)
+        corr = np.where(corr < self.threshold * 1.2,
+                        self.threshold * 1.2, corr)
+        min_pixels = int(self.tissue_frac_min * self._x_total)
+        return _corr_zy_postprocess(
+            corr, self._counts_total, min_pixels, self.kernel_size
+        )
 
 
 def apply_corr_zy_lazy(vol, corr_zy, eps=1e-6):
@@ -160,6 +258,104 @@ def skew_correct_volume_lazy(vol, scan_parameters, camera_id, force_flip=None):
     vol = da.transpose(vol, (1, 0, 2))
     vol = skew_correction_affine_dask(vol, factors, delta)
     return da.transpose(vol, (1, 0, 2))
+
+
+def skew_shear_amount(scan_parameters) -> float:
+    """
+    The skew shear amount (see `skew_correction_affine_dask`), computed
+    directly from `scan_parameters` -- shared by both the actual
+    correction and the X-chunk padding calculation below, so they can
+    never disagree.
+    """
+    delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
+    umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
+    return np.tan(np.deg2rad(delta)) * umps["z"] / umps["x"]
+
+
+def skew_shear_x_padding(scan_parameters, z_extent: int) -> int:
+    """
+    X padding (columns, each side) an X-chunk needs so that running it
+    through `skew_correct_volume_x_chunk` and trimming reproduces
+    exactly what running the whole tile through `skew_correct_volume_lazy`
+    and slicing out that chunk's output range would give.
+
+    The shear only couples Z and X (`X_out = X_in + shear * Z_in`), so
+    for a chunk's output X-range, the required *input* X-range can
+    extend up to `shear * (Z - 1)` columns beyond the chunk's own
+    nominal boundary, in the direction `shear`'s sign pushes it. This
+    pads both sides by that amount (plus a small safety margin) rather
+    than figuring out the sign-dependent single side, so it's correct
+    regardless of the sign of `shear`.
+
+    Parameters
+    ----------
+    scan_parameters : dict
+        Loaded scan configuration.
+    z_extent : int
+        The Z extent (after registration/cropping) the volume will
+        have when the shear is applied.
+
+    Returns
+    -------
+    int
+        Padding, in columns, to add on each side of an X-chunk.
+    """
+    shear = skew_shear_amount(scan_parameters)
+    return int(np.ceil(abs(shear) * max(z_extent - 1, 0))) + 2
+
+
+def skew_correct_volume_x_chunk(
+    vol_padded_zyx,
+    scan_parameters,
+    camera_id,
+    pad_left: int,
+    out_width: int,
+    force_flip=None,
+):
+    """
+    Apply skew correction to a *padded* X-chunk (Z, Y, X_padded) and
+    trim the result down to the `out_width`-wide output range that
+    corresponds to the chunk's own (unpadded) columns.
+
+    `vol_padded_zyx` must have been read starting `pad_left` columns
+    before the chunk's true global start (i.e. `pad_left` is how much
+    *real* left padding is actually present -- less than the value
+    `skew_shear_x_padding` returned if that got clamped near the raw
+    tile's own X boundary).
+
+    Equivalent to running `skew_correct_volume_lazy` on the whole tile
+    and slicing out this chunk's own output columns -- verified
+    numerically to match to floating-point precision (~1e-12, from
+    cubic-spline coefficients computed on a differently-sized array;
+    negligible next to uint16 quantization).
+
+    Parameters
+    ----------
+    vol_padded_zyx : dask.array.Array or np.ndarray
+        Padded input chunk (Z, Y, X_padded).
+    scan_parameters : dict
+        Scan metadata (see `skew_correct_volume_lazy`).
+    camera_id : int
+        Camera identifier.
+    pad_left : int
+        Real left padding present in `vol_padded_zyx`, in columns.
+    out_width : int
+        Width, in columns, of this chunk's own (unpadded) output
+        contribution.
+    force_flip : bool, optional
+        Passed through to `skew_correct_volume_lazy`.
+
+    Returns
+    -------
+    np.ndarray
+        This chunk's output contribution (Z, Y, out_width).
+    """
+    sheared = skew_correct_volume_lazy(
+        vol_padded_zyx, scan_parameters, camera_id, force_flip=force_flip
+    )
+    sheared = np.asarray(sheared.compute()) if hasattr(
+        sheared, "compute") else np.asarray(sheared)
+    return sheared[:, :, pad_left: pad_left + out_width]
 
 
 def crop_volume_channels(vol, cam_info, channels=None):

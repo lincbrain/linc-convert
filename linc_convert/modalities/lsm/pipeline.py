@@ -1,6 +1,19 @@
 """Preprocess tiles (background removal, stripe/skew correction) and stream
 the corrected volumes directly into a single blended OME-Zarr mosaic along
 the y axis, without writing per-tile intermediates to disk.
+
+Chunked along X (not Y): X can be enormous for this dataset, so tiles
+are processed in two passes per tile:
+  Pass 1 gathers the stripe-correction statistics across X-chunks
+  (exact, not approximate -- see StripeStatsAccumulator).
+  Pass 2 re-reads each X-chunk (padded, for the skew shear's Z<->X
+  coupling), applies flip -> registration -> crop -> stripe correction
+  -> skew shear, and writes it out.
+Y is never chunked -- it was never the huge axis here, so each
+X-chunk's processing handles the tile's full Y range in one shot.
+Tile-to-tile Y blending (overlap) is tracked per X-chunk, via a dict
+keyed by each X-chunk's starting position, since the same X-chunk
+boundaries recur for every tile of a given channel.
 """
 
 import gc
@@ -11,22 +24,25 @@ import time
 from dataclasses import replace
 from glob import glob
 from pathlib import PurePosixPath
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cyclopts
 import dask.array as da
 import numpy as np
 import yaml
 from dandi.dandiapi import DandiAPIClient
-from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     apply_channel_affine_mask,
     apply_channel_affine_volume,
+    apply_corr_zy_lazy,
     crop_volume_channels,
     maybe_flip_z_lazy,
-    stripe_skew_corr,
+    skew_correct_volume_x_chunk,
+    skew_shear_amount,
+    skew_shear_x_padding,
+    StripeStatsAccumulator,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
     find_camera_for_channel,
@@ -51,6 +67,10 @@ logger = logging.getLogger(__name__)
 pipeline = cyclopts.App(name="pipeline", help_format="markdown")
 lsm.command(pipeline)
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def prompt_dandi_api_key() -> str:
     key = os.environ.get("DANDI_API_KEY")
@@ -127,67 +147,170 @@ def discover_tile_paths(inp, camera_id, *, dandiset_id, api_key):
     return paths
 
 
-def _open_raw_channel_volume_and_mask(
-    path: str,
-    *,
-    dandiset_id: Optional[str],
-    api_key: Optional[str],
-    mip_dir: Optional[str],
-    name: str,
-    ch: str,
-    cam_info,
-    channel_affine: Optional[np.ndarray] = None,
-    reference_local_crop: Optional[dict] = None,
-    pre_flip: Optional[bool] = None,
-    mip_pre_split: bool = False,
-    x_range=5000,
-    affine_order: int = 1,
-) -> Tuple[da.Array, np.ndarray, float]:
-    reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
-    vol_channels = crop_volume_channels(reader, cam_info)
-    masks, thrs = load_mask_and_thresholds(
-        name, mip_dir, cam_info, reader=reader, ch=ch, pre_split=mip_pre_split, x_range=x_range
-    )
+def _crop_mask_y(mask: np.ndarray, reference_local_crop: Optional[dict]) -> np.ndarray:
+    """Apply the same Y-crop `reference_local_crop` gives the volume
+    to the (Y, X) mask -- mask has no Z axis, so only Y is cropped.
+    """
+    if reference_local_crop is None:
+        return mask
+    y1, y2 = reference_local_crop["y_start"], reference_local_crop["y_end"]
+    return mask[y1:y2, :]
 
-    vol = vol_channels[ch]
+
+def _load_and_register_mask(
+    name, mip_dir, cam_info, ch, mip_pre_split, x_range, channel_affine, reader,
+):
+    """Load this tile/channel's mask+threshold once (covers the whole
+    X range as a 2D array) and, if registration is active, register
+    it once -- mask registration is X-identity, so it doesn't need
+    chunking, unlike the 3D volume.
+    """
+    masks, thrs = load_mask_and_thresholds(
+        name, mip_dir, cam_info, reader=reader, ch=ch, pre_split=mip_pre_split, x_range=x_range,
+    )
     mask = masks[ch]
+    thr = thrs[ch]
+    if channel_affine is not None and not np.allclose(channel_affine, np.eye(3)):
+        mask = apply_channel_affine_mask(mask, channel_affine)
+    return mask, thr
+
+
+def _read_register_crop_x_chunk(
+    reader, cam_info, ch, x0, x1, *,
+    pre_flip, channel_affine, affine_order, reference_local_crop,
+):
+    """
+    Read, flip, register, and Z/Y-crop one channel's X-chunk [x0, x1)
+    from an already-open tile reader. Returns a plain numpy array
+    (Z, Y, x1-x0). Shared core step used by both the stats-gathering
+    pass and the correction/write pass.
+    """
+    raw_chunk = crop_volume_channels(
+        reader[:, :, x0:x1], cam_info, channels=ch)[ch]
 
     if pre_flip is not None:
-        vol = maybe_flip_z_lazy(vol, pre_flip)
+        raw_chunk = maybe_flip_z_lazy(raw_chunk, pre_flip)
 
     if channel_affine is not None and not np.allclose(channel_affine, np.eye(3)):
-        # Apply to the whole tile, then materialize IMMEDIATELY (once)
-        # rather than leaving this lazy for the downstream Y-chunk loop
-        # to slice-and-compute repeatedly. Slicing pieces out of a lazy
-        # affine-transformed array and computing each one separately is
-        # dramatically more expensive than computing the whole thing
-        # once -- cubic-spline interpolation (and to a lesser extent,
-        # any order) re-triggers a large fraction of the same work on
-        # every slice. Stripe correction also needs the *entire* X
-        # extent to compute correct statistics (da.nanmedian over all
-        # of X), which rules out chunking this along X too -- so
-        # materializing the whole (already cropped-to-split-window)
-        # tile here, once, is the correct fix, not a chunking scheme.
-        vol = apply_channel_affine_volume(
-            vol, channel_affine, order=affine_order)
-        vol = da.from_array(np.asarray(vol.compute()), chunks=vol.chunksize)
-        mask = apply_channel_affine_mask(mask, channel_affine)
+        registered = apply_channel_affine_volume(
+            raw_chunk, channel_affine, order=affine_order)
+        vol_chunk = np.asarray(registered.compute())
+    else:
+        vol_chunk = np.asarray(raw_chunk.compute())
 
     if reference_local_crop is not None:
         y1, y2 = reference_local_crop["y_start"], reference_local_crop["y_end"]
         z1, z2 = reference_local_crop["z_start"], reference_local_crop["z_end"]
-        vol = vol[z1:z2, y1:y2, :]
-        mask = mask[y1:y2, :]
+        vol_chunk = vol_chunk[z1:z2, y1:y2, :]
 
-    return vol, mask, thrs[ch]
+    return vol_chunk
 
 
-def _corrected_y_chunk(vol, mask, threshold, camera_id, scan_parameters, y0, y1, force_flip=None):
-    vol_chunk = vol[:, y0:y1, :]
-    mask_chunk = mask[:, y0:y1, :] if mask.ndim == 3 else mask[y0:y1, :]
-    return stripe_skew_corr(
-        vol_chunk, mask_chunk, threshold, camera_id, scan_parameters, force_flip=force_flip,
-    )
+def _gather_stripe_stats_x_chunked(
+    reader, cam_info, ch, mask, threshold, tissue_frac_min, x_total, x_chunk_size,
+    *, pre_flip, channel_affine, affine_order, reference_local_crop,
+):
+    """Pass 1: gather stripe-correction stats across X-chunks. `mask`
+    must already be registered (see `_load_and_register_mask`) if
+    registration is active.
+    """
+    mask = _crop_mask_y(mask, reference_local_crop)
+    acc = StripeStatsAccumulator(tissue_frac_min, threshold)
+    x0 = 0
+    while x0 < x_total:
+        x1 = min(x_total, x0 + x_chunk_size)
+        vol_chunk = _read_register_crop_x_chunk(
+            reader, cam_info, ch, x0, x1,
+            pre_flip=pre_flip, channel_affine=channel_affine,
+            affine_order=affine_order, reference_local_crop=reference_local_crop,
+        )
+        mask_chunk = mask[:, x0:x1]
+        acc.add_chunk(vol_chunk, mask_chunk, x0)
+        x0 = x1
+    return acc.finalize()
+
+
+def _iter_corrected_x_chunks(
+    reader, cam_info, ch, mask, corr_zy, x_total_input, x_chunk_size, z_final,
+    scan_parameters, camera_id,
+    *, pre_flip, channel_affine, affine_order, reference_local_crop, force_flip,
+):
+    """
+    Pass 2: for each OUTPUT X-chunk, read a padded INPUT range, apply
+    flip -> register -> crop -> stripe correction -> skew shear, trim
+    to this chunk's own output range, and yield it. `mask` must
+    already be registered (see `_load_and_register_mask`).
+
+    Yields
+    ------
+    (xo0, xo1, chunk) : (int, int, np.ndarray)
+        chunk has shape (Z_final, Y_final, xo1 - xo0).
+    """
+    mask = _crop_mask_y(mask, reference_local_crop)
+    shear = skew_shear_amount(scan_parameters)
+    pad = skew_shear_x_padding(scan_parameters, z_final)
+    x_out_total = int(np.ceil(shear * z_final)) + x_total_input
+
+    xo0 = 0
+    while xo0 < x_out_total:
+        xo1 = min(x_out_total, xo0 + x_chunk_size)
+        px0 = max(0, xo0 - pad)
+        px1 = min(x_total_input, xo1 + pad)
+        pad_left_actual = xo0 - px0
+
+        vol_chunk = _read_register_crop_x_chunk(
+            reader, cam_info, ch, px0, px1,
+            pre_flip=pre_flip, channel_affine=channel_affine,
+            affine_order=affine_order, reference_local_crop=reference_local_crop,
+        )
+        mask_chunk = mask[:, px0:px1]
+        mask_b = np.broadcast_to(mask_chunk.astype(bool)[
+                                 None], vol_chunk.shape)
+        masked_for_corr = np.where(mask_b, vol_chunk, 0)
+
+        corrected = apply_corr_zy_lazy(da.from_array(masked_for_corr), corr_zy)
+        corrected = np.asarray(corrected.compute())
+
+        sheared_core = skew_correct_volume_x_chunk(
+            corrected, scan_parameters, camera_id,
+            pad_left=pad_left_actual, out_width=xo1 - xo0, force_flip=force_flip,
+        )
+        yield xo0, xo1, sheared_core
+        xo0 = xo1
+
+
+def _determine_final_shape(
+    tile_paths, cam_info, ch, reference_local_crop, scan_parameters,
+    *, dandiset_id, api_key,
+):
+    """
+    Determine the final (Z, Y, X) shape for this channel's output, in
+    closed form from crop metadata + the shear formula -- no need to
+    actually process a "sample" tile's pixel data first. Only reads
+    one tile's `.shape` (metadata, no data movement).
+    """
+    sample_reader = open_tile_reader(
+        tile_paths[0], dandiset_id=dandiset_id, api_key=api_key)
+    ch_info = next(m for m in cam_info if m["channel"] == ch)
+
+    x_total_input = sample_reader.shape[2]
+
+    if reference_local_crop is not None:
+        y_final = reference_local_crop["y_end"] - \
+            reference_local_crop["y_start"]
+        z_final = reference_local_crop["z_end"] - \
+            reference_local_crop["z_start"]
+    else:
+        y_final = ch_info["y_end"] - ch_info["y_start"]
+        if ch_info["z_start"] is not None:
+            z_final = ch_info["z_end"] - ch_info["z_start"]
+        else:
+            z_final = sample_reader.shape[0]
+
+    shear = skew_shear_amount(scan_parameters)
+    x_final = int(np.ceil(shear * z_final)) + x_total_input
+
+    return z_final, y_final, x_final, x_total_input
 
 
 def _write_checkpoint(filename, y):
@@ -217,6 +340,10 @@ def _checkpoint_path(general_config, ch):
     return f"{out}_{ch}.dat"
 
 
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
 @pipeline.default
 @autoconfig
 def pipeline(
@@ -229,7 +356,7 @@ def pipeline(
     *,
     mip_dir: Optional[str] = None,
     mip_pre_split: bool = False,
-    y_chunk_size: int = 256,
+    x_chunk_size: int = 2048,
     voxel_size: List[float] = [1, 1, 1],
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
@@ -240,11 +367,17 @@ def pipeline(
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
     x_range: int = 5000,
-    affine_order: int = 1
+    affine_order: int = 1,
+    tissue_frac_min: float = 0.02,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
     blended OME-Zarr mosaic along the y axis.
+
+    Chunked along X, not Y (see module docstring) -- X can be
+    enormous for this dataset; Y is not, so each X-chunk is processed
+    across its tile's full Y range in one shot. Tile-to-tile Y overlap
+    is blended per X-chunk.
 
     Parameters
     ----------
@@ -259,6 +392,15 @@ def pipeline(
         (same coordinate system as `cam_info`), not be pre-cropped to
         just that channel's own window -- see
         `load_mask_and_thresholds` for why.
+    x_chunk_size : int, default=2048
+        Width, in pixels along X, of each chunk processed at a time.
+    affine_order : int, default=1
+        Spline interpolation order for the registration affine. Lower
+        orders (1 = linear, 0 = nearest) are cheaper and don't suffer
+        the global cubic-spline prefiltering cost that order=3 does.
+    tissue_frac_min : float, default=0.02
+        Minimum valid-pixel fraction for the stripe-correction map
+        (see `StripeStatsAccumulator`/`compute_corr_zy`).
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
@@ -336,33 +478,18 @@ def pipeline(
 
         y_coords = load_y_coordinates(coords_yaml_by_channel[ch])
 
-        sample_path = tile_paths[0]
-        sample_raw_vol, sample_mask, sample_thr = _open_raw_channel_volume_and_mask(
-            sample_path,
-            dandiset_id=dandiset_id,
-            api_key=api_key,
-            mip_dir=mip_dir,
-            name=tile_name(sample_path),
-            ch=ch,
-            cam_info=cam_info,
-            channel_affine=channel_affine,
-            reference_local_crop=reference_local_crop,
-            pre_flip=pre_flip,
-            mip_pre_split=mip_pre_split,
-            x_range=x_range,
-            affine_order=affine_order
+        z_final, y_final, x_final, x_total_input = _determine_final_shape(
+            tile_paths, cam_info, ch, reference_local_crop, scan_parameters,
+            dandiset_id=dandiset_id, api_key=api_key,
         )
-        sample_corrected = stripe_skew_corr(
-            sample_raw_vol, sample_mask, sample_thr, camera_id, scan_parameters,
-            force_flip=force_flip,
+        logger.info(
+            f"[{ch}] final shape (closed-form): Z={z_final}, Y={y_final}, "
+            f"X={x_final} (raw input X={x_total_input})"
         )
-        corrected_sz, corrected_sy, corrected_sx = sample_corrected.shape
-        del sample_corrected
-        gc.collect()
 
-        full_x = corrected_sx
-        full_y = int(round(y_coords[-1])) + corrected_sy
-        full_z = corrected_sz
+        full_x = x_final
+        full_y = int(round(y_coords[-1])) + y_final
+        full_z = z_final
         fullshape = (full_z, full_y, full_x)
 
         out_dir = f"{general_config.out}/{ch}"
@@ -383,7 +510,13 @@ def pipeline(
         logger.info(
             "Writing channel %s, level 0 array with shape %s", ch, fullshape)
 
-        carry = None
+        # Trailing Y-overlap withheld from the PREVIOUS tile, awaiting
+        # blending with the next tile's leading edge -- keyed by each
+        # X-chunk's own starting position, since the same X-chunk
+        # boundaries recur for every tile (fixed x_total_input,
+        # x_chunk_size per channel).
+        carry: Dict[int, Optional[np.ndarray]] = {}
+
         effective_min = max(chunk_min if chunk_min is not None else 0, 0)
         effective_max = min(
             chunk_max if chunk_max is not None else num_tiles - 1, num_tiles - 1)
@@ -399,24 +532,27 @@ def pipeline(
                 name = tile_name(path)
                 tile_timer = time.time()
 
-                if index == 0:
-                    raw_vol, mask, thr = sample_raw_vol, sample_mask, sample_thr
-                else:
-                    raw_vol, mask, thr = _open_raw_channel_volume_and_mask(
-                        path,
-                        dandiset_id=dandiset_id,
-                        api_key=api_key,
-                        mip_dir=mip_dir,
-                        name=name,
-                        ch=ch,
-                        cam_info=cam_info,
-                        channel_affine=channel_affine,
-                        reference_local_crop=reference_local_crop,
-                        pre_flip=pre_flip,
-                        mip_pre_split=mip_pre_split,
-                        x_range=x_range,
-                        affine_order=affine_order
-                    )
+                reader = open_tile_reader(
+                    path, dandiset_id=dandiset_id, api_key=api_key)
+
+                t_mask = time.time()
+                mask, thr = _load_and_register_mask(
+                    name, mip_dir, cam_info, ch, mip_pre_split, x_range, channel_affine, reader,
+                )
+                t_mask = time.time() - t_mask
+
+                t_stats = time.time()
+                corr_zy = _gather_stripe_stats_x_chunked(
+                    reader, cam_info, ch, mask, thr, tissue_frac_min,
+                    x_total_input, x_chunk_size,
+                    pre_flip=pre_flip, channel_affine=channel_affine,
+                    affine_order=affine_order, reference_local_crop=reference_local_crop,
+                )
+                t_stats = time.time() - t_stats
+                logger.info(
+                    f"[{index}] {name}/{ch} -- mask/mip: {t_mask:.2f}s, "
+                    f"stripe stats (pass 1): {t_stats:.2f}s"
+                )
 
                 is_first = index == 0 or index == checkpoint or (
                     chunk_min is not None and index == chunk_min)
@@ -426,20 +562,21 @@ def pipeline(
 
                 overlap_with_prev = 0
                 if not is_first:
-                    overlap_with_prev = corrected_sy - (
+                    overlap_with_prev = y_final - (
                         int(round(y_coords[index])) -
                         int(round(y_coords[index - 1]))
                     )
                 overlap_with_next = 0
                 if not is_last:
-                    overlap_with_next = corrected_sy - (
+                    overlap_with_next = y_final - (
                         int(round(y_coords[index + 1])) -
                         int(round(y_coords[index]))
                     )
                 overlap_with_prev = max(overlap_with_prev, 0)
                 overlap_with_next = max(overlap_with_next, 0)
-                withhold_from = corrected_sy - overlap_with_next
+                withhold_from = y_final - overlap_with_next
 
+                ramp = ramp_inverse = None
                 if overlap_with_prev > 0:
                     t = np.linspace(0, 1, overlap_with_prev)
                     ramp = (1 - np.cos(np.pi * t)) / 2
@@ -447,56 +584,46 @@ def pipeline(
                     ramp = ramp[None, :, None]
                     ramp_inverse = ramp_inverse[None, :, None]
 
-                zstart = 0
-                trailing_buffer = None
-                y0 = 0
-                while y0 < corrected_sy:
-                    y1 = min(corrected_sy, y0 + y_chunk_size)
-                    lazy_chunk = _corrected_y_chunk(
-                        raw_vol, mask, thr, camera_id, scan_parameters, y0, y1, force_flip=force_flip,
-                    )
-                    with ProgressBar():
-                        data = lazy_chunk.compute()
+                new_carry: Dict[int, Optional[np.ndarray]] = {}
 
-                    if overlap_with_prev > 0 and y0 < overlap_with_prev:
-                        blend_len = min(data.shape[1], overlap_with_prev - y0)
-                        carry_slice = carry[:, y0:y0 + blend_len, :]
-                        ramp_slice = ramp[:, y0:y0 + blend_len, :]
-                        ramp_inv_slice = ramp_inverse[:, y0:y0 + blend_len, :]
-                        data[:, :blend_len, :] = (
-                            carry_slice * ramp_inv_slice +
-                            data[:, :blend_len, :] * ramp_slice
-                        )
+                for xo0, xo1, data in _iter_corrected_x_chunks(
+                    reader, cam_info, ch, mask, corr_zy, x_total_input, x_chunk_size,
+                    z_final, scan_parameters, camera_id,
+                    pre_flip=pre_flip, channel_affine=channel_affine,
+                    affine_order=affine_order, reference_local_crop=reference_local_crop,
+                    force_flip=force_flip,
+                ):
+                    if overlap_with_prev > 0:
+                        prev_carry = carry.get(xo0)
+                        if prev_carry is not None:
+                            blend_len = min(data.shape[1], overlap_with_prev)
+                            data[:, :blend_len, :] = (
+                                prev_carry[:, :blend_len, :] *
+                                ramp_inverse[:, :blend_len, :]
+                                + data[:, :blend_len, :] *
+                                ramp[:, :blend_len, :]
+                            )
 
-                    if y1 <= withhold_from:
+                    if withhold_from >= data.shape[1]:
                         to_write, to_withhold = data, None
-                    elif y0 >= withhold_from:
+                    elif withhold_from <= 0:
                         to_write, to_withhold = None, data
                     else:
-                        split = withhold_from - y0
-                        to_write, to_withhold = data[:,
-                                                     :split, :], data[:, split:, :]
+                        to_write = data[:, :withhold_from, :]
+                        to_withhold = data[:, withhold_from:, :]
 
-                    out_ystart = ystart + y0
                     if to_write is not None and to_write.shape[1] > 0 and index > checkpoint:
                         array[
-                            zstart: zstart + to_write.shape[0],
-                            out_ystart: out_ystart + to_write.shape[1],
-                            0: to_write.shape[2],
+                            0: to_write.shape[0],
+                            ystart: ystart + to_write.shape[1],
+                            xo0: xo0 + to_write.shape[2],
                         ] = to_write
 
-                    if to_withhold is not None:
-                        trailing_buffer = (
-                            to_withhold if trailing_buffer is None
-                            else np.concatenate([trailing_buffer, to_withhold], axis=1)
-                        )
+                    new_carry[xo0] = to_withhold
 
-                    del data
-                    gc.collect()
-                    y0 = y1
-
-                carry = trailing_buffer
+                carry = new_carry
                 _write_checkpoint(checkpoint_file, index)
+                logger.info(f"{name} done in {time.time() - tile_timer:.2f}s")
 
         gc.collect()
         copy_config = replace(general_config, out=out_dir)
