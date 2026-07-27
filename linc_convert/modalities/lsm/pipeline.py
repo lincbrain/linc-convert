@@ -208,7 +208,7 @@ def _read_register_crop_x_chunk(
 
 def _gather_stripe_stats_x_chunked(
     reader, cam_info, ch, mask, threshold, tissue_frac_min, x_total, x_chunk_size,
-    *, pre_flip, channel_affine, affine_order, reference_local_crop,
+    *, pre_flip, channel_affine, affine_order, reference_local_crop, log_prefix="",
 ):
     """Pass 1: gather stripe-correction stats across X-chunks. `mask`
     must already be registered (see `_load_and_register_mask`) if
@@ -216,9 +216,12 @@ def _gather_stripe_stats_x_chunked(
     """
     mask = _crop_mask_y(mask, reference_local_crop)
     acc = StripeStatsAccumulator(tissue_frac_min, threshold)
+    n_chunks = -(-x_total // x_chunk_size)  # ceil division
     x0 = 0
+    chunk_idx = 0
     while x0 < x_total:
         x1 = min(x_total, x0 + x_chunk_size)
+        t_chunk = time.time()
         vol_chunk = _read_register_crop_x_chunk(
             reader, cam_info, ch, x0, x1,
             pre_flip=pre_flip, channel_affine=channel_affine,
@@ -226,6 +229,11 @@ def _gather_stripe_stats_x_chunked(
         )
         mask_chunk = mask[:, x0:x1]
         acc.add_chunk(vol_chunk, mask_chunk, x0)
+        chunk_idx += 1
+        logger.info(
+            f"{log_prefix}pass1 x-chunk {chunk_idx}/{n_chunks} "
+            f"[{x0}:{x1}]: {time.time() - t_chunk:.2f}s"
+        )
         x0 = x1
     return acc.finalize()
 
@@ -234,6 +242,7 @@ def _iter_corrected_x_chunks(
     reader, cam_info, ch, mask, corr_zy, x_total_input, x_chunk_size, z_final,
     scan_parameters, camera_id,
     *, pre_flip, channel_affine, affine_order, reference_local_crop, force_flip,
+    log_prefix="",
 ):
     """
     Pass 2: for each OUTPUT X-chunk, read a padded INPUT range, apply
@@ -250,13 +259,16 @@ def _iter_corrected_x_chunks(
     shear = skew_shear_amount(scan_parameters)
     pad = skew_shear_x_padding(scan_parameters, z_final)
     x_out_total = int(np.ceil(shear * z_final)) + x_total_input
+    n_chunks = -(-x_out_total // x_chunk_size)  # ceil division
 
     xo0 = 0
+    chunk_idx = 0
     while xo0 < x_out_total:
         xo1 = min(x_out_total, xo0 + x_chunk_size)
         px0 = max(0, xo0 - pad)
         px1 = min(x_total_input, xo1 + pad)
         pad_left_actual = xo0 - px0
+        t_chunk = time.time()
 
         vol_chunk = _read_register_crop_x_chunk(
             reader, cam_info, ch, px0, px1,
@@ -274,6 +286,11 @@ def _iter_corrected_x_chunks(
         sheared_core = skew_correct_volume_x_chunk(
             corrected, scan_parameters, camera_id,
             pad_left=pad_left_actual, out_width=xo1 - xo0, force_flip=force_flip,
+        )
+        chunk_idx += 1
+        logger.info(
+            f"{log_prefix}pass2 x-chunk {chunk_idx}/{n_chunks} "
+            f"[{xo0}:{xo1}]: {time.time() - t_chunk:.2f}s"
         )
         yield xo0, xo1, sheared_core
         xo0 = xo1
@@ -547,6 +564,7 @@ def pipeline(
                     x_total_input, x_chunk_size,
                     pre_flip=pre_flip, channel_affine=channel_affine,
                     affine_order=affine_order, reference_local_crop=reference_local_crop,
+                    log_prefix=f"[{index}] {name}/{ch} ",
                 )
                 t_stats = time.time() - t_stats
                 logger.info(
@@ -592,6 +610,7 @@ def pipeline(
                     pre_flip=pre_flip, channel_affine=channel_affine,
                     affine_order=affine_order, reference_local_crop=reference_local_crop,
                     force_flip=force_flip,
+                    log_prefix=f"[{index}] {name}/{ch} ",
                 ):
                     if overlap_with_prev > 0:
                         prev_carry = carry.get(xo0)
