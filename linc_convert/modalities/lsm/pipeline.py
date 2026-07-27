@@ -140,7 +140,8 @@ def _open_raw_channel_volume_and_mask(
     reference_local_crop: Optional[dict] = None,
     pre_flip: Optional[bool] = None,
     mip_pre_split: bool = False,
-    x_range=5000
+    x_range=5000,
+    affine_order: int = 1,
 ) -> Tuple[da.Array, np.ndarray, float]:
     reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
     vol_channels = crop_volume_channels(reader, cam_info)
@@ -155,7 +156,21 @@ def _open_raw_channel_volume_and_mask(
         vol = maybe_flip_z_lazy(vol, pre_flip)
 
     if channel_affine is not None and not np.allclose(channel_affine, np.eye(3)):
-        vol = apply_channel_affine_volume(vol, channel_affine)
+        # Apply to the whole tile, then materialize IMMEDIATELY (once)
+        # rather than leaving this lazy for the downstream Y-chunk loop
+        # to slice-and-compute repeatedly. Slicing pieces out of a lazy
+        # affine-transformed array and computing each one separately is
+        # dramatically more expensive than computing the whole thing
+        # once -- cubic-spline interpolation (and to a lesser extent,
+        # any order) re-triggers a large fraction of the same work on
+        # every slice. Stripe correction also needs the *entire* X
+        # extent to compute correct statistics (da.nanmedian over all
+        # of X), which rules out chunking this along X too -- so
+        # materializing the whole (already cropped-to-split-window)
+        # tile here, once, is the correct fix, not a chunking scheme.
+        vol = apply_channel_affine_volume(
+            vol, channel_affine, order=affine_order)
+        vol = da.from_array(np.asarray(vol.compute()), chunks=vol.chunksize)
         mask = apply_channel_affine_mask(mask, channel_affine)
 
     if reference_local_crop is not None:
@@ -224,7 +239,8 @@ def pipeline(
     chunk_max: Optional[int] = None,
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
-    x_range: int = 5000
+    x_range: int = 5000,
+    affine_order: int = 1
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -333,7 +349,8 @@ def pipeline(
             reference_local_crop=reference_local_crop,
             pre_flip=pre_flip,
             mip_pre_split=mip_pre_split,
-            x_range=x_range
+            x_range=x_range,
+            affine_order=affine_order
         )
         sample_corrected = stripe_skew_corr(
             sample_raw_vol, sample_mask, sample_thr, camera_id, scan_parameters,
@@ -397,7 +414,8 @@ def pipeline(
                         reference_local_crop=reference_local_crop,
                         pre_flip=pre_flip,
                         mip_pre_split=mip_pre_split,
-                        x_range=x_range
+                        x_range=x_range,
+                        affine_order=affine_order
                     )
 
                 is_first = index == 0 or index == checkpoint or (

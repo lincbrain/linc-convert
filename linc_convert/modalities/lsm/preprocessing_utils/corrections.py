@@ -31,11 +31,10 @@ def _corr_zy_postprocess(corr, counts, min_pixels, kernel_size):
 def compute_corr_zy(vol, tissue_frac_min, threshold, kernel_size=5):
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
-    masked = da.where((vol < threshold*1.05) | ~da.isfinite(vol), np.nan, vol)
+    masked = da.where((vol < threshold) | ~da.isfinite(vol), np.nan, vol)
     corr = da.nanmedian(masked[:, :, ::8], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
     min_pixels = int(tissue_frac_min * X)
-    corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
     corr_smooth = dask.delayed(_corr_zy_postprocess)(
         corr, counts, min_pixels, kernel_size)
     return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
@@ -60,13 +59,13 @@ def skew_correction_affine_dask(vol_yzx, conversion_factors, delta=36.0):
     affine = np.array([[1, 0, 0], [0, 1, 0], [0, shear, 1]])
     affine_inv = np.linalg.inv(affine)
     return affine_transform(
-        vol_yzx, matrix=affine_inv, offset=0, order=0, mode="constant",
+        vol_yzx, matrix=affine_inv, offset=0, order=3, mode="constant",
         cval=0.0, output_shape=(y, z, x_out), output_chunks=vol_yzx.chunksize,
     )
 
 
-def apply_affine(vol_yzx, affine):
-    return affine_transform(vol_yzx, matrix=np.linalg.inv(affine), order=0, mode="constant", cval=0.0)
+def apply_affine(vol_yzx, affine, order=3):
+    return affine_transform(vol_yzx, matrix=np.linalg.inv(affine), order=order, mode="constant", cval=0.0)
 
 
 def maybe_flip_z_lazy(vol, flip):
@@ -84,9 +83,45 @@ def embed_zy_affine_for_volume(affine_zy):
     return affine_3d
 
 
-def apply_channel_affine_volume(vol, affine_zy):
+def apply_channel_affine_volume(vol, affine_zy, order=3):
+    """
+    Register a channel's volume onto the reference channel's frame,
+    using a 3x3 (Z, Y) affine (X is left untouched).
+
+    Returns a *lazy* dask array. Callers should materialize this with
+    `.compute()` immediately after calling this function, exactly
+    once, rather than leaving it lazy and slicing/computing pieces of
+    it repeatedly downstream (e.g. once per Y-chunk) -- cubic-spline
+    interpolation (`order=3`, the default) requires a global,
+    recursive prefiltering pass along every axis, so each separate
+    slice-and-compute call from the same lazy graph redoes a large
+    fraction of that work from scratch. Materializing once and slicing
+    the resulting plain array is dramatically cheaper than repeatedly
+    slicing the lazy graph -- empirically, even a single downstream
+    slice-and-compute call can cost more than materializing the entire
+    volume once.
+
+    Parameters
+    ----------
+    vol : dask.array.Array
+        Input volume (Z, Y, X).
+    affine_zy : np.ndarray
+        3x3 homogeneous affine acting on (Z, Y).
+    order : int, default=3
+        Spline interpolation order passed to `apply_affine`. Lower
+        orders (1 = linear, 0 = nearest) are cheaper per-evaluation
+        and, unlike order=3, don't require global prefiltering, so
+        they don't suffer from the repeated-slicing cost above even if
+        left lazy -- but materializing once is still recommended
+        regardless of order.
+
+    Returns
+    -------
+    dask.array.Array
+        Lazy registered volume (Z, Y, X).
+    """
     affine_3d = embed_zy_affine_for_volume(affine_zy)
-    return apply_affine(vol, affine_3d)
+    return apply_affine(vol, affine_3d, order=order)
 
 
 def apply_channel_affine_mask(mask, affine_zy, zy_cross_term_tol=1e-6):
