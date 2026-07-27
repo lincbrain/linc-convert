@@ -28,11 +28,11 @@ def _corr_zy_postprocess(corr, counts, min_pixels, kernel_size):
     return (corr_smooth / 1000).astype(np.float32)
 
 
-def compute_corr_zy(vol, tissue_frac_min, threshold, kernel_size=5):
+def compute_corr_zy(vol, tissue_frac_min, threshold, kernel_size=5, x_stride=8):
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
     masked = da.where((vol < threshold*1.05) | ~da.isfinite(vol), np.nan, vol)
-    corr = da.nanmedian(masked[:, :, ::8], axis=2)
+    corr = da.nanmedian(masked[:, :, ::x_stride], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
     min_pixels = int(tissue_frac_min * X)
     corr = da.where((corr < threshold*1.2), threshold*1.2, corr)
@@ -386,7 +386,7 @@ def crop_mip_channels(mip, cam_info, x_crop=None, ch=None):
 
 
 def stripe_skew_corr(vol, mask, threshold, camera_id, scan_parameters,
-                     tissue_frac_min=0.02, force_flip=None):
+                     tissue_frac_min=0.02, force_flip=None, x_stride=8):
     Z, Y, X = vol.shape
     mask_da = da.from_array(mask, chunks=vol.chunks[1:])
     if mask.shape == (Y, X):
@@ -395,7 +395,8 @@ def stripe_skew_corr(vol, mask, threshold, camera_id, scan_parameters,
         raise ValueError(
             f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
     masked = da.where(mask_da, vol, np.nan)
-    corr_zy = compute_corr_zy(masked, tissue_frac_min, threshold)
+    corr_zy = compute_corr_zy(masked, tissue_frac_min,
+                              threshold, x_stride=x_stride)
     masked = da.where(mask_da, vol, 0)
     vol = apply_corr_zy_lazy(masked, corr_zy)
     vol = skew_correct_volume_lazy(

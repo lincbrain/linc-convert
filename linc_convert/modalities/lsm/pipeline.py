@@ -209,13 +209,15 @@ def _read_register_crop_x_chunk(
 def _gather_stripe_stats_x_chunked(
     reader, cam_info, ch, mask, threshold, tissue_frac_min, x_total, x_chunk_size,
     *, pre_flip, channel_affine, affine_order, reference_local_crop, log_prefix="",
+    stripe_x_stride=8,
 ):
     """Pass 1: gather stripe-correction stats across X-chunks. `mask`
     must already be registered (see `_load_and_register_mask`) if
     registration is active.
     """
     mask = _crop_mask_y(mask, reference_local_crop)
-    acc = StripeStatsAccumulator(tissue_frac_min, threshold)
+    acc = StripeStatsAccumulator(
+        tissue_frac_min, threshold, x_stride=stripe_x_stride)
     n_chunks = -(-x_total // x_chunk_size)  # ceil division
     x0 = 0
     chunk_idx = 0
@@ -386,6 +388,7 @@ def pipeline(
     x_range: int = 5000,
     affine_order: int = 1,
     tissue_frac_min: float = 0.02,
+    stripe_x_stride: int = 128,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -418,6 +421,10 @@ def pipeline(
     tissue_frac_min : float, default=0.02
         Minimum valid-pixel fraction for the stripe-correction map
         (see `StripeStatsAccumulator`/`compute_corr_zy`).
+    stripe_x_stride : int, default=128
+        Subsampling stride along X used only for the stripe-correction
+        map's median (not the valid-pixel count, which always uses
+        every X value). Larger values subsample more aggressively.
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
@@ -565,6 +572,7 @@ def pipeline(
                     pre_flip=pre_flip, channel_affine=channel_affine,
                     affine_order=affine_order, reference_local_crop=reference_local_crop,
                     log_prefix=f"[{index}] {name}/{ch} ",
+                    stripe_x_stride=stripe_x_stride,
                 )
                 t_stats = time.time() - t_stats
                 logger.info(
