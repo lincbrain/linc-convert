@@ -60,13 +60,13 @@ def skew_correction_affine_dask(vol_yzx, conversion_factors, delta=36.0):
     affine = np.array([[1, 0, 0], [0, 1, 0], [0, shear, 1]])
     affine_inv = np.linalg.inv(affine)
     return affine_transform(
-        vol_yzx, matrix=affine_inv, offset=0, order=3, mode="constant",
+        vol_yzx, matrix=affine_inv, offset=0, order=0, mode="constant",
         cval=0.0, output_shape=(y, z, x_out), output_chunks=vol_yzx.chunksize,
     )
 
 
 def apply_affine(vol_yzx, affine):
-    return affine_transform(vol_yzx, matrix=np.linalg.inv(affine), order=3, mode="constant", cval=0.0)
+    return affine_transform(vol_yzx, matrix=np.linalg.inv(affine), order=0, mode="constant", cval=0.0)
 
 
 def maybe_flip_z_lazy(vol, flip):
