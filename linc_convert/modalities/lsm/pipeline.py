@@ -380,7 +380,7 @@ def pipeline(
     cam_info = get_camera_info(scan_parameters, camera_id, slice_number,
                                crop_stage="stitching" if channel_affines_path is None else "split")
     cam_info_stitching = get_camera_info(
-        scan_parameters, camera_id, slice_number) if channel_affines_path is not None else cam_info
+        scan_parameters, find_camera_for_channel(scan_parameters, reference_channel), slice_number) if channel_affines_path is not None else cam_info
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
