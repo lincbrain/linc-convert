@@ -51,20 +51,15 @@ def compute_corr_zy(
 ) -> da.Array:
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
-
-    masked = da.where((vol < threshold) | ~
-                      da.isfinite(vol), np.nan, vol)
-
-    corr = da.nanmedian(masked[:, :, ::8], axis=2)
+    masked = da.where((vol < threshold*1.05) | ~da.isfinite(vol), np.nan, vol)
+    corr = da.nanmedian(masked[:, :, ::64], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
-
     min_pixels = int(tissue_frac_min * X)
-
-    corr_smooth = dask.delayed(_corr_zy_postprocess)(
-        corr, counts, min_pixels, kernel_size
-    )
-
-    return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
+    corr = da.where(counts < min_pixels, 9999999.0, corr)
+    return corr
+    # corr_smooth = dask.delayed(_corr_zy_postprocess)(
+    #    corr, counts, min_pixels, kernel_size)
+    # return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
 
 
 def apply_corr_zy_lazy(
@@ -88,6 +83,20 @@ def apply_corr_zy_lazy(
 # ---------------------------------------------------------------------
 # Geometric transforms
 # ---------------------------------------------------------------------
+def generate_skew_affine(
+    conversion_factors: List[float],
+    delta: float = 36.0,
+):
+    shear = np.tan(np.deg2rad(delta)) * \
+        conversion_factors[1] / conversion_factors[2]
+
+    return np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [shear, 0, 1, 0],
+        [0, 0, 0, 1]
+    ])
+
 
 def skew_correction_affine_dask(
     vol_yzx: da.Array,
@@ -234,6 +243,57 @@ def crop_volume_channels(
     return out
 
 
+def get_crop_values(size_z, cam_info_split: List[dict], cam_info_stitching, reference_channel, is_flipped):
+    """
+    Crop `vol` (already cropped to the split-crop bounds for
+    `reference_channel`) down to the stitching-crop bounds, expressed
+    relative to that split-crop frame.
+
+    `vol.shape[0]` is taken as the split-cropped Z depth (D) -- valid
+    as long as `vol` really is this same tile/channel's own
+    split-cropped volume (every tile is assumed to share the same
+    shape elsewhere in this codebase, so this should hold).
+    """
+
+    split_y0 = split_z0 = None
+    for meta in cam_info_split:
+        if meta["channel"] == reference_channel:
+            split_y0 = meta["y_start"]
+            split_z0 = meta.get("z_start")
+            break
+    if split_y0 is None:
+        raise KeyError(
+            f"reference_channel '{reference_channel}' not found in cam_info_split"
+        )
+    split_y0 = split_y0 if split_y0 is not None else 0
+    split_z0 = split_z0 if split_z0 is not None else 0
+
+    D = size_z
+
+    for meta in cam_info_stitching:
+        ch = meta["channel"]
+        if ch != reference_channel:
+            continue
+
+        stitch_y0, stitch_y1 = meta["y_start"], meta["y_end"]
+        stitch_z0, stitch_z1 = meta.get("z_start"), meta.get("z_end")
+
+        y1 = stitch_y0 - split_y0
+        y2 = stitch_y1 - split_y0
+
+        local_tz0 = (stitch_z0 if stitch_z0 is not None else 0) - split_z0
+        local_tz1 = (stitch_z1 if stitch_z1 is not None else 0) - split_z0
+
+        if is_flipped:
+            z1 = D - local_tz1
+            z2 = D - local_tz0
+        else:
+            z1 = local_tz0
+            z2 = local_tz1
+
+        return z1, z2, y1, y2
+
+
 def crop_mip_channels(
     mip: np.ndarray,
     cam_info: List[dict],
@@ -278,9 +338,99 @@ def crop_mip_channels(
     return out
 
 
+def apply_affine_split(vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_end: int, corr_zy, mask) -> da.Array:
+    """Resample `vol_zyx` through `affine` and return only the requested region.
+
+    Internally reads a padded bounding box (large enough to cover the
+    requested output region after the affine is applied) rather than the
+    whole volume, then crops down to exactly what was asked for.
+    """
+    z_start = 0
+    z_end = vol_zyx.shape[0]
+    x_start = 0
+    x_end = vol_zyx.shape[2]
+
+    def make_translate(z0, y0, x0):
+        return np.array([
+            [1, 0, 0, z0],
+            [0, 1, 0, y0],
+            [0, 0, 1, x0],
+            [0, 0, 0, 1],
+        ], dtype=float)
+
+    inv_affine = np.linalg.inv(affine)
+
+    # 1. Map the output region's corners back through the inverse affine to
+    #    find the input-space bounding box needed to fill it.
+    corners = [
+        inv_affine @ np.array([z, y, x, 1.0])
+        for z in (z_start, z_end - 1)
+        for y in (y_start, y_end - 1)
+        for x in (x_start, x_end - 1)
+    ]
+    input_coords = np.array(corners)[:, :3]
+
+    in_min = np.floor(input_coords.min(axis=0)).astype(int)
+    in_max = np.ceil(input_coords.max(axis=0)).astype(
+        int) + 1  # exclusive upper bound
+
+    # 2. Union with the originally requested region so it stays addressable.
+    in_min[0], in_max[0] = min(in_min[0], z_start), max(in_max[0], z_end)
+    in_min[1], in_max[1] = min(in_min[1], y_start), max(in_max[1], y_end)
+    in_min[2], in_max[2] = min(in_min[2], x_start), max(in_max[2], x_end)
+
+    # 3. Clip to the actual volume bounds so we never read out-of-bounds.
+    vol_shape = vol_zyx.shape
+    pad_start = np.maximum([0, 0, 0], in_min)
+    pad_end = np.minimum(vol_shape, in_max)
+    pad_z_start, pad_y_start, pad_x_start = pad_start
+    pad_z_end, pad_y_end, pad_x_end = pad_end
+
+    # 4. Slice the padded region and shift the affine into its local frame.
+    translate = make_translate(pad_z_start, pad_y_start, pad_x_start)
+    affine_local = np.linalg.inv(translate) @ affine @ translate
+
+    padded_slice = vol_zyx[
+        pad_z_start:pad_z_end, pad_y_start:pad_y_end, pad_x_start:pad_x_end
+    ]
+    Z, Y, X = padded_slice.shape
+    mask_da = da.from_array(mask, chunks=padded_slice.chunks[1:])
+
+    if mask.shape == (Y, X):
+        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
+    elif mask.shape != (Z, Y, X):
+        raise ValueError(
+            f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
+
+    masked = da.where(mask_da, padded_slice, 0)
+    corr_zy = corr_zy[pad_z_start:pad_z_end, pad_y_start:pad_y_end]
+
+    padded_slice = apply_corr_zy_lazy(padded_slice, masked, corr_zy)
+
+    transformed = affine_transform(
+        padded_slice,
+        matrix=np.linalg.inv(affine_local),
+        order=0,
+        mode="constant",
+        cval=0.0,
+    )
+
+    # 5. Crop the transformed, padded result down to the requested region.
+    crop_z0 = z_start - pad_z_start
+    crop_y0 = y_start - pad_y_start
+    crop_x0 = x_start - pad_x_start
+    dz, dy, dx = z_end - z_start, y_end - y_start, x_end - x_start
+
+    return transformed[
+        crop_z0:crop_z0 + dz,
+        crop_y0:crop_y0 + dy,
+        crop_x0:crop_x0 + dx,
+    ]
+
 # ---------------------------------------------------------------------
 # High-level preprocessing
 # ---------------------------------------------------------------------
+
 
 def stripe_skew_corr(
     vol: da.Array,
@@ -313,3 +463,19 @@ def stripe_skew_corr(
     vol = skew_correct_volume_lazy(vol, scan_parameters, camera_id)
 
     return vol
+
+
+def embed_zy_affine_for_volume(affine_zy):
+    affine_zy = np.asarray(affine_zy, dtype=np.float64)
+    if affine_zy.shape != (3, 3):
+        raise ValueError(
+            f"Expected a 3x3 (Z,Y) affine matrix, got shape {affine_zy.shape}")
+    affine_3d = np.eye(4)
+    affine_3d[0:2, 0:2] = affine_zy[0:2, 0:2]
+    affine_3d[0:2, 3] = affine_zy[0:2, 2]
+    return affine_3d
+
+
+def apply_channel_affine_volume(vol, affine_zy):
+    affine_3d = embed_zy_affine_for_volume(affine_zy)
+    return apply_affine(vol, affine_3d)

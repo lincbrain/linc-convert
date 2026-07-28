@@ -34,6 +34,7 @@ def compute_tissue_mask(
     img: np.ndarray,
     downsample: int = 4,
     clip_high_percentile: float = 99.9,
+    background_length: int = 5000,
 ) -> tuple[np.ndarray, float]:
     """
     Generate a binary tissue mask from a 2D image using thresholding and largest-component filtering.
@@ -70,7 +71,8 @@ def compute_tissue_mask(
     # Estimate threshold
     # -------------------------
     # Use bright region at right edge (heuristic)
-    edge_region = img[::downsample, -5000::downsample].astype(np.float32)
+    edge_region = img[::downsample, -
+                      background_length::downsample].astype(np.float32)
     threshold = min(np.median(edge_region), 120)
     del edge_region
 

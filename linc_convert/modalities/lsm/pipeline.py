@@ -58,12 +58,20 @@ from dask.diagnostics import ProgressBar
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
+    apply_affine_split,
+    apply_corr_zy_lazy,
+    compute_corr_zy,
     crop_volume_channels,
+    embed_zy_affine_for_volume,
+    generate_skew_affine,
+    get_crop_values,
     stripe_skew_corr,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.io import (
+    find_camera_for_channel,
     get_camera_info,
     get_channel_names,
+    load_channel_affines,
     load_mask_and_thresholds,
     load_scan_parameters,
 )
@@ -213,6 +221,9 @@ def _open_raw_channel_volume_and_mask(
     name: str,
     ch: str,
     cam_info,
+    background_length: int = 5000,
+    mip_pre_split: bool = False,
+    reference_ch=None,
 ) -> Tuple[da.Array, np.ndarray, float]:
     """Open one tile/channel exactly once: the reader, the channel crop,
     and the mask/threshold lookup all happen here, a single time per
@@ -229,19 +240,21 @@ def _open_raw_channel_volume_and_mask(
     threshold : float
         Intensity threshold for this channel.
     """
+    if reference_ch is None:
+        reference_ch = ch
     reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
     vol_channels = crop_volume_channels(reader, cam_info)
-    masks, thrs = load_mask_and_thresholds(name, mip_dir, cam_info)
+    masks, thrs = load_mask_and_thresholds(
+        name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split)
 
-    return vol_channels[ch], masks[ch], thrs[ch]
+    return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
 
 
 def _corrected_y_chunk(
     vol: da.Array,
     mask: np.ndarray,
-    threshold: float,
-    camera_id: int,
-    scan_parameters: dict,
+    affine: np.ndarray,
+    corr_zy: np.ndarray,
     y0: int,
     y1: int,
 ) -> da.Array:
@@ -257,12 +270,8 @@ def _corrected_y_chunk(
 
     Nothing is read from `vol` until the caller calls `.compute()`.
     """
-    vol_chunk = vol[:, y0:y1, :]
-    mask_chunk = mask[:, y0:y1, :] if mask.ndim == 3 else mask[y0:y1, :]
 
-    return stripe_skew_corr(
-        vol_chunk, mask_chunk, threshold, camera_id, scan_parameters
-    )
+    return apply_affine_split(vol, affine, y0, y1, corr_zy, mask)
 
 
 def _write_checkpoint(filename: str, y: int) -> None:
@@ -320,6 +329,10 @@ def pipeline(
     dandiset_id: Optional[str] = None,
     chunk_min: Optional[int] = None,
     chunk_max: Optional[int] = None,
+    background_length: int = 5000,
+    mip_pre_split: bool = False,
+    channel_affines_path: Optional[str] = None,
+    reference_channel: str = "488",
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -397,7 +410,10 @@ def pipeline(
     voxel_size = list(map(float, reversed(voxel_size)))
 
     scan_parameters = load_scan_parameters(yaml_path)
-    cam_info = get_camera_info(scan_parameters, camera_id, slice_number)
+    cam_info = get_camera_info(scan_parameters, camera_id, slice_number,
+                               crop_stage="stitching" if channel_affines_path is None else "split")
+    cam_info_stitching = get_camera_info(
+        scan_parameters, camera_id, slice_number) if channel_affines_path is not None else cam_info
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
@@ -423,7 +439,11 @@ def pipeline(
 
         channel_timer = time.time()
 
-        y_coords = load_y_coordinates(coords_yaml_by_channel[ch])
+        if channel_affines_path is None:
+            reference_channel = ch
+
+        y_coords = load_y_coordinates(
+            coords_yaml_by_channel[reference_channel])
         # if len(y_coords) != num_tiles:
         #    raise ValueError(
         #        f"Coordinates file for channel {ch} has {len(y_coords)} "
@@ -439,8 +459,10 @@ def pipeline(
                 api_key=api_key,
                 mip_dir=mip_dir,
                 name=tile_name(sample_path),
-                ch=ch,
-                cam_info=cam_info,
+                ch=reference_channel,
+                cam_info=cam_info_stitching,
+                background_length=background_length,
+                mip_pre_split=mip_pre_split
             )
         )
         sample_corrected = stripe_skew_corr(
@@ -517,20 +539,17 @@ def pipeline(
                 tile_timer = time.time()
 
                 open_timer = time.time()
-                if index == 0:
-                    raw_vol, mask, thr = (
-                        sample_raw_vol, sample_mask, sample_thr
-                    )
-                else:
-                    raw_vol, mask, thr = _open_raw_channel_volume_and_mask(
-                        path,
-                        dandiset_id=dandiset_id,
-                        api_key=api_key,
-                        mip_dir=mip_dir,
-                        name=name,
-                        ch=ch,
-                        cam_info=cam_info,
-                    )
+
+                raw_vol, mask, thr = _open_raw_channel_volume_and_mask(
+                    path,
+                    dandiset_id=dandiset_id,
+                    api_key=api_key,
+                    mip_dir=mip_dir,
+                    name=name,
+                    ch=ch,
+                    cam_info=cam_info,
+                    background_length=background_length
+                )
                 logger.info(
                     f"[{index}] open reader + mask/threshold: "
                     f"{time.time() - open_timer:.2f}s"
@@ -572,15 +591,35 @@ def pipeline(
 
                 zstart = 0
                 trailing_buffer: Optional[np.ndarray] = None
+                layout = scan_parameters.get("channelLayout", {})
+                vertical_flip = {1: bool(layout["1"]["verticalFlip"]), 2: bool(
+                    layout["2"]["verticalFlip"])}
+                z_start, z_end, y_start, y_end = get_crop_values(
+                    corrected_sz, cam_info, cam_info_stitching, reference_channel, vertical_flip[find_camera_for_channel(scan_parameters, reference_channel)])
 
-                y0 = 0
-                while y0 < corrected_sy:
-                    y1 = min(corrected_sy, y0 + y_chunk_size)
+                y0 = y_start
+                delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
+                umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
+                factors = [umps["y"], umps["z"], umps["x"]]
+                affine = generate_skew_affine(factors, delta)
+                if channel_affines_path is not None:
+                    affines = load_channel_affines(
+                        channel_affines_path, reference_channel)
+                    affine = embed_zy_affine_for_volume(affines[ch]) @ affine
+
+                if vertical_flip[camera_id]:
+                    raw_vol = raw_vol[::-1]
+                corr_zy = compute_corr_zy(
+                    raw_vol,
+                    mask,
+                    thr,
+                )
+                while y0 < corrected_sy+y_start:
+                    y1 = min(corrected_sy+y_start, y0 + y_chunk_size)
 
                     lazy_chunk = _corrected_y_chunk(
-                        raw_vol, mask, thr, camera_id, scan_parameters,
-                        y0, y1,
-                    )
+                        raw_vol, mask, affine, corr_zy, y0, y1)
+                    lazy_chunk = lazy_chunk[z_start:z_end]
 
                     compute_timer = time.time()
                     with ProgressBar():

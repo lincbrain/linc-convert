@@ -1,11 +1,12 @@
 import math
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import tifffile
 import yaml
+import warnings
 
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     crop_mip_channels,
@@ -38,6 +39,40 @@ def load_scan_parameters(yaml_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def load_channel_affines(
+    affines_path: str, reference_channel: str
+) -> Dict[str, np.ndarray]:
+    """
+    Load per-channel registration affines from a YAML file.
+    """
+    with open(affines_path, "r") as f:
+        raw = yaml.safe_load(f) or {}
+
+    if reference_channel in raw:
+        warnings.warn(
+            f"Affines file specifies an affine for reference channel "
+            f"'{reference_channel}'; ignoring it and using identity, "
+            "since the reference channel is never registered.",
+            stacklevel=2,
+        )
+
+    affines: Dict[str, np.ndarray] = {reference_channel: np.eye(3)}
+
+    for ch_name, matrix in raw.items():
+        if ch_name == reference_channel:
+            continue
+
+        arr = np.asarray(matrix, dtype=np.float64)
+        if arr.shape != (3, 3):
+            raise ValueError(
+                f"Affine for channel '{ch_name}' must be 3x3, got "
+                f"shape {arr.shape}"
+            )
+        affines[ch_name] = arr
+
+    return affines
+
+
 def load_mask_and_thresholds(
     name: str,
     mip_dir: str,
@@ -45,6 +80,9 @@ def load_mask_and_thresholds(
     *,
     downsample: int = 8,
     clip_high_percentile: float = 99.0,
+    background_length: int = 5000,
+    pre_split: bool = False,
+    ch: Optional[str] = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, float]]:
     """
     Load MIP image and compute tissue masks + thresholds per channel.
@@ -74,13 +112,27 @@ def load_mask_and_thresholds(
     FileNotFoundError
         If the corresponding MIP file is missing.
     """
-    mip_path = os.path.join(
-        mip_dir, f"{name}_proc-mip.tiff").replace("slice0", "slice")
+    if pre_split:
+        if ch is None:
+            raise ValueError(
+                "load_mask_and_thresholds: ch is required when "
+                "pre_split=True."
+            )
+        mip_path = os.path.join(
+            mip_dir, f"{ch}_{name}_proc-mip.tiff").replace("slice0", "slice")
 
-    if not os.path.exists(mip_path):
-        raise FileNotFoundError(f"Missing YX MIP file: {mip_path}")
+        if not os.path.exists(mip_path):
+            raise FileNotFoundError(f"Missing YX MIP file: {mip_path}")
 
-    raw_mip = tifffile.imread(mip_path).astype(np.float32)
+        raw_mip = tifffile.imread(mip_path).astype(np.float32)
+    else:
+        mip_path = os.path.join(
+            mip_dir, f"{name}_proc-mip.tiff").replace("slice0", "slice")
+
+        if not os.path.exists(mip_path):
+            raise FileNotFoundError(f"Missing YX MIP file: {mip_path}")
+
+        raw_mip = tifffile.imread(mip_path).astype(np.float32)
 
     # Crop MIP per channel
     mip_channels = crop_mip_channels(raw_mip, cam_info)
@@ -93,6 +145,7 @@ def load_mask_and_thresholds(
             mip,
             downsample=downsample,
             clip_high_percentile=clip_high_percentile,
+            background_length=background_length
         )
         masks[out_ch] = mask
         thresholds[out_ch] = thr
@@ -181,58 +234,17 @@ def get_channel_names(scan_parameters: dict, camera_id: int) -> List[str]:
 
 
 def get_camera_info(
-    scan_parameters: dict, camera_id: int, slice_number: int
+    scan_parameters: dict,
+    camera_id: int,
+    slice_number: int,
+    crop_stage: str = "stitching",
 ) -> List[dict]:
-    """
-    Extract per-channel crop and metadata for a given camera, using the
-    configEpoch whose slice range covers `slice_number`.
-
-    Parameters
-    ----------
-    scan_parameters : dict
-        Loaded scan configuration.
-    camera_id : int
-        Camera identifier (1 or 2).
-    slice_number : int
-        Physical slice number being processed by this run. Selects
-        which configEpoch's `cropDefinitions` to use.
-
-    Returns
-    -------
-    list of dict
-        Each entry contains:
-        - channel (str)
-        - camera_id (int)
-        - y_start, y_end (int)
-            Lateral-axis ("y" in the acquisition YAML's axis
-            convention) crop bounds, taken from this channel's
-            `stitchingCrop.yRange`. This is the axis used by
-            `crop_volume_channels`/`crop_mip_channels` to split a raw
-            camera frame into per-channel volumes.
-        - z_start, z_end (int or None)
-            Depth-axis ("z" in the acquisition YAML) crop bounds,
-            taken from `stitchingCrop.zRange`. Applied by
-            `crop_volume_channels` to crop the raw volume's Z axis.
-            Not applied to the YX MIP used for masking, since that MIP
-            has already been max-projected along Z and has no Z axis
-            left to crop. `None` if this epoch/channel doesn't define
-            a zRange (in which case the Z axis is left uncropped).
-        - vertical_flip (bool)
-            For reference only: `skew_correct_volume_lazy` reads
-            `verticalFlip` directly from
-            `scan_parameters["channelLayout"]`, not from this dict.
-
-    Raises
-    ------
-    ValueError
-        If camera_id is invalid, or no configEpoch covers
-        `slice_number`.
-    KeyError
-        If the resolved epoch has no crop/layout info for this camera,
-        or a channel's `stitchingCrop.yRange` isn't defined.
-    """
     if camera_id not in (1, 2):
         raise ValueError(f"Invalid camera_id: {camera_id}")
+    if crop_stage not in ("stitching", "split"):
+        raise ValueError(
+            f"crop_stage must be 'stitching' or 'split', got {crop_stage!r}"
+        )
 
     cam_key = f"Camera{camera_id}"
     config_id = _resolve_config_id(scan_parameters, slice_number)
@@ -255,24 +267,58 @@ def get_camera_info(
     for ch_name, ch_crop in sorted(
         channels_crop.items(), key=lambda item: item[1]["channelKey"]
     ):
-        stitching = ch_crop.get("stitchingCrop") or {}
-        y_range = stitching.get("yRange")
-        z_range = stitching.get("zRange")
+        if crop_stage == "stitching":
+            stitching = ch_crop.get("stitchingCrop") or {}
+            y_range = stitching.get("yRange")
+            z_range = stitching.get("zRange")
 
-        if y_range is None:
-            raise KeyError(
-                f"stitchingCrop.yRange not defined for channel '{ch_name}' "
-                f"on {cam_key} in epoch '{config_id}'"
-            )
+            if y_range is None:
+                raise KeyError(
+                    f"stitchingCrop.yRange not defined for channel "
+                    f"'{ch_name}' on {cam_key} in epoch '{config_id}'"
+                )
+
+            y_start, y_end = int(y_range[0]), int(y_range[1])
+            z_start = int(z_range[0]) if z_range is not None else None
+            z_end = int(z_range[1]) if z_range is not None else None
+        else:
+            split = ch_crop.get("splitCrop") or {}
+            y_range = split.get("yRange")
+            z_range = split.get("zRange")
+
+            if y_range is None:
+                raise KeyError(
+                    f"splitCrop.yRange not defined for channel "
+                    f"'{ch_name}' on {cam_key} in epoch '{config_id}'"
+                )
+
+            y_start, y_end = int(y_range[0]), int(y_range[1])
+            z_start = int(z_range[0]) if z_range is not None else None
+            z_end = int(z_range[1]) if z_range is not None else None
 
         info.append({
             "channel": ch_name,
             "camera_id": camera_id,
-            "y_start": int(y_range[0]),
-            "y_end": int(y_range[1]),
-            "z_start": int(z_range[0]) if z_range is not None else None,
-            "z_end": int(z_range[1]) if z_range is not None else None,
+            "y_start": y_start,
+            "y_end": y_end,
+            "z_start": z_start,
+            "z_end": z_end,
             "vertical_flip": vertical_flip,
         })
 
     return info
+
+
+def find_camera_for_channel(scan_parameters: dict, channel: str) -> int:
+    layout = scan_parameters.get("channelLayout", {})
+
+    for camera_id in (1, 2):
+        cam_key = f"Camera{camera_id}"
+        cam_layout = layout.get(cam_key, {})
+        ch_names = [cam_layout[k] for k in cam_layout if k.startswith("Ch")]
+        if channel in ch_names:
+            return camera_id
+
+    raise KeyError(
+        f"Channel '{channel}' not found in channelLayout for either camera"
+    )
