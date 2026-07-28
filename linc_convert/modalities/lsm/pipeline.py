@@ -216,6 +216,9 @@ def _gather_stripe_stats_x_chunked(
     must already be registered (see `_load_and_register_mask`) if
     registration is active.
     """
+
+    if x_chunk_size == -1:
+        x_chunk_size = x_total
     mask = _crop_mask_y(mask, reference_local_crop)
     acc = StripeStatsAccumulator(
         tissue_frac_min, threshold, x_stride=stripe_x_stride)
@@ -769,7 +772,7 @@ def pass1_cmd(
     *,
     mip_dir: Optional[str] = None,
     mip_pre_split: bool = False,
-    pass1_x_chunk_size: int = 2048,
+    pass1_x_chunk_size: int = -1,
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
     dandiset_id: Optional[str] = None,
