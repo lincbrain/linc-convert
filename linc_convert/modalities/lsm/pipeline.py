@@ -133,82 +133,48 @@ def open_tile_reader(
     )
 
 
-def discover_tile_paths(
-    inp: str,
-    camera_id: int,
-    *,
-    dandiset_id: Optional[str],
-    api_key: Optional[str],
-) -> List[str]:
+def discover_tile_paths(inp, camera_id, *, dandiset_id, api_key):
     """Get all tile paths for one camera from the input location, in
     on-disk order.
 
-    Tiles are assumed to be laid out along a single axis (y) in the order
-    they're returned here -- the index of a path in this list *is* its
-    y-position, so no filename parsing is needed beyond filtering by
-    camera.
-
-    Tile names are expected to contain a camera token of the form
-    ``acq-camera-01``, ``acq-camera-02``, etc. (zero-padded to two
-    digits), e.g.:
-
-        sub-MF283_sample-slice052_chunk-0019_acq-camera-01.ome.zarr
-
-    Only tiles matching `camera_id` are returned.
-
-    Parameters
-    ----------
-    inp : str
-        Path (local directory, or DANDI asset path prefix) to search.
-    camera_id : int
-        Camera number to filter tiles by (e.g. 1 -> "acq-camera-01").
-    dandiset_id : str, optional
-        If provided, tiles are listed from DANDI instead of local disk.
-    api_key : str, optional
-        DANDI API key, required when `dandiset_id` is provided.
-
-    Returns
-    -------
-    list of str
-        Matching tile paths, sorted.
-
-    Raises
-    ------
-    ValueError
-        If no tiles are found, or none match the requested camera.
+    Tile names are expected to contain a camera token of either form:
+    ``acq-camera-01`` (hyphen before the zero-padded number, e.g. the
+    original MF283 dataset) or ``acq-camera01`` (no hyphen, e.g. the
+    MF282 dataset). Both are checked, since different datasets use
+    different conventions.
     """
-    camera_token = f"acq-camera-{camera_id:02d}"
+    camera_tokens = [
+        f"acq-camera-{camera_id:02d}",
+        f"acq-camera{camera_id:02d}",
+    ]
 
     if dandiset_id is None:
-        paths = sorted(glob(os.path.join(inp, f"*{camera_token}*.ome.zarr")))
+        paths = sorted({
+            p
+            for token in camera_tokens
+            for p in glob(os.path.join(inp, f"*{token}*.ome.zarr"))
+        })
         if not paths:
             raise ValueError(
                 f"No tile folders found for camera {camera_id} "
-                f"(token '{camera_token}') in input directory"
+                f"(tried tokens {camera_tokens!r}) in input directory"
             )
         return paths
-
-    with DandiAPIClient(
-        api_url="https://api.dandiarchive.org/api",
-        token=api_key,
-    ) as client:
+    with DandiAPIClient(api_url="https://api.dandiarchive.org/api", token=api_key) as client:
         dandiset = client.get_dandiset(dandiset_id, "draft")
         prefix = PurePosixPath(inp.rstrip("/") + "/")
         depth = len(prefix.parts)
-
-        paths = sorted(
+        paths = sorted({
             asset.path
             for asset in dandiset.get_assets_with_path_prefix(str(prefix))
             if len(PurePosixPath(asset.path).parts) == depth + 1
-            and camera_token in PurePosixPath(asset.path).name
-        )
-
+            and any(token in PurePosixPath(asset.path).name for token in camera_tokens)
+        })
     if not paths:
         raise ValueError(
             f"No tile assets found for camera {camera_id} "
-            f"(token '{camera_token}') in DANDI dataset"
+            f"(tried tokens {camera_tokens!r}) in DANDI dataset"
         )
-
     return paths
 
 
