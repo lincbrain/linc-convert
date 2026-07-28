@@ -211,7 +211,7 @@ def _open_raw_channel_volume_and_mask(
     reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
     vol_channels = crop_volume_channels(reader, cam_info)
     masks, thrs = load_mask_and_thresholds(
-        name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split)
+        name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
 
     return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
 
