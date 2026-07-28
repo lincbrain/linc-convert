@@ -410,7 +410,7 @@ def pipeline(
             reference_channel = ch
 
         if channel_affines_path is not None:
-            y_coords = load_y_coordinates(reference_channel)
+            y_coords = load_y_coordinates(reference_cords)
         else:
             y_coords = load_y_coordinates(
                 coords_yaml_by_channel[ch])
