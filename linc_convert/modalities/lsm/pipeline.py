@@ -299,6 +299,7 @@ def pipeline(
     mip_pre_split: bool = False,
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
+    reference_cords: Optional[str] = None,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -409,7 +410,10 @@ def pipeline(
             reference_channel = ch
 
         y_coords = load_y_coordinates(
-            coords_yaml_by_channel[reference_channel])
+            coords_yaml_by_channel[ch])
+
+        if channel_affines_path is not None:
+            y_coords = load_y_coordinates(reference_channel)
         # if len(y_coords) != num_tiles:
         #    raise ValueError(
         #        f"Coordinates file for channel {ch} has {len(y_coords)} "
