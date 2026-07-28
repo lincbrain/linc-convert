@@ -409,11 +409,11 @@ def pipeline(
         if channel_affines_path is None:
             reference_channel = ch
 
-        y_coords = load_y_coordinates(
-            coords_yaml_by_channel[ch])
-
         if channel_affines_path is not None:
             y_coords = load_y_coordinates(reference_channel)
+        else:
+            y_coords = load_y_coordinates(
+                coords_yaml_by_channel[ch])
         # if len(y_coords) != num_tiles:
         #    raise ValueError(
         #        f"Coordinates file for channel {ch} has {len(y_coords)} "
