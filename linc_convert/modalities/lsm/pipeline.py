@@ -623,7 +623,18 @@ def pipeline(
                     if overlap_with_prev > 0:
                         prev_carry = carry.get(xo0)
                         if prev_carry is not None:
-                            blend_len = min(data.shape[1], overlap_with_prev)
+                            if prev_carry.shape[1] != overlap_with_prev:
+                                logger.warning(
+                                    f"[{index}] {name}/{ch} x-chunk {xo0}: "
+                                    f"previous tile's withheld overlap "
+                                    f"({prev_carry.shape[1]} rows) doesn't match "
+                                    f"this tile's expected overlap_with_prev "
+                                    f"({overlap_with_prev} rows) -- blending only "
+                                    f"the smaller of the two; check y_coords for "
+                                    f"an irregular gap between these two tiles."
+                                )
+                            blend_len = min(
+                                data.shape[1], overlap_with_prev, prev_carry.shape[1])
                             data[:, :blend_len, :] = (
                                 prev_carry[:, :blend_len, :] *
                                 ramp_inverse[:, :blend_len, :]
