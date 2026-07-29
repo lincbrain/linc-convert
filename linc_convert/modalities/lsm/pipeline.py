@@ -213,7 +213,7 @@ def _open_raw_channel_volume_and_mask(
     masks, thrs = load_mask_and_thresholds(
         name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
 
-    return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
+    return vol_channels[reference_ch][:, :, 20000:30000], masks[reference_ch][:, 20000:30000], thrs[reference_ch]
 
 
 def _corrected_y_chunk(
