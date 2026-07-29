@@ -300,6 +300,7 @@ def pipeline(
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
     reference_cords: Optional[str] = None,
+    tissue_frac_min: float = 0.02,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -383,6 +384,18 @@ def pipeline(
                                                                                   reference_channel), slice_number, "stitching") if channel_affines_path is not None else cam_info
     cam_info_stitching = get_camera_info(
         scan_parameters, find_camera_for_channel(scan_parameters, reference_channel), slice_number) if channel_affines_path is not None else cam_info
+    # get_crop_values needs the REFERENCE channel's OWN split-crop info,
+    # on the reference channel's OWN camera -- which may differ from
+    # `camera_id` (the camera THIS run is processing) when the
+    # reference channel lives on the other camera. Reusing `cam_info`
+    # here would be wrong: `cam_info` only has entries for whichever
+    # channels live on `camera_id`, so a lookup for `reference_channel`
+    # would raise KeyError whenever it's on the other camera.
+    reference_cam_info_split = get_camera_info(
+        scan_parameters, find_camera_for_channel(
+            scan_parameters, reference_channel),
+        slice_number, "split",
+    ) if channel_affines_path is not None else cam_info
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
@@ -443,6 +456,30 @@ def pipeline(
         corrected_sz, corrected_sy, corrected_sx = sample_corrected.shape
         del sample_corrected
         gc.collect()
+
+        # get_crop_values needs the reference channel's own SPLIT-cropped
+        # Z depth (D), not `corrected_sz` above -- that's the STITCHING-
+        # cropped sample's depth (after stripe_skew_corr, which doesn't
+        # change Z, but stitching-crop and split-crop can still differ in
+        # Z extent). Only a shape is needed here, so this is a cheap
+        # metadata-only read (dask `.shape`, no data movement), and every
+        # tile is assumed to share the same shape elsewhere in this
+        # codebase, so measuring it once from the sample tile is valid.
+        if channel_affines_path is not None:
+            reference_split_sample_vol, _, _ = _open_raw_channel_volume_and_mask(
+                sample_path,
+                dandiset_id=dandiset_id,
+                api_key=api_key,
+                mip_dir=mip_dir,
+                name=tile_name(sample_path),
+                ch=reference_channel,
+                cam_info=reference_cam_info_split,
+                background_length=background_length,
+                mip_pre_split=mip_pre_split,
+            )
+            reference_split_z_depth = reference_split_sample_vol.shape[0]
+        else:
+            reference_split_z_depth = corrected_sz
 
         full_x = corrected_sx
         full_y = int(round(y_coords[-1])) + corrected_sy
@@ -564,10 +601,10 @@ def pipeline(
                 zstart = 0
                 trailing_buffer: Optional[np.ndarray] = None
                 layout = scan_parameters.get("channelLayout", {})
-                vertical_flip = {1: bool(layout["1"]["verticalFlip"]), 2: bool(
-                    layout["2"]["verticalFlip"])}
+                vertical_flip = {1: bool(layout["Camera1"]["verticalFlip"]), 2: bool(
+                    layout["Camera2"]["verticalFlip"])}
                 z_start, z_end, y_start, y_end = get_crop_values(
-                    corrected_sz, cam_info, cam_info_stitching, reference_channel, vertical_flip[find_camera_for_channel(scan_parameters, reference_channel)])
+                    reference_split_z_depth, reference_cam_info_split, cam_info_stitching, reference_channel, vertical_flip[find_camera_for_channel(scan_parameters, reference_channel)])
 
                 y0 = y_start
                 delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
@@ -577,13 +614,19 @@ def pipeline(
                 if channel_affines_path is not None:
                     affines = load_channel_affines(
                         channel_affines_path, reference_channel)
-                    affine = embed_zy_affine_for_volume(affines[ch]) @ affine
+                    # Combine as (skew @ registration), not (registration @
+                    # skew): for forward-mapping matrices composed via
+                    # C = B @ A, C(x) = B(A(x)) means A is applied FIRST.
+                    # We want registration first, skew second, so skew must
+                    # be on the LEFT.
+                    affine = affine @ embed_zy_affine_for_volume(affines[ch])
 
                 if vertical_flip[camera_id]:
                     raw_vol = raw_vol[::-1]
                 corr_zy = compute_corr_zy(
                     raw_vol,
                     mask,
+                    tissue_frac_min,
                     thr,
                 )
                 while y0 < corrected_sy+y_start:

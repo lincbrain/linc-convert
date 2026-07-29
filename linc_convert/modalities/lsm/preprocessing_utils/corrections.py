@@ -45,13 +45,33 @@ def _corr_zy_postprocess(
 
 def compute_corr_zy(
     vol: da.Array,
+    mask: np.ndarray,
     tissue_frac_min: float,
     threshold: float,
     kernel_size: int = 5,
 ) -> da.Array:
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
-    masked = da.where((vol < threshold*1.05) | ~da.isfinite(vol), np.nan, vol)
+
+    if mask.shape == (Y, X):
+        mask_da = da.from_array(mask, chunks=vol.chunks[1:]) if isinstance(
+            mask, np.ndarray) else mask
+        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
+    elif mask.shape == (Z, Y, X):
+        mask_da = da.from_array(mask, chunks=vol.chunks) if isinstance(
+            mask, np.ndarray) else mask
+    else:
+        raise ValueError(
+            f"mask shape {mask.shape} != volume shape {(Z, Y, X)} or {(Y, X)}")
+
+    # Keep a pixel only if it's inside the tissue mask AND above
+    # threshold AND finite -- same combined condition
+    # stripe_skew_corr/apply_affine_split use elsewhere in this file,
+    # just expressed as one da.where instead of two chained ones.
+    masked = da.where(
+        mask_da & (vol >= threshold * 1.05) & da.isfinite(vol),
+        vol, np.nan,
+    )
     corr = da.nanmedian(masked[:, :, ::64], axis=2)
     counts = da.sum(da.isfinite(masked), axis=2)
     min_pixels = int(tissue_frac_min * X)
@@ -405,7 +425,7 @@ def apply_affine_split(vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_en
     masked = da.where(mask_da, padded_slice, 0)
     corr_zy = corr_zy[pad_z_start:pad_z_end, pad_y_start:pad_y_end]
 
-    padded_slice = apply_corr_zy_lazy(padded_slice, masked, corr_zy)
+    padded_slice = apply_corr_zy_lazy(masked, corr_zy)
 
     transformed = affine_transform(
         padded_slice,
