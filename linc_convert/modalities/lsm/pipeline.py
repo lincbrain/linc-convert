@@ -569,7 +569,8 @@ def pipeline(
                     name=name,
                     ch=ch,
                     cam_info=cam_info,
-                    background_length=background_length
+                    background_length=background_length,
+                    mip_pre_split=mip_pre_split,
                 )
                 logger.info(
                     f"[{index}] open reader + mask/threshold: "
