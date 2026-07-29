@@ -378,12 +378,14 @@ def pipeline(
     voxel_size = list(map(float, reversed(voxel_size)))
 
     scan_parameters = load_scan_parameters(yaml_path)
+    reference_camera_id = find_camera_for_channel(
+        scan_parameters, reference_channel)
     cam_info = get_camera_info(scan_parameters, camera_id, slice_number,
                                crop_stage="stitching" if channel_affines_path is None else "split")
-    reference_cam_info = get_camera_info(scan_parameters, find_camera_for_channel(scan_parameters,
-                                                                                  reference_channel), slice_number, "stitching") if channel_affines_path is not None else cam_info
+    reference_cam_info = get_camera_info(scan_parameters, reference_camera_id,
+                                         slice_number, "stitching") if channel_affines_path is not None else cam_info
     cam_info_stitching = get_camera_info(
-        scan_parameters, find_camera_for_channel(scan_parameters, reference_channel), slice_number) if channel_affines_path is not None else cam_info
+        scan_parameters, reference_camera_id, slice_number) if channel_affines_path is not None else cam_info
     # get_crop_values needs the REFERENCE channel's OWN split-crop info,
     # on the reference channel's OWN camera -- which may differ from
     # `camera_id` (the camera THIS run is processing) when the
@@ -392,15 +394,22 @@ def pipeline(
     # channels live on `camera_id`, so a lookup for `reference_channel`
     # would raise KeyError whenever it's on the other camera.
     reference_cam_info_split = get_camera_info(
-        scan_parameters, find_camera_for_channel(
-            scan_parameters, reference_channel),
-        slice_number, "split",
+        scan_parameters, reference_camera_id, slice_number, "split",
     ) if channel_affines_path is not None else cam_info
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
     tile_paths = discover_tile_paths(
         inp, camera_id, dandiset_id=dandiset_id, api_key=api_key
+    )
+    # Sample tiles used to estimate the reference channel's shape/depth
+    # must come from the reference channel's OWN camera -- MIP files
+    # are named per-tile, and a camera-1 tile's name has no
+    # correspondence to camera-2's MIP files (or vice versa) whenever
+    # the reference channel lives on the other camera from `camera_id`.
+    reference_tile_paths = (
+        tile_paths if reference_camera_id == camera_id
+        else discover_tile_paths(inp, reference_camera_id, dandiset_id=dandiset_id, api_key=api_key)
     )
 
     num_tiles = len(tile_paths)
@@ -435,8 +444,11 @@ def pipeline(
         #        f"tile entries, but {num_tiles} tiles were discovered."
         #    )
 
-        # --- Estimate the corrected mosaic shape from a single sample tile.
-        sample_path = tile_paths[0]
+        # --- Estimate the corrected mosaic shape from a single sample tile,
+        # taken from the reference channel's OWN camera (see
+        # reference_tile_paths above -- not necessarily the same camera
+        # as `camera_id`/`tile_paths`).
+        sample_path = reference_tile_paths[0]
         sample_raw_vol, sample_mask, sample_thr = (
             _open_raw_channel_volume_and_mask(
                 sample_path,
