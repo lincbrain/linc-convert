@@ -379,8 +379,8 @@ def pipeline(
     scan_parameters = load_scan_parameters(yaml_path)
     cam_info = get_camera_info(scan_parameters, camera_id, slice_number,
                                crop_stage="stitching" if channel_affines_path is None else "split")
-    reference_cam_info = get_camera_info(scan_parameters, find_camera_for_channel(
-        reference_channel), slice_number, "stitching") if channel_affines_path is not None else cam_info
+    reference_cam_info = get_camera_info(scan_parameters, find_camera_for_channel(scan_parameters,
+                                                                                  reference_channel), slice_number, "stitching") if channel_affines_path is not None else cam_info
     cam_info_stitching = get_camera_info(
         scan_parameters, find_camera_for_channel(scan_parameters, reference_channel), slice_number) if channel_affines_path is not None else cam_info
 
