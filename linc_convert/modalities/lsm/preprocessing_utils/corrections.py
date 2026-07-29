@@ -469,10 +469,12 @@ def stripe_skew_corr(
         raise ValueError(
             f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
 
-    masked = da.where(mask_da, vol, np.nan)
-
+    # compute_corr_zy now does its own mask+threshold+finite filtering
+    # internally, given the raw vol and mask directly -- no need to
+    # pre-mask (NaN-fill) here first the way this used to.
     corr_zy = compute_corr_zy(
-        masked,
+        vol,
+        mask,
         tissue_frac_min,
         threshold,
     )
