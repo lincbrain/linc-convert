@@ -619,6 +619,13 @@ def pipeline(
                 z_start, z_end, y_start, y_end = get_crop_values(
                     reference_split_z_depth, reference_cam_info_split, cam_info_stitching, reference_channel, vertical_flip[find_camera_for_channel(scan_parameters, reference_channel)])
 
+                # y0/y1 (the chunk loop below) range over
+                # [y_start, corrected_sy + y_start), NOT [0, corrected_sy)
+                # -- withhold_from was computed above in the latter
+                # (zero-based) frame, so it needs the same y_start offset
+                # to be compared correctly against y0/y1.
+                withhold_from = withhold_from + y_start
+
                 y0 = y_start
                 delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
                 umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
@@ -656,12 +663,18 @@ def pipeline(
 
                     blend_timer = time.time()
                     # Blend the leading edge of this chunk if it falls
-                    # within [0, overlap_with_prev).
-                    if overlap_with_prev > 0 and y0 < overlap_with_prev:
-                        blend_len = min(data.shape[1], overlap_with_prev - y0)
-                        carry_slice = carry[:, y0:y0 + blend_len, :]
-                        ramp_slice = ramp[:, y0:y0 + blend_len, :]
-                        ramp_inv_slice = ramp_inverse[:, y0:y0 + blend_len, :]
+                    # within [0, overlap_with_prev) of THIS tile's own
+                    # local (zero-based) frame -- y0 itself starts at
+                    # y_start, not 0, so it must be re-based here.
+                    if overlap_with_prev > 0 and (y0 - y_start) < overlap_with_prev:
+                        local_y0 = y0 - y_start
+                        blend_len = min(
+                            data.shape[1], overlap_with_prev - local_y0)
+                        carry_slice = carry[:,
+                                            local_y0:local_y0 + blend_len, :]
+                        ramp_slice = ramp[:, local_y0:local_y0 + blend_len, :]
+                        ramp_inv_slice = ramp_inverse[:,
+                                                      local_y0:local_y0 + blend_len, :]
                         data[:, :blend_len, :] = (
                             carry_slice * ramp_inv_slice
                             + data[:, :blend_len, :] * ramp_slice

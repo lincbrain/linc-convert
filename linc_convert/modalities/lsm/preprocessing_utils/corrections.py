@@ -76,7 +76,13 @@ def compute_corr_zy(
     counts = da.sum(da.isfinite(masked), axis=2)
     min_pixels = int(tissue_frac_min * X)
     corr = da.where(counts < min_pixels, 9999999.0, corr)
-    return corr
+    # Without this scaling, corr_zy sits at the same scale as the raw
+    # intensity itself (e.g. ~200), so apply_corr_zy_lazy's vol/corr_zy
+    # collapses to ~1.0 for typical pixels -- which rounds to 0/1 once
+    # cast to uint16, destroying virtually all dynamic range. Dividing
+    # by 1000 here keeps the corrected output at roughly the original
+    # intensity scale instead.
+    return corr / 1000
     # corr_smooth = dask.delayed(_corr_zy_postprocess)(
     #    corr, counts, min_pixels, kernel_size)
     # return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
@@ -414,6 +420,18 @@ def apply_affine_split(vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_en
         pad_z_start:pad_z_end, pad_y_start:pad_y_end, pad_x_start:pad_x_end
     ]
     Z, Y, X = padded_slice.shape
+
+    # mask is a (Y, X) (or (Z, Y, X)) array matching the FULL vol_zyx's
+    # extent, but padded_slice is windowed to [pad_*_start:pad_*_end] --
+    # mask needs the same windowing before use, exactly like corr_zy
+    # gets windowed by [pad_z_start:pad_z_end, pad_y_start:pad_y_end]
+    # a few lines below.
+    if mask.ndim == 2 and mask.shape == (vol_zyx.shape[1], vol_zyx.shape[2]):
+        mask = mask[pad_y_start:pad_y_end, pad_x_start:pad_x_end]
+    elif mask.ndim == 3 and mask.shape == tuple(vol_zyx.shape):
+        mask = mask[pad_z_start:pad_z_end,
+                    pad_y_start:pad_y_end, pad_x_start:pad_x_end]
+
     mask_da = da.from_array(mask, chunks=padded_slice.chunks[1:])
 
     if mask.shape == (Y, X):
