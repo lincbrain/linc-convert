@@ -260,7 +260,7 @@ def crop_volume_channels(
             y1, y2 = meta["y_start"], meta["y_end"]
             z1, z2 = meta.get("z_start"), meta.get("z_end")
 
-            cropped = vol[:, y1:y2, :]
+            cropped = vol[:, y1:y2, 10000:20000]
             if z1 is not None and z2 is not None:
                 cropped = cropped[z1:z2, :, :]
 

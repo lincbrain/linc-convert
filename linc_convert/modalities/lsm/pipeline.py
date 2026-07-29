@@ -717,6 +717,7 @@ def pipeline(
                     )
 
                     if to_withhold is not None:
+                        print(to_withhold.shape)
                         trailing_buffer = (
                             to_withhold
                             if trailing_buffer is None
