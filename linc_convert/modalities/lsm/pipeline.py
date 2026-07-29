@@ -190,6 +190,8 @@ def _open_raw_channel_volume_and_mask(
     background_length: int = 5000,
     mip_pre_split: bool = False,
     reference_ch=None,
+    x_min=None,
+    x_max=None
 ) -> Tuple[da.Array, np.ndarray, float]:
     """Open one tile/channel exactly once: the reader, the channel crop,
     and the mask/threshold lookup all happen here, a single time per
@@ -212,8 +214,11 @@ def _open_raw_channel_volume_and_mask(
     vol_channels = crop_volume_channels(reader, cam_info)
     masks, thrs = load_mask_and_thresholds(
         name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
-
-    return vol_channels[reference_ch][:, :, 20000:30000], masks[reference_ch][:, 20000:30000], thrs[reference_ch]
+    if x_min is None and x_max is None:
+        return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
+    x_min = x_min if x_min is not None else 0
+    x_max = x_max if x_max is not None else vol_channels[reference_ch].shape[2]
+    return vol_channels[reference_ch][:, :, x_min:x_max], masks[reference_ch][:, x_min:x_max], thrs[reference_ch]
 
 
 def _corrected_y_chunk(
@@ -295,6 +300,8 @@ def pipeline(
     dandiset_id: Optional[str] = None,
     chunk_min: Optional[int] = None,
     chunk_max: Optional[int] = None,
+    x_min: Optional[int] = None,
+    x_max: Optional[int] = None,
     background_length: int = 5000,
     mip_pre_split: bool = False,
     channel_affines_path: Optional[str] = None,
@@ -459,7 +466,9 @@ def pipeline(
                 ch=reference_channel,
                 cam_info=reference_cam_info,
                 background_length=background_length,
-                mip_pre_split=mip_pre_split
+                mip_pre_split=mip_pre_split,
+                x_min=x_min,
+                x_max=x_max
             )
         )
         sample_corrected = stripe_skew_corr(
@@ -488,6 +497,8 @@ def pipeline(
                 cam_info=reference_cam_info_split,
                 background_length=background_length,
                 mip_pre_split=mip_pre_split,
+                x_min=x_min,
+                x_max=x_max
             )
             reference_split_z_depth = reference_split_sample_vol.shape[0]
         else:
@@ -571,6 +582,8 @@ def pipeline(
                     cam_info=cam_info,
                     background_length=background_length,
                     mip_pre_split=mip_pre_split,
+                    x_min=x_min,
+                    x_max=x_max
                 )
                 logger.info(
                     f"[{index}] open reader + mask/threshold: "
@@ -717,7 +730,6 @@ def pipeline(
                     )
 
                     if to_withhold is not None:
-                        print(to_withhold.shape)
                         trailing_buffer = (
                             to_withhold
                             if trailing_buffer is None
