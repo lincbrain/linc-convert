@@ -1,8 +1,9 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import dask
 import dask.array as da
 import numpy as np
+import warnings
 from dask_image.ndinterp import affine_transform
 from scipy.ndimage import convolve
 
@@ -85,6 +86,115 @@ def compute_corr_zy(
     return corr / 1000
     # corr_smooth = dask.delayed(_corr_zy_postprocess)(
     #    corr, counts, min_pixels, kernel_size)
+
+
+def compute_alt_zy_calibration_for_tile(
+    vol: da.Array,
+    mask: np.ndarray,
+    threshold: float,
+    background_length: int = 5000,
+    x_stride: int = 64,
+) -> Tuple[float, np.ndarray]:
+    """
+    Compute ONE reference tile's contribution to the alternate zy
+    correction (see `pipeline`'s `use_alt_zy_correction`): a single
+    background-noise scalar, and a per-(Z, Y) RECIPROCAL multiplier
+    map (i.e. meant to be applied via multiplication, not division).
+
+    Unlike `compute_corr_zy`, this:
+    - First estimates the camera's own background noise as the median
+      of the last `background_length` X columns (a single scalar, not
+      per-row), and works on the noise-subtracted (clipped at 0)
+      volume from that point on.
+    - Normalizes the per-row scalers by their OWN median (not a fixed
+      constant like 1000), computed from this tile alone.
+    - Returns the RECIPROCAL of that normalized scaler, since the
+      intended application is `(vol - noise).clip(0) * reciprocal`,
+      not division.
+
+    This is meant to be called once per reference tile (see
+    `pipeline`'s `alt_zy_reference_tiles`), with the results from
+    several reference tiles averaged together afterward -- averaging
+    happens on these RECIPROCAL values, not on the pre-inversion
+    scalers, since those are what actually gets applied.
+
+    Parameters
+    ----------
+    vol : dask.array.Array
+        Raw (Z, Y, X) volume for one reference tile, already flipped
+        if applicable -- same frame it'll be applied in later.
+    mask : np.ndarray
+        Tissue mask, shape (Y, X) or (Z, Y, X).
+    threshold : float
+        Intensity threshold (same role as in `compute_corr_zy`).
+    background_length : int, default=5000
+        Width, in columns, of the background region (from the far
+        edge of X) used to estimate the noise floor.
+    x_stride : int, default=64
+        Subsampling stride along X for the per-row median -- same
+        role as `compute_corr_zy`'s hardcoded `::64`.
+
+    Returns
+    -------
+    noise : float
+        Background noise scalar for this tile.
+    reciprocal_map : np.ndarray
+        Shape (Z, Y). Apply via `(vol - noise).clip(0) * reciprocal_map`.
+    """
+    vol = vol.astype(np.float32)
+    Z, Y, X = vol.shape
+
+    edge_region = np.asarray(vol[:, :, -background_length:].compute())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        noise = float(np.nanmedian(edge_region))
+    if not np.isfinite(noise):
+        noise = 0.0
+
+    vol_denoised = da.clip(vol - noise, 0, None)
+
+    if mask.shape == (Y, X):
+        mask_da = da.from_array(mask, chunks=vol.chunks[1:]) if isinstance(
+            mask, np.ndarray) else mask
+        mask_da = da.broadcast_to(mask_da[None], (Z, Y, X))
+    elif mask.shape == (Z, Y, X):
+        mask_da = da.from_array(mask, chunks=vol.chunks) if isinstance(
+            mask, np.ndarray) else mask
+    else:
+        raise ValueError(
+            f"mask shape {mask.shape} != volume shape {(Z, Y, X)} or {(Y, X)}")
+
+    masked = da.where(
+        mask_da & (vol >= threshold * 1.05) & da.isfinite(vol),
+        vol_denoised, np.nan,
+    )
+    raw_scaler = da.nanmedian(masked[:, :, ::x_stride], axis=2)  # (Z, Y)
+    raw_scaler_np = np.asarray(raw_scaler.compute())
+
+    # A row whose post-noise-subtraction median comes out at (or very
+    # near) zero -- e.g. tissue barely above background for that
+    # row/depth -- is just as unreliable as a row with no tissue data
+    # at all. Treat it the same way (NaN here), so it flows through
+    # the same "insufficient data" fallback downstream, instead of
+    # producing a 1/~0 = huge reciprocal that would blow out that row.
+    raw_scaler_np = np.where(
+        np.isfinite(raw_scaler_np) & (raw_scaler_np > 1e-3),
+        raw_scaler_np, np.nan,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        scaler_median = np.nanmedian(raw_scaler_np)
+    if not np.isfinite(scaler_median) or scaler_median == 0:
+        scaler_median = 1.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        normalized_scaler = raw_scaler_np / scaler_median
+        reciprocal_map = 1.0 / normalized_scaler
+
+    return noise, reciprocal_map
+
     # return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
 
 

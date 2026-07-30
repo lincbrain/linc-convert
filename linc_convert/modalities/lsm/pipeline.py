@@ -44,10 +44,11 @@ import getpass
 import logging
 import os
 import time
+import warnings
 from dataclasses import replace
 from glob import glob
 from pathlib import PurePosixPath
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cyclopts
 import dask.array as da
@@ -60,6 +61,7 @@ from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     apply_affine_split,
     apply_corr_zy_lazy,
+    compute_alt_zy_calibration_for_tile,
     compute_corr_zy,
     crop_volume_channels,
     embed_zy_affine_for_volume,
@@ -106,16 +108,27 @@ def open_tile_reader(
     dandiset_id: Optional[str] = None,
     api_key: Optional[str] = None,
     chunks: Optional[Tuple[int, ...]] = None,
+    zarr_level: int = 0,
 ) -> da.Array:
     """Lazily open a tile (ome.zarr or spool set) as a dask array.
 
     No data is read from disk until the returned array is sliced and
     computed.
+
+    Parameters
+    ----------
+    zarr_level : int, default=0
+        Which OME-Zarr pyramid level (array key, e.g. "0", "1", ...) to
+        read. Only meaningful for .ome.zarr tiles -- ignored for spool
+        sets, which have no pyramid. Caller is responsible for scaling
+        everything resolution-dependent (y_coords, crop bounds, affine
+        translations) to match this level -- see `pipeline`'s
+        `zarr_level` parameter.
     """
     if path.endswith(".ome.zarr"):
         if dandiset_id is None:
             return da.asarray(
-                ZarrPythonGroup.open(path)["0"],
+                ZarrPythonGroup.open(path)[str(zarr_level)],
                 chunks=chunks if chunks is not None else (128, 128, 128),
             )
         return da.asarray(
@@ -123,7 +136,7 @@ def open_tile_reader(
                 dandiset_id=dandiset_id,
                 asset_path=path,
                 api_key=api_key,
-            )["0"],
+            )[str(zarr_level)],
             chunks=chunks if chunks is not None else (128, 128, 128),
         )
 
@@ -191,29 +204,73 @@ def _open_raw_channel_volume_and_mask(
     mip_pre_split: bool = False,
     reference_ch=None,
     x_min=None,
-    x_max=None
+    x_max=None,
+    zarr_level: int = 0,
+    mip_cam_info=None,
 ) -> Tuple[da.Array, np.ndarray, float]:
     """Open one tile/channel exactly once: the reader, the channel crop,
     and the mask/threshold lookup all happen here, a single time per
     tile, regardless of how many Y-chunks it's later split into.
 
+    Parameters
+    ----------
+    cam_info : list of dict
+        Crop bounds for the 3D volume, in the SAME resolution level
+        being read (`zarr_level`) -- i.e. already scaled down if
+        `zarr_level > 0`.
+    mip_cam_info : list of dict, optional
+        Crop bounds for the MIP/mask, in FULL RESOLUTION (unscaled) --
+        MIP files are separate TIFFs, not part of the zarr pyramid, so
+        they stay full-res regardless of `zarr_level`. The resulting
+        mask is then downsampled by `zarr_level`'s factor to match the
+        volume's actual resolution -- `vol` and `mask` must have
+        matching Y (and X) extents for the correction steps downstream
+        that use them together. Defaults to `cam_info` itself when
+        omitted (correct for `zarr_level=0`, where scaled and unscaled
+        bounds are identical, and no downsampling is needed).
+    zarr_level : int, default=0
+        Which OME-Zarr pyramid level to read (see `open_tile_reader`).
+
     Returns
     -------
     vol : dask.array.Array
         Raw, channel-cropped (but not yet corrected) lazy volume
-        (Z, Y, X) for the whole tile.
+        (Z, Y, X) for the whole tile, at `zarr_level`'s resolution.
     mask : np.ndarray
-        Mask for this channel, shape (Y, X) or (Z, Y, X), matching
-        `vol`'s full Y extent.
+        Mask for this channel, shape (Y, X) or (Z, Y, X), downsampled
+        to match `vol`'s actual Y (and X) extent at `zarr_level`.
     threshold : float
         Intensity threshold for this channel.
     """
     if reference_ch is None:
         reference_ch = ch
-    reader = open_tile_reader(path, dandiset_id=dandiset_id, api_key=api_key)
+    if mip_cam_info is None:
+        mip_cam_info = cam_info
+    reader = open_tile_reader(
+        path, dandiset_id=dandiset_id, api_key=api_key, zarr_level=zarr_level)
     vol_channels = crop_volume_channels(reader, cam_info)
     masks, thrs = load_mask_and_thresholds(
-        name, mip_dir, cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
+        name, mip_dir, mip_cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
+
+    if zarr_level > 0:
+        # Mask came from a full-resolution MIP crop; downsample it to
+        # match the volume's actual (already-downsampled) Y, X extent.
+        # Strided subsampling, then trimmed/padded to the volume's
+        # exact shape to absorb any off-by-one rounding difference
+        # between (y_end-y_start)/factor and the strided mask's own
+        # size.
+        factor = 2 ** zarr_level
+        target_y = vol_channels[reference_ch].shape[1]
+        target_x = vol_channels[reference_ch].shape[2]
+        for out_ch in list(masks.keys()):
+            m = masks[out_ch][::factor, ::factor]
+            m = m[:target_y, :target_x]
+            if m.shape != (target_y, target_x):
+                padded = np.zeros((target_y, target_x), dtype=m.dtype)
+                padded[:m.shape[0], :m.shape[1]] = m
+                m = padded
+            masks[out_ch] = m
+
     if x_min is None and x_max is None:
         return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
     x_min = x_min if x_min is not None else 0
@@ -276,6 +333,50 @@ def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
     return f"{out}_{ch}.dat"
 
 
+def _scale_cam_info(cam_info: List[dict], factor: float) -> List[dict]:
+    """
+    Return a copy of `cam_info` with y_start/y_end/z_start/z_end divided
+    by `factor` and rounded to the nearest int -- for use when reading a
+    downsampled OME-Zarr pyramid level (e.g. factor=2 for level 1, under
+    the standard OME-Zarr convention that each level halves resolution
+    relative to the previous one).
+
+    Does NOT touch `vertical_flip`/`channel`/`camera_id` -- only the
+    pixel-position fields.
+    """
+    scaled = []
+    for meta in cam_info:
+        new_meta = dict(meta)
+        new_meta["y_start"] = round(meta["y_start"] / factor)
+        new_meta["y_end"] = round(meta["y_end"] / factor)
+        if meta.get("z_start") is not None:
+            new_meta["z_start"] = round(meta["z_start"] / factor)
+        if meta.get("z_end") is not None:
+            new_meta["z_end"] = round(meta["z_end"] / factor)
+        scaled.append(new_meta)
+    return scaled
+
+
+def _scale_affine_translations(
+    affines: Dict[str, np.ndarray], factor: float
+) -> Dict[str, np.ndarray]:
+    """
+    Return a copy of a {channel: 3x3 (Z,Y) affine} dict with only the
+    translation column (indices [0,2] and [1,2]) divided by `factor` --
+    the scale/rotation block (indices [0:2, 0:2]) is a dimensionless
+    ratio between two coordinate systems and is unaffected by resolution,
+    but an absolute pixel-unit translation (e.g. "shift by 20px") means
+    half as many pixels at half resolution.
+    """
+    scaled = {}
+    for ch, affine in affines.items():
+        new_affine = affine.copy()
+        new_affine[0, 2] = affine[0, 2] / factor
+        new_affine[1, 2] = affine[1, 2] / factor
+        scaled[ch] = new_affine
+    return scaled
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -308,6 +409,9 @@ def pipeline(
     reference_channel: str = "488",
     reference_cords: Optional[str] = None,
     tissue_frac_min: float = 0.02,
+    zarr_level: int = 0,
+    use_alt_zy_correction: bool = False,
+    alt_zy_reference_tiles: Optional[List[int]] = None,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -368,6 +472,38 @@ def pipeline(
         Last tile index to process (inclusive). If omitted, processing
         runs through the final tile. Combined with `chunk_min`, allows
         a specific contiguous range of tiles to be handled in one job.
+    zarr_level : int, default=0
+        Which OME-Zarr pyramid level (array key) to read from each
+        tile, e.g. 1 to read the half-resolution level instead of the
+        full-resolution level 0. Assumes the standard OME-Zarr
+        convention of each level being 2x downsampled from the
+        previous one. Everything resolution-dependent is automatically
+        rescaled to match: y_coords, the volume-cropping bounds
+        (`cam_info`), and the translation component of any channel
+        registration affines. NOT rescaled: MIP/mask cropping bounds
+        (MIP files are separate full-resolution TIFFs, not part of the
+        zarr pyramid), `voxel_size` (you must pass the value that's
+        actually correct for this level yourself), and `x_min`/`x_max`
+        (interpreted in whatever level's pixel units you intend).
+    use_alt_zy_correction : bool, default=False
+        Use an alternate zy stripe correction instead of the default
+        per-tile `compute_corr_zy`. Calibrates ONCE per channel from
+        `alt_zy_reference_tiles` (a fixed 3 tiles), instead of
+        recomputing a correction for every tile:
+        1. For each reference tile: estimate the camera's own
+           background noise as the median of the last
+           `background_length` X columns, subtract it (clipped at 0).
+        2. On the noise-subtracted data, compute a per-(Z, Y) tissue
+           scaler (same style as the default correction), normalized
+           by that tile's OWN median scaler (not a fixed constant),
+           then inverted to a reciprocal multiplier.
+        3. Average the noise scalar and the reciprocal maps across the
+           3 reference tiles.
+        4. Apply the SAME averaged (noise, reciprocal map) pair to
+           every tile: `(vol - noise).clip(0) * reciprocal_map`.
+    alt_zy_reference_tiles : list of int, optional
+        Exactly 3 tile indices to calibrate the alternate correction
+        from. Required when `use_alt_zy_correction=True`.
 
     Raises
     ------
@@ -403,6 +539,27 @@ def pipeline(
     reference_cam_info_split = get_camera_info(
         scan_parameters, reference_camera_id, slice_number, "split",
     ) if channel_affines_path is not None else cam_info
+
+    downsample_factor = 2 ** zarr_level
+    # Keep full-resolution cam_info variants for MIP/mask cropping --
+    # MIP files are separate full-resolution TIFFs, unaffected by
+    # zarr_level -- then overwrite the "working" variable names below
+    # with SCALED versions, used everywhere else (3D volume cropping,
+    # get_crop_values), so existing code using these names doesn't
+    # need further changes.
+    cam_info_full_res = cam_info
+    reference_cam_info_full_res = reference_cam_info
+    cam_info_stitching_full_res = cam_info_stitching
+    reference_cam_info_split_full_res = reference_cam_info_split
+
+    if downsample_factor != 1:
+        cam_info = _scale_cam_info(cam_info, downsample_factor)
+        reference_cam_info = _scale_cam_info(
+            reference_cam_info, downsample_factor)
+        cam_info_stitching = _scale_cam_info(
+            cam_info_stitching, downsample_factor)
+        reference_cam_info_split = _scale_cam_info(
+            reference_cam_info_split, downsample_factor)
 
     api_key = prompt_dandi_api_key() if dandiset_id else None
 
@@ -445,6 +602,10 @@ def pipeline(
         else:
             y_coords = load_y_coordinates(
                 coords_yaml_by_channel[ch])
+        # Coordinates YAML files give absolute tile positions in
+        # full-resolution pixel units -- rescale to match zarr_level.
+        if downsample_factor != 1:
+            y_coords = [y / downsample_factor for y in y_coords]
         # if len(y_coords) != num_tiles:
         #    raise ValueError(
         #        f"Coordinates file for channel {ch} has {len(y_coords)} "
@@ -465,10 +626,12 @@ def pipeline(
                 name=tile_name(sample_path),
                 ch=reference_channel,
                 cam_info=reference_cam_info,
+                mip_cam_info=reference_cam_info_full_res,
                 background_length=background_length,
                 mip_pre_split=mip_pre_split,
                 x_min=x_min,
-                x_max=x_max
+                x_max=x_max,
+                zarr_level=zarr_level,
             )
         )
         sample_corrected = stripe_skew_corr(
@@ -495,10 +658,12 @@ def pipeline(
                 name=tile_name(sample_path),
                 ch=reference_channel,
                 cam_info=reference_cam_info_split,
+                mip_cam_info=reference_cam_info_split_full_res,
                 background_length=background_length,
                 mip_pre_split=mip_pre_split,
                 x_min=x_min,
-                x_max=x_max
+                x_max=x_max,
+                zarr_level=zarr_level,
             )
             reference_split_z_depth = reference_split_sample_vol.shape[0]
         else:
@@ -508,6 +673,74 @@ def pipeline(
         full_y = int(round(y_coords[-1])) + corrected_sy
         full_z = corrected_sz
         fullshape = (full_z, full_y, full_x)
+
+        # Alternate zy correction: calibrate ONCE per channel from a
+        # fixed set of user-chosen reference tiles, then apply the
+        # SAME (averaged) correction to every tile -- instead of the
+        # default per-tile compute_corr_zy.
+        alt_zy_noise = None
+        alt_zy_reciprocal_map = None
+        if use_alt_zy_correction:
+            if alt_zy_reference_tiles is None or len(alt_zy_reference_tiles) != 3:
+                raise ValueError(
+                    "use_alt_zy_correction requires exactly 3 tile indices "
+                    "in alt_zy_reference_tiles"
+                )
+            calib_layout = scan_parameters.get("channelLayout", {})
+            calib_vertical_flip = {
+                1: bool(calib_layout["Camera1"]["verticalFlip"]),
+                2: bool(calib_layout["Camera2"]["verticalFlip"]),
+            }
+            noises = []
+            reciprocal_maps = []
+            for ref_index in alt_zy_reference_tiles:
+                ref_path = tile_paths[ref_index]
+                ref_name = tile_name(ref_path)
+                ref_raw_vol, ref_mask, ref_thr = _open_raw_channel_volume_and_mask(
+                    ref_path,
+                    dandiset_id=dandiset_id,
+                    api_key=api_key,
+                    mip_dir=mip_dir,
+                    name=ref_name,
+                    ch=ch,
+                    cam_info=cam_info,
+                    mip_cam_info=cam_info_full_res,
+                    background_length=background_length,
+                    mip_pre_split=mip_pre_split,
+                    x_min=x_min,
+                    x_max=x_max,
+                    zarr_level=zarr_level,
+                )
+                if calib_vertical_flip[camera_id]:
+                    ref_raw_vol = ref_raw_vol[::-1]
+                ref_noise, ref_reciprocal_map = compute_alt_zy_calibration_for_tile(
+                    ref_raw_vol, ref_mask, ref_thr,
+                    background_length=background_length,
+                )
+                noises.append(ref_noise)
+                reciprocal_maps.append(ref_reciprocal_map)
+                logger.info(
+                    f"[alt zy calibration] tile {ref_index} ({ref_name}): "
+                    f"noise={ref_noise:.2f}"
+                )
+
+            alt_zy_noise = float(np.mean(noises))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                alt_zy_reciprocal_map = np.nanmean(
+                    np.stack(reciprocal_maps, axis=0), axis=0)
+            # Positions with no valid tissue data in ANY of the 3
+            # reference tiles stay NaN after nanmean -- replace with a
+            # tiny reciprocal (i.e. a huge equivalent divisor) so those
+            # rows get suppressed rather than propagating NaN into the
+            # output, matching compute_corr_zy's own
+            # insufficient-data-sentinel spirit.
+            alt_zy_reciprocal_map = np.nan_to_num(
+                alt_zy_reciprocal_map, nan=1e-9)
+            logger.info(
+                f"[alt zy calibration] averaged noise={alt_zy_noise:.2f} "
+                f"over tiles {alt_zy_reference_tiles}"
+            )
 
         out_dir = f"{general_config.out}/{ch}"
 
@@ -580,10 +813,12 @@ def pipeline(
                     name=name,
                     ch=ch,
                     cam_info=cam_info,
+                    mip_cam_info=cam_info_full_res,
                     background_length=background_length,
                     mip_pre_split=mip_pre_split,
                     x_min=x_min,
-                    x_max=x_max
+                    x_max=x_max,
+                    zarr_level=zarr_level,
                 )
                 logger.info(
                     f"[{index}] open reader + mask/threshold: "
@@ -647,6 +882,14 @@ def pipeline(
                 if channel_affines_path is not None:
                     affines = load_channel_affines(
                         channel_affines_path, reference_channel)
+                    # Translation components are in full-resolution
+                    # pixel units in the affines file -- rescale to
+                    # match zarr_level. The scale/rotation block is a
+                    # dimensionless ratio between coordinate systems
+                    # and doesn't change with resolution.
+                    if downsample_factor != 1:
+                        affines = _scale_affine_translations(
+                            affines, downsample_factor)
                     # Combine as (skew @ registration), not (registration @
                     # skew): for forward-mapping matrices composed via
                     # C = B @ A, C(x) = B(A(x)) means A is applied FIRST.
@@ -656,12 +899,24 @@ def pipeline(
 
                 if vertical_flip[camera_id]:
                     raw_vol = raw_vol[::-1]
-                corr_zy = compute_corr_zy(
-                    raw_vol,
-                    mask,
-                    tissue_frac_min,
-                    thr,
-                )
+
+                if use_alt_zy_correction:
+                    # (vol - noise).clip(0) * reciprocal_map is the same
+                    # as (vol - noise).clip(0) / (1/reciprocal_map), so
+                    # this reuses the existing apply_corr_zy_lazy
+                    # (division-based) machinery unchanged: pre-subtract
+                    # the noise here, and feed in the RECIPROCAL of the
+                    # reciprocal map as if it were corr_zy.
+                    raw_vol = da.clip(
+                        raw_vol.astype(np.float32) - alt_zy_noise, 0, None)
+                    corr_zy = 1.0 / alt_zy_reciprocal_map
+                else:
+                    corr_zy = compute_corr_zy(
+                        raw_vol,
+                        mask,
+                        tissue_frac_min,
+                        thr,
+                    )
                 while y0 < corrected_sy+y_start:
                     y1 = min(corrected_sy+y_start, y0 + y_chunk_size)
 
