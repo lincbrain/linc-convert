@@ -713,18 +713,22 @@ def pipeline(
                 )
                 if calib_vertical_flip[camera_id]:
                     ref_raw_vol = ref_raw_vol[::-1]
-                ref_noise, ref_reciprocal_map = compute_alt_zy_calibration_for_tile(
+                ref_noise_map, ref_reciprocal_map = compute_alt_zy_calibration_for_tile(
                     ref_raw_vol, ref_mask, ref_thr,
                     background_length=background_length,
                 )
-                noises.append(ref_noise)
+                noises.append(ref_noise_map)
                 reciprocal_maps.append(ref_reciprocal_map)
                 logger.info(
                     f"[alt zy calibration] tile {ref_index} ({ref_name}): "
-                    f"noise={ref_noise:.2f}"
+                    f"noise_map mean={ref_noise_map.mean():.2f}"
                 )
 
-            alt_zy_noise = float(np.mean(noises))
+            # noise is a per-(Z, Y) map here, not a single scalar --
+            # fixed pattern noise varies per pixel/row, it isn't drawn
+            # from one shared distribution -- so average elementwise
+            # across the 3 reference tiles, same as the reciprocal map.
+            alt_zy_noise = np.mean(np.stack(noises, axis=0), axis=0)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 alt_zy_reciprocal_map = np.nanmean(
@@ -738,8 +742,8 @@ def pipeline(
             alt_zy_reciprocal_map = np.nan_to_num(
                 alt_zy_reciprocal_map, nan=1e-9)
             logger.info(
-                f"[alt zy calibration] averaged noise={alt_zy_noise:.2f} "
-                f"over tiles {alt_zy_reference_tiles}"
+                f"[alt zy calibration] averaged noise_map mean="
+                f"{alt_zy_noise.mean():.2f} over tiles {alt_zy_reference_tiles}"
             )
 
         out_dir = f"{general_config.out}/{ch}"
@@ -901,14 +905,15 @@ def pipeline(
                     raw_vol = raw_vol[::-1]
 
                 if use_alt_zy_correction:
-                    # (vol - noise).clip(0) * reciprocal_map is the same
-                    # as (vol - noise).clip(0) / (1/reciprocal_map), so
-                    # this reuses the existing apply_corr_zy_lazy
+                    # (vol - noise_map).clip(0) * reciprocal_map is the
+                    # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
+                    # so this reuses the existing apply_corr_zy_lazy
                     # (division-based) machinery unchanged: pre-subtract
-                    # the noise here, and feed in the RECIPROCAL of the
-                    # reciprocal map as if it were corr_zy.
+                    # the (per-Z,Y) noise map here, and feed in the
+                    # RECIPROCAL of the reciprocal map as if it were
+                    # corr_zy.
                     raw_vol = da.clip(
-                        raw_vol.astype(np.float32) - alt_zy_noise, 0, None)
+                        raw_vol.astype(np.float32) - alt_zy_noise[:, :, None], 0, None)
                     corr_zy = 1.0 / alt_zy_reciprocal_map
                 else:
                     corr_zy = compute_corr_zy(

@@ -94,29 +94,32 @@ def compute_alt_zy_calibration_for_tile(
     threshold: float,
     background_length: int = 5000,
     x_stride: int = 64,
-) -> Tuple[float, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ONE reference tile's contribution to the alternate zy
-    correction (see `pipeline`'s `use_alt_zy_correction`): a single
-    background-noise scalar, and a per-(Z, Y) RECIPROCAL multiplier
-    map (i.e. meant to be applied via multiplication, not division).
+    correction (see `pipeline`'s `use_alt_zy_correction`): a per-(Z, Y)
+    background-noise map, and a per-(Z, Y) RECIPROCAL multiplier map
+    (i.e. meant to be applied via multiplication, not division).
 
     Unlike `compute_corr_zy`, this:
-    - First estimates the camera's own background noise as the median
-      of the last `background_length` X columns (a single scalar, not
-      per-row), and works on the noise-subtracted (clipped at 0)
-      volume from that point on.
+    - First estimates the camera's own background noise PER (Z, Y) row
+      -- not a single scalar for the whole tile -- as the median of
+      that row's last `background_length` X samples (fixed pattern
+      noise varies per pixel/row, it isn't one shared distribution),
+      and works on the noise-subtracted (clipped at 0) volume from
+      that point on.
     - Normalizes the per-row scalers by their OWN median (not a fixed
       constant like 1000), computed from this tile alone.
     - Returns the RECIPROCAL of that normalized scaler, since the
-      intended application is `(vol - noise).clip(0) * reciprocal`,
+      intended application is `(vol - noise_map).clip(0) * reciprocal`,
       not division.
 
     This is meant to be called once per reference tile (see
     `pipeline`'s `alt_zy_reference_tiles`), with the results from
     several reference tiles averaged together afterward -- averaging
-    happens on these RECIPROCAL values, not on the pre-inversion
-    scalers, since those are what actually gets applied.
+    happens on these RECIPROCAL values (and on the noise maps
+    directly), not on the pre-inversion scalers, since those are what
+    actually gets applied.
 
     Parameters
     ----------
@@ -129,29 +132,31 @@ def compute_alt_zy_calibration_for_tile(
         Intensity threshold (same role as in `compute_corr_zy`).
     background_length : int, default=5000
         Width, in columns, of the background region (from the far
-        edge of X) used to estimate the noise floor.
+        edge of X) used to estimate each row's noise floor.
     x_stride : int, default=64
-        Subsampling stride along X for the per-row median -- same
-        role as `compute_corr_zy`'s hardcoded `::64`.
+        Subsampling stride along X for the per-row scaler median --
+        same role as `compute_corr_zy`'s hardcoded `::64`. Does not
+        affect the noise-map computation, which uses the full
+        `background_length` region for each row.
 
     Returns
     -------
-    noise : float
-        Background noise scalar for this tile.
+    noise_map : np.ndarray
+        Shape (Z, Y). Background noise level for each row.
     reciprocal_map : np.ndarray
-        Shape (Z, Y). Apply via `(vol - noise).clip(0) * reciprocal_map`.
+        Shape (Z, Y). Apply via
+        `(vol - noise_map).clip(0) * reciprocal_map`.
     """
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
 
-    edge_region = np.asarray(vol[:, :, -background_length:].compute())
+    edge_region = vol[:, :, -background_length:]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        noise = float(np.nanmedian(edge_region))
-    if not np.isfinite(noise):
-        noise = 0.0
+        noise_map = np.asarray(da.nanmedian(edge_region, axis=2).compute())
+    noise_map = np.nan_to_num(noise_map, nan=0.0)
 
-    vol_denoised = da.clip(vol - noise, 0, None)
+    vol_denoised = da.clip(vol - noise_map[:, :, None], 0, None)
 
     if mask.shape == (Y, X):
         mask_da = da.from_array(mask, chunks=vol.chunks[1:]) if isinstance(
@@ -193,7 +198,7 @@ def compute_alt_zy_calibration_for_tile(
         normalized_scaler = raw_scaler_np / scaler_median
         reciprocal_map = 1.0 / normalized_scaler
 
-    return noise, reciprocal_map
+    return noise_map, reciprocal_map
 
     # return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
 
