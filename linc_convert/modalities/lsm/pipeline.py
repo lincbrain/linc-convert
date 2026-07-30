@@ -43,6 +43,7 @@ import gc
 import getpass
 import logging
 import os
+import tifffile
 import time
 import warnings
 from dataclasses import replace
@@ -412,6 +413,7 @@ def pipeline(
     zarr_level: int = 0,
     use_alt_zy_correction: bool = False,
     alt_zy_reference_tiles: Optional[List[int]] = None,
+    only_channel: Optional[str] = None,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -501,9 +503,16 @@ def pipeline(
            3 reference tiles.
         4. Apply the SAME averaged (noise, reciprocal map) pair to
            every tile: `(vol - noise).clip(0) * reciprocal_map`.
+        The final averaged noise map and reciprocal (scaler) map are
+        written out as `{out_dir}/{ch}_alt_zy_noise.tiff` and
+        `{out_dir}/{ch}_alt_zy_scaler.tiff` for inspection.
     alt_zy_reference_tiles : list of int, optional
         Exactly 3 tile indices to calibrate the alternate correction
         from. Required when `use_alt_zy_correction=True`.
+    only_channel : str, optional
+        If given, process only this one channel instead of both of
+        this camera's channels. Must be one of the two channel names
+        for `camera_id` (see `get_channel_names`).
 
     Raises
     ------
@@ -590,7 +599,17 @@ def pipeline(
     coords_yaml_by_channel = dict(
         zip(channels, [coords_yaml_ch1, coords_yaml_ch2]))
 
-    for ch in channels:
+    if only_channel is not None:
+        if only_channel not in channels:
+            raise ValueError(
+                f"only_channel '{only_channel}' is not one of this camera's "
+                f"channels: {channels}"
+            )
+        channels_to_process = [only_channel]
+    else:
+        channels_to_process = channels
+
+    for ch in channels_to_process:
 
         channel_timer = time.time()
 
@@ -747,6 +766,19 @@ def pipeline(
             )
 
         out_dir = f"{general_config.out}/{ch}"
+
+        if use_alt_zy_correction:
+            os.makedirs(out_dir, exist_ok=True)
+            noise_tiff_path = os.path.join(out_dir, f"{ch}_alt_zy_noise.tiff")
+            scaler_tiff_path = os.path.join(
+                out_dir, f"{ch}_alt_zy_scaler.tiff")
+            tifffile.imwrite(noise_tiff_path, alt_zy_noise.astype(np.float32))
+            tifffile.imwrite(scaler_tiff_path,
+                             alt_zy_reciprocal_map.astype(np.float32))
+            logger.info(
+                f"[alt zy calibration] wrote {noise_tiff_path} and "
+                f"{scaler_tiff_path}"
+            )
 
         checkpoint_file = _checkpoint_path(general_config, ch)
         checkpoint = _read_checkpoint(checkpoint_file, -1)
