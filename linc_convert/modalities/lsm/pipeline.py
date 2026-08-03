@@ -1007,6 +1007,11 @@ def pipeline(
                     lazy_chunk = _corrected_y_chunk(
                         raw_vol, mask, affine, corr_zy, y0, y1)
                     lazy_chunk = lazy_chunk[z_start:z_end]
+                    if lazy_chunk.shape[2] < fullshape[2]:
+                        lazy_chunk = da.pad(lazy_chunk, pad_width=(
+                            (0, 0), (0, 0), (0, fullshape[2] - lazy_chunk.shape[2])))
+                    elif lazy_chunk.shape[2] > fullshape[2]:
+                        lazy_chunk = lazy_chunk[:, :, :fullshape[2]]
 
                     compute_timer = time.time()
                     with ProgressBar():
