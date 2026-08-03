@@ -414,6 +414,7 @@ def pipeline(
     use_alt_zy_correction: bool = False,
     alt_zy_reference_tiles: Optional[List[int]] = None,
     only_channel: Optional[str] = None,
+    alt_zy_per_tile: bool = False,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -513,6 +514,15 @@ def pipeline(
         If given, process only this one channel instead of both of
         this camera's channels. Must be one of the two channel names
         for `camera_id` (see `get_channel_names`).
+    alt_zy_per_tile : bool, default=False
+        Only meaningful when `use_alt_zy_correction=True`. Instead of
+        calibrating once from `alt_zy_reference_tiles` (a fixed 3
+        tiles) and reusing that same correction for every tile,
+        recalibrate fresh for EACH tile from its own data alone (no
+        averaging across reference tiles, and `alt_zy_reference_tiles`
+        is unused in this mode). Each tile's own noise/scaler maps are
+        written out as `{out_dir}/{ch}_{tile_name}_alt_zy_noise.tiff`
+        and `{out_dir}/{ch}_{tile_name}_alt_zy_scaler.tiff`.
 
     Raises
     ------
@@ -696,14 +706,18 @@ def pipeline(
         # Alternate zy correction: calibrate ONCE per channel from a
         # fixed set of user-chosen reference tiles, then apply the
         # SAME (averaged) correction to every tile -- instead of the
-        # default per-tile compute_corr_zy.
+        # default per-tile compute_corr_zy. Skipped entirely when
+        # alt_zy_per_tile=True, since that mode recalibrates fresh for
+        # every tile instead (see the main per-tile loop below) and
+        # doesn't need this fixed, reference-tile-based calibration at
+        # all.
         alt_zy_noise = None
         alt_zy_reciprocal_map = None
-        if use_alt_zy_correction:
+        if use_alt_zy_correction and not alt_zy_per_tile:
             if alt_zy_reference_tiles is None or len(alt_zy_reference_tiles) != 3:
                 raise ValueError(
                     "use_alt_zy_correction requires exactly 3 tile indices "
-                    "in alt_zy_reference_tiles"
+                    "in alt_zy_reference_tiles (unless alt_zy_per_tile=True)"
                 )
             calib_layout = scan_parameters.get("channelLayout", {})
             calib_vertical_flip = {
@@ -767,7 +781,7 @@ def pipeline(
 
         out_dir = f"{general_config.out}/{ch}"
 
-        if use_alt_zy_correction:
+        if use_alt_zy_correction and not alt_zy_per_tile:
             os.makedirs(out_dir, exist_ok=True)
             noise_tiff_path = os.path.join(out_dir, f"{ch}_alt_zy_noise.tiff")
             scaler_tiff_path = os.path.join(
@@ -937,6 +951,39 @@ def pipeline(
                     raw_vol = raw_vol[::-1]
 
                 if use_alt_zy_correction:
+                    if alt_zy_per_tile:
+                        # Recalibrate fresh for THIS tile alone (no
+                        # averaging across reference tiles) -- reuses
+                        # the same per-tile calibration function the
+                        # fixed-calibration mode calls on its 3
+                        # reference tiles, just applied to every tile
+                        # here instead of just 3 of them.
+                        tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
+                            raw_vol, mask, thr, background_length=background_length,
+                        )
+                        # Unlike the fixed-calibration mode (which
+                        # absorbs NaN positions via nanmean across 3
+                        # reference tiles), there's no averaging step
+                        # here -- positions with insufficient tissue
+                        # data for THIS tile alone would otherwise
+                        # propagate NaN straight into corr_zy and the
+                        # final uint16 cast. Same fallback: suppress
+                        # via a tiny reciprocal instead.
+                        tile_reciprocal_map = np.nan_to_num(
+                            tile_reciprocal_map, nan=1e-9)
+                        os.makedirs(out_dir, exist_ok=True)
+                        noise_tiff_path = os.path.join(
+                            out_dir, f"{ch}_{name}_alt_zy_noise.tiff")
+                        scaler_tiff_path = os.path.join(
+                            out_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
+                        tifffile.imwrite(
+                            noise_tiff_path, tile_noise_map.astype(np.float32))
+                        tifffile.imwrite(
+                            scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
+                    else:
+                        tile_noise_map = alt_zy_noise
+                        tile_reciprocal_map = alt_zy_reciprocal_map
+
                     # (vol - noise_map).clip(0) * reciprocal_map is the
                     # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
                     # so this reuses the existing apply_corr_zy_lazy
@@ -945,8 +992,8 @@ def pipeline(
                     # RECIPROCAL of the reciprocal map as if it were
                     # corr_zy.
                     raw_vol = da.clip(
-                        raw_vol.astype(np.float32) - alt_zy_noise[:, :, None], 0, None)
-                    corr_zy = 1.0 / alt_zy_reciprocal_map
+                        raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
+                    corr_zy = 1.0 / tile_reciprocal_map
                 else:
                     corr_zy = compute_corr_zy(
                         raw_vol,
@@ -960,11 +1007,6 @@ def pipeline(
                     lazy_chunk = _corrected_y_chunk(
                         raw_vol, mask, affine, corr_zy, y0, y1)
                     lazy_chunk = lazy_chunk[z_start:z_end]
-                    if lazy_chunk.shape[2] < fullshape[2]:
-                        lazy_chunk = da.pad(lazy_chunk, pad_width=(
-                            (0, 0), (0, 0), (0, fullshape[2] - lazy_chunk.shape[2])))
-                    elif lazy_chunk.shape[2] > fullshape[2]:
-                        lazy_chunk = lazy_chunk[:, :, :fullshape[2]]
 
                     compute_timer = time.time()
                     with ProgressBar():
