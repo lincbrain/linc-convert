@@ -11,23 +11,17 @@ try:
         "spool",
         "single_volume",
         "strip",
-        "stitch",
-        "mip",
-        "pyramid",
-        "coordinates"
+        "stitch_strips"
     ]
 
     from . import (
         cli,
-        coordinates,
-        mip,
+        pipeline,
         mosaic,
         multi_slice,
-        pipeline,
-        pyramid,
         single_volume,
         spool,
-        stitch,
+        stitch_strips,
         strip,
     )
 except ImportError:

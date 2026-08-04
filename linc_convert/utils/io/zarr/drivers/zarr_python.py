@@ -120,6 +120,16 @@ class ZarrPythonArray(ZarrArray):
         """Open a Zarr array."""
         return cls(zarr.open_array(*args, **kwargs))
 
+    @classmethod
+    def open(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
+        """Open a Zarr array."""
+        return cls(zarr.open_array(*args, **kwargs))
+
+    @classmethod
+    def open_array(cls, *args: Any, **kwargs: Any) -> "ZarrPythonArray":  # noqa: ANN401
+        """Open a Zarr array."""
+        return cls(zarr.open_array(*args, **kwargs))
+
 
 class ZarrPythonGroup(ZarrGroup):
     """Zarr Group implementation using the zarr-python library."""
