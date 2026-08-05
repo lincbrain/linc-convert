@@ -881,19 +881,6 @@ def pipeline(
 
         out_dir = f"{general_config.out}/{ch}"
 
-        if use_alt_zy_correction and not alt_zy_per_tile:
-            os.makedirs(out_dir, exist_ok=True)
-            noise_tiff_path = os.path.join(out_dir, f"{ch}_alt_zy_noise.tiff")
-            scaler_tiff_path = os.path.join(
-                out_dir, f"{ch}_alt_zy_scaler.tiff")
-            tifffile.imwrite(noise_tiff_path, alt_zy_noise.astype(np.float32))
-            tifffile.imwrite(scaler_tiff_path,
-                             alt_zy_reciprocal_map.astype(np.float32))
-            logger.info(
-                f"[alt zy calibration] wrote {noise_tiff_path} and "
-                f"{scaler_tiff_path}"
-            )
-
         checkpoint_file = _checkpoint_path(general_config, ch)
         checkpoint = _read_checkpoint(checkpoint_file, -1)
 
@@ -1095,15 +1082,6 @@ def pipeline(
                         # via a tiny reciprocal instead.
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
-                        os.makedirs(out_dir, exist_ok=True)
-                        noise_tiff_path = os.path.join(
-                            out_dir, f"{ch}_{name}_alt_zy_noise.tiff")
-                        scaler_tiff_path = os.path.join(
-                            out_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
-                        tifffile.imwrite(
-                            noise_tiff_path, tile_noise_map.astype(np.float32))
-                        tifffile.imwrite(
-                            scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
                     else:
                         tile_noise_map = alt_zy_noise
                         tile_reciprocal_map = alt_zy_reciprocal_map
