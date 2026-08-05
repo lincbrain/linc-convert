@@ -334,6 +334,96 @@ def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
     return f"{out}_{ch}.dat"
 
 
+def _locate_chunk_file(array_path: str, grid_coord: Tuple[int, ...]) -> Optional[str]:
+    """
+    Best-effort on-disk path for one chunk, given its grid coordinates,
+    covering both zarr v2 ("0.0.22") and zarr v3 unsharded ("c/0/0/22")
+    layouts. Returns None if neither candidate exists (e.g. the chunk
+    has simply never been written, which is normal and not an error).
+    """
+    v2_path = os.path.join(array_path, ".".join(str(c) for c in grid_coord))
+    if os.path.exists(v2_path):
+        return v2_path
+    v3_path = os.path.join(array_path, "c", *[str(c) for c in grid_coord])
+    if os.path.exists(v3_path):
+        return v3_path
+    return None
+
+
+def _clean_corrupted_chunks_in_y_range(
+    array,
+    array_path: str,
+    y_start: int,
+    y_end: int,
+) -> int:
+    """
+    Check every chunk whose Y-range overlaps [y_start, y_end) -- across
+    the array's full Z and X extent -- by actually reading it (the same
+    decode path a normal reader uses), and delete the on-disk file for
+    any chunk that fails to read.
+
+    This targets exactly the region a preempted job could have left
+    mid-write: on resume, the tile immediately after the last completed
+    checkpoint is the only one that could have been partially written
+    (everything before it is behind a completed checkpoint; everything
+    after was never touched, since tiles are processed sequentially).
+    Zarr chunk writes aren't atomic on a plain filesystem, and a write
+    that doesn't align to chunk boundaries requires zarr to read the
+    existing chunk first to merge with new data -- a truncated chunk
+    there can make even the *rewrite* fail on resume, not just reads,
+    unless it's removed first.
+
+    Returns the number of corrupted chunks removed.
+    """
+    shape = array.shape
+    chunks = array.chunks
+    if chunks is None:
+        chunks = shape
+
+    y_axis = 1  # (Z, Y, X)
+    y_chunk_size = chunks[y_axis]
+    first_y_chunk = max(0, y_start // y_chunk_size)
+    last_y_chunk = min(
+        (shape[y_axis] - 1) // y_chunk_size, (y_end - 1) // y_chunk_size
+    )
+    if first_y_chunk > last_y_chunk:
+        return 0
+
+    n_z_chunks = (shape[0] + chunks[0] - 1) // chunks[0]
+    n_x_chunks = (shape[2] + chunks[2] - 1) // chunks[2]
+
+    removed = 0
+    for zc in range(n_z_chunks):
+        for yc in range(first_y_chunk, last_y_chunk + 1):
+            for xc in range(n_x_chunks):
+                coord = (zc, yc, xc)
+                slices = tuple(
+                    slice(g * c, min((g + 1) * c, s))
+                    for g, c, s in zip(coord, chunks, shape)
+                )
+                try:
+                    data = array[slices]
+                    _ = np.asarray(data).sum(
+                        dtype=np.float64) if data.size else 0
+                except Exception as exc:  # noqa: BLE001 -- corruption probe
+                    chunk_file = _locate_chunk_file(array_path, coord)
+                    if chunk_file is not None:
+                        os.remove(chunk_file)
+                        removed += 1
+                        logger.warning(
+                            f"[resume cleanup] removed corrupted chunk "
+                            f"{coord} ({chunk_file}): {type(exc).__name__}: {exc}"
+                        )
+                    else:
+                        logger.warning(
+                            f"[resume cleanup] chunk {coord} failed to read "
+                            f"({type(exc).__name__}: {exc}) but no matching "
+                            f"on-disk file was found -- possibly sharded "
+                            f"storage; not removed automatically."
+                        )
+    return removed
+
+
 def _scale_cam_info(cam_info: List[dict], factor: float) -> List[dict]:
     """
     Return a copy of `cam_info` with y_start/y_end/z_start/z_end divided
@@ -560,6 +650,16 @@ def pipeline(
     ) if channel_affines_path is not None else cam_info
 
     downsample_factor = 2 ** zarr_level
+    # For the alt zy correction's noise calculation specifically (NOT
+    # the mask/MIP usage of background_length below): that one reads
+    # directly from raw_vol, which IS at zarr_level's resolution, so a
+    # column count there covers 2**zarr_level times the physical width
+    # at higher levels unless scaled down to match. The mask/MIP usage
+    # doesn't need this -- MIP files are separate full-resolution
+    # TIFFs, unaffected by zarr_level, same as the cam_info_full_res
+    # variants below.
+    alt_zy_background_length = max(
+        1, round(background_length / downsample_factor))
     # Keep full-resolution cam_info variants for MIP/mask cropping --
     # MIP files are separate full-resolution TIFFs, unaffected by
     # zarr_level -- then overwrite the "working" variable names below
@@ -748,7 +848,7 @@ def pipeline(
                     ref_raw_vol = ref_raw_vol[::-1]
                 ref_noise_map, ref_reciprocal_map = compute_alt_zy_calibration_for_tile(
                     ref_raw_vol, ref_mask, ref_thr,
-                    background_length=background_length,
+                    background_length=alt_zy_background_length,
                 )
                 noises.append(ref_noise_map)
                 reciprocal_maps.append(ref_reciprocal_map)
@@ -815,6 +915,30 @@ def pipeline(
         except Exception:
             logger.info("already exists")
             array = omz["0"]
+
+        if checkpoint != -1 and checkpoint + 1 < len(tile_paths):
+            # Resuming: the tile right after the last completed
+            # checkpoint is the only one that could have been mid-write
+            # when a previous run was preempted (everything before it
+            # is behind a completed checkpoint; everything after was
+            # never touched, since tiles are processed sequentially).
+            # Check and remove any corrupted chunks there before this
+            # run tries to rewrite that region, so a truncated chunk
+            # from the preemption can't block the rewrite.
+            at_risk_ystart = int(round(y_coords[checkpoint + 1]))
+            at_risk_yend = at_risk_ystart + corrected_sy
+            logger.info(
+                f"[resume cleanup] checking tile {checkpoint + 1}'s region "
+                f"(y={at_risk_ystart}:{at_risk_yend}) for chunks left "
+                f"corrupted by a previous preemption..."
+            )
+            n_removed = _clean_corrupted_chunks_in_y_range(
+                array, os.path.join(
+                    out_dir, "0"), at_risk_ystart, at_risk_yend,
+            )
+            logger.info(
+                f"[resume cleanup] removed {n_removed} corrupted chunk(s)"
+            )
 
         logger.info(
             "Writing channel %s, level 0 array with shape %s", ch, fullshape
@@ -959,7 +1083,7 @@ def pipeline(
                         # reference tiles, just applied to every tile
                         # here instead of just 3 of them.
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
-                            raw_vol, mask, thr, background_length=background_length,
+                            raw_vol, mask, thr, background_length=alt_zy_background_length,
                         )
                         # Unlike the fixed-calibration mode (which
                         # absorbs NaN positions via nanmean across 3
