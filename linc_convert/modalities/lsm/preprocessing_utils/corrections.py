@@ -86,6 +86,7 @@ def compute_alt_zy_calibration_for_tile(
     threshold: float,
     background_length: int = 5000,
     x_stride: int = 64,
+    normalize_to: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ONE reference tile's contribution to the alternate zy
@@ -101,7 +102,9 @@ def compute_alt_zy_calibration_for_tile(
       and works on the noise-subtracted (clipped at 0) volume from
       that point on.
     - Normalizes the per-row scalers by their OWN median (not a fixed
-      constant like 1000), computed from this tile alone.
+      constant like 1000), computed from this tile alone -- unless
+      `normalize_to` is given, in which case that fixed value is used
+      as the target instead.
     - Returns the RECIPROCAL of that normalized scaler, since the
       intended application is `(vol - noise_map).clip(0) * reciprocal`,
       not division.
@@ -130,6 +133,15 @@ def compute_alt_zy_calibration_for_tile(
         same role as `compute_corr_zy`'s hardcoded `::64`. Does not
         affect the noise-map computation, which uses the full
         `background_length` region for each row.
+    normalize_to : float, optional
+        If given, every row's typical (post-correction) value targets
+        this fixed constant instead of this tile's own median scaler.
+        With the default (None), a typical pixel in a typical row ends
+        up at roughly this tile's OWN median tissue brightness -- which
+        varies tile to tile. A fixed `normalize_to` (e.g. 1000, matching
+        `compute_corr_zy`'s own fixed constant) instead targets the same
+        absolute output scale for every tile, trading that adaptiveness
+        for consistency.
 
     Returns
     -------
@@ -179,15 +191,18 @@ def compute_alt_zy_calibration_for_tile(
         raw_scaler_np, np.nan,
     )
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        scaler_median = np.nanmedian(raw_scaler_np)
-    if not np.isfinite(scaler_median) or scaler_median == 0:
-        scaler_median = 1.0
+    if normalize_to is not None:
+        target = float(normalize_to)
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            target = np.nanmedian(raw_scaler_np)
+        if not np.isfinite(target) or target == 0:
+            target = 1.0
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        normalized_scaler = raw_scaler_np / scaler_median
+        normalized_scaler = raw_scaler_np / target
         reciprocal_map = 1.0 / normalized_scaler
 
     return noise_map, reciprocal_map

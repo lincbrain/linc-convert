@@ -1154,8 +1154,17 @@ def pipeline(
                         # fixed-calibration mode calls on its 3
                         # reference tiles, just applied to every tile
                         # here instead of just 3 of them.
+                        #
+                        # normalize_to=1000 (rather than this tile's
+                        # own median, the function's default) so every
+                        # tile's typical corrected value targets the
+                        # same fixed constant -- consistent output
+                        # scale across tiles, matching compute_corr_zy's
+                        # own fixed-1000 convention, at the cost of the
+                        # per-tile adaptiveness the default would give.
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
                             raw_vol, mask, thr, background_length=alt_zy_background_length,
+                            normalize_to=1000,
                         )
                         # Unlike the fixed-calibration mode (which
                         # absorbs NaN positions via nanmean across 3
