@@ -43,7 +43,6 @@ import gc
 import getpass
 import logging
 import os
-import tifffile
 import time
 import warnings
 from dataclasses import replace
@@ -54,6 +53,7 @@ from typing import Dict, List, Optional, Tuple
 import cyclopts
 import dask.array as da
 import numpy as np
+import tifffile
 import yaml
 from dandi.dandiapi import DandiAPIClient
 from dask.diagnostics import ProgressBar
@@ -251,7 +251,9 @@ def _open_raw_channel_volume_and_mask(
         path, dandiset_id=dandiset_id, api_key=api_key, zarr_level=zarr_level)
     vol_channels = crop_volume_channels(reader, cam_info)
     masks, thrs = load_mask_and_thresholds(
-        name, mip_dir, mip_cam_info, background_length=background_length, pre_split=mip_pre_split, ch=ch)
+        name, mip_dir, mip_cam_info,
+        background_length=background_length, pre_split=mip_pre_split, ch=ch,
+    )
 
     if zarr_level > 0:
         # Mask came from a full-resolution MIP crop; downsample it to
@@ -276,7 +278,11 @@ def _open_raw_channel_volume_and_mask(
         return vol_channels[reference_ch], masks[reference_ch], thrs[reference_ch]
     x_min = x_min if x_min is not None else 0
     x_max = x_max if x_max is not None else vol_channels[reference_ch].shape[2]
-    return vol_channels[reference_ch][:, :, x_min:x_max], masks[reference_ch][:, x_min:x_max], thrs[reference_ch]
+    return (
+        vol_channels[reference_ch][:, :, x_min:x_max],
+        masks[reference_ch][:, x_min:x_max],
+        thrs[reference_ch],
+    )
 
 
 def _corrected_y_chunk(
@@ -332,6 +338,27 @@ def _checkpoint_path(general_config: GeneralConfig, ch: str) -> str:
     if out.endswith(".ome.zarr"):
         out = out[: -len(".ome.zarr")]
     return f"{out}_{ch}.dat"
+
+
+def _alt_zy_calibration_dir(
+    general_config: GeneralConfig, ch: str, alt_zy_calibration_dir: Optional[str],
+) -> str:
+    """
+    Directory to write this channel's alt zy noise/scaler tiff files to.
+
+    If `alt_zy_calibration_dir` is given, uses `{alt_zy_calibration_dir}/{ch}`.
+    Otherwise defaults to a directory SIBLING to (not inside) the zarr
+    output, matching `_checkpoint_path`'s naming convention -- keeps
+    these diagnostic files out of the zarr store itself, so they don't
+    get swept up by tools (or uploads) that expect that directory to
+    contain only zarr-format files.
+    """
+    if alt_zy_calibration_dir is not None:
+        return os.path.join(alt_zy_calibration_dir, ch)
+    out = general_config.out.rstrip("/")
+    if out.endswith(".ome.zarr"):
+        out = out[: -len(".ome.zarr")]
+    return f"{out}_alt_zy_calibration/{ch}"
 
 
 def _locate_chunk_file(array_path: str, grid_coord: Tuple[int, ...]) -> Optional[str]:
@@ -505,6 +532,8 @@ def pipeline(
     alt_zy_reference_tiles: Optional[List[int]] = None,
     only_channel: Optional[str] = None,
     alt_zy_per_tile: bool = False,
+    alt_zy_match_overlap: bool = False,
+    alt_zy_calibration_dir: Optional[str] = None,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -595,8 +624,9 @@ def pipeline(
         4. Apply the SAME averaged (noise, reciprocal map) pair to
            every tile: `(vol - noise).clip(0) * reciprocal_map`.
         The final averaged noise map and reciprocal (scaler) map are
-        written out as `{out_dir}/{ch}_alt_zy_noise.tiff` and
-        `{out_dir}/{ch}_alt_zy_scaler.tiff` for inspection.
+        written out as `{calib_dir}/{ch}_alt_zy_noise.tiff` and
+        `{calib_dir}/{ch}_alt_zy_scaler.tiff` for inspection, where
+        `calib_dir` is `alt_zy_calibration_dir` (see below).
     alt_zy_reference_tiles : list of int, optional
         Exactly 3 tile indices to calibrate the alternate correction
         from. Required when `use_alt_zy_correction=True`.
@@ -611,8 +641,28 @@ def pipeline(
         recalibrate fresh for EACH tile from its own data alone (no
         averaging across reference tiles, and `alt_zy_reference_tiles`
         is unused in this mode). Each tile's own noise/scaler maps are
-        written out as `{out_dir}/{ch}_{tile_name}_alt_zy_noise.tiff`
-        and `{out_dir}/{ch}_{tile_name}_alt_zy_scaler.tiff`.
+        written out as `{calib_dir}/{ch}_{tile_name}_alt_zy_noise.tiff`
+        and `{calib_dir}/{ch}_{tile_name}_alt_zy_scaler.tiff`.
+    alt_zy_match_overlap : bool, default=False
+        Only meaningful when `alt_zy_per_tile=True`. Since each tile's
+        scaler is calibrated independently there, tile-to-tile
+        brightness can drift visibly at seams. When this is set, for
+        each tile (after the first) the average ratio between the
+        previous tile's and this tile's scaler values in their shared
+        overlap region is computed, and this tile's whole scaler map
+        is multiplied by that ratio -- nudging its overlap to roughly
+        match the previous tile's. The previous tile is never adjusted
+        retroactively; only the tile calibrating "next" moves toward
+        the one before it, the same way tile 0 always keeps its own
+        unmodified calculated values.
+    alt_zy_calibration_dir : str, optional
+        Base directory for the alt zy noise/scaler tiff files (see
+        `use_alt_zy_correction`/`alt_zy_per_tile` above); files go in
+        `{alt_zy_calibration_dir}/{ch}/`. If omitted, defaults to a
+        directory SIBLING to the zarr output (not inside it) --
+        `{general_config.out with .ome.zarr stripped}_alt_zy_calibration/{ch}/`
+        -- so these diagnostic files never end up mixed into the zarr
+        store's own directory alongside zarr.json and chunk data.
 
     Raises
     ------
@@ -632,12 +682,19 @@ def pipeline(
     scan_parameters = load_scan_parameters(yaml_path)
     reference_camera_id = find_camera_for_channel(
         scan_parameters, reference_channel)
-    cam_info = get_camera_info(scan_parameters, camera_id, slice_number,
-                               crop_stage="stitching" if channel_affines_path is None else "split")
-    reference_cam_info = get_camera_info(scan_parameters, reference_camera_id,
-                                         slice_number, "stitching") if channel_affines_path is not None else cam_info
-    cam_info_stitching = get_camera_info(
-        scan_parameters, reference_camera_id, slice_number) if channel_affines_path is not None else cam_info
+    cam_info = get_camera_info(
+        scan_parameters, camera_id, slice_number,
+        crop_stage="stitching" if channel_affines_path is None else "split",
+    )
+    reference_cam_info = (
+        get_camera_info(scan_parameters, reference_camera_id,
+                        slice_number, "stitching")
+        if channel_affines_path is not None else cam_info
+    )
+    cam_info_stitching = (
+        get_camera_info(scan_parameters, reference_camera_id, slice_number)
+        if channel_affines_path is not None else cam_info
+    )
     # get_crop_values needs the REFERENCE channel's OWN split-crop info,
     # on the reference channel's OWN camera -- which may differ from
     # `camera_id` (the camera THIS run is processing) when the
@@ -645,9 +702,11 @@ def pipeline(
     # here would be wrong: `cam_info` only has entries for whichever
     # channels live on `camera_id`, so a lookup for `reference_channel`
     # would raise KeyError whenever it's on the other camera.
-    reference_cam_info_split = get_camera_info(
-        scan_parameters, reference_camera_id, slice_number, "split",
-    ) if channel_affines_path is not None else cam_info
+    reference_cam_info_split = (
+        get_camera_info(scan_parameters, reference_camera_id,
+                        slice_number, "split")
+        if channel_affines_path is not None else cam_info
+    )
 
     downsample_factor = 2 ** zarr_level
     # For the alt zy correction's noise calculation specifically (NOT
@@ -735,11 +794,6 @@ def pipeline(
         # full-resolution pixel units -- rescale to match zarr_level.
         if downsample_factor != 1:
             y_coords = [y / downsample_factor for y in y_coords]
-        # if len(y_coords) != num_tiles:
-        #    raise ValueError(
-        #        f"Coordinates file for channel {ch} has {len(y_coords)} "
-        #        f"tile entries, but {num_tiles} tiles were discovered."
-        #    )
 
         # --- Estimate the corrected mosaic shape from a single sample tile,
         # taken from the reference channel's OWN camera (see
@@ -881,6 +935,22 @@ def pipeline(
 
         out_dir = f"{general_config.out}/{ch}"
 
+        if use_alt_zy_correction and not alt_zy_per_tile:
+            calib_dir = _alt_zy_calibration_dir(
+                general_config, ch, alt_zy_calibration_dir)
+            os.makedirs(calib_dir, exist_ok=True)
+            noise_tiff_path = os.path.join(
+                calib_dir, f"{ch}_alt_zy_noise.tiff")
+            scaler_tiff_path = os.path.join(
+                calib_dir, f"{ch}_alt_zy_scaler.tiff")
+            tifffile.imwrite(noise_tiff_path, alt_zy_noise.astype(np.float32))
+            tifffile.imwrite(scaler_tiff_path,
+                             alt_zy_reciprocal_map.astype(np.float32))
+            logger.info(
+                f"[alt zy calibration] wrote {noise_tiff_path} and "
+                f"{scaler_tiff_path}"
+            )
+
         checkpoint_file = _checkpoint_path(general_config, ch)
         checkpoint = _read_checkpoint(checkpoint_file, -1)
 
@@ -936,6 +1006,13 @@ def pipeline(
         # only ever as tall as the relevant overlap -- never the whole
         # tile.
         carry: Optional[np.ndarray] = None
+
+        # For alt_zy_per_tile + alt_zy_match_overlap: the previous
+        # tile's own (possibly already-adjusted) reciprocal_map, kept
+        # around so the next tile can match its overlap against it.
+        # Reset to None at the start of each channel -- there's no
+        # previous tile to match against for the first one.
+        prev_tile_reciprocal_map: Optional[np.ndarray] = None
 
         # Clamp the tile range to [chunk_min, chunk_max] if provided.
         # These compose with the checkpoint: we process tiles that are
@@ -1023,10 +1100,18 @@ def pipeline(
                 zstart = 0
                 trailing_buffer: Optional[np.ndarray] = None
                 layout = scan_parameters.get("channelLayout", {})
-                vertical_flip = {1: bool(layout["Camera1"]["verticalFlip"]), 2: bool(
-                    layout["Camera2"]["verticalFlip"])}
+                vertical_flip = {
+                    1: bool(layout["Camera1"]["verticalFlip"]),
+                    2: bool(layout["Camera2"]["verticalFlip"]),
+                }
                 z_start, z_end, y_start, y_end = get_crop_values(
-                    reference_split_z_depth, reference_cam_info_split, cam_info_stitching, reference_channel, vertical_flip[find_camera_for_channel(scan_parameters, reference_channel)])
+                    reference_split_z_depth,
+                    reference_cam_info_split,
+                    cam_info_stitching,
+                    reference_channel,
+                    vertical_flip[find_camera_for_channel(
+                        scan_parameters, reference_channel)],
+                )
 
                 # y0/y1 (the chunk loop below) range over
                 # [y_start, corrected_sy + y_start), NOT [0, corrected_sy)
@@ -1082,6 +1167,58 @@ def pipeline(
                         # via a tiny reciprocal instead.
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
+
+                        if alt_zy_match_overlap and prev_tile_reciprocal_map is not None and overlap_with_prev > 0:
+                            # Nudge THIS tile's whole reciprocal_map by
+                            # a single average ratio so its overlap
+                            # with the PREVIOUS tile roughly matches --
+                            # the previous tile is treated as fixed
+                            # (never adjusted retroactively), matching
+                            # how tile 0 always uses its own calculated
+                            # values unmodified.
+                            #
+                            # tile_reciprocal_map is in the SAME
+                            # (pre-affine, split-crop) Y frame that
+                            # y_start/corrected_sy are defined in -- the
+                            # skew affine never touches Y, and the
+                            # registration affine's Y component is
+                            # typically a modest scale+translation, so
+                            # slicing [y_start : y_start+overlap] here
+                            # lines up with the actual output overlap
+                            # closely, not just approximately.
+                            prev_overlap = prev_tile_reciprocal_map[
+                                :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy]
+                            this_overlap = tile_reciprocal_map[
+                                :, y_start: y_start + overlap_with_prev]
+                            # Exclude "no valid tissue data" fallback
+                            # positions (~1e-9) from both sides before
+                            # averaging, so they don't skew the ratio.
+                            valid = (prev_overlap >
+                                     1e-6) & (this_overlap > 1e-6)
+                            if np.any(valid):
+                                prev_mean = prev_overlap[valid].mean()
+                                this_mean = this_overlap[valid].mean()
+                                if this_mean > 1e-6:
+                                    ratio = float(prev_mean / this_mean)
+                                    tile_reciprocal_map = tile_reciprocal_map * ratio
+                                    logger.info(
+                                        f"[alt zy per-tile] tile {index} ({name}): "
+                                        f"matched overlap with previous tile, ratio={ratio:.4f}"
+                                    )
+
+                        prev_tile_reciprocal_map = tile_reciprocal_map
+
+                        calib_dir = _alt_zy_calibration_dir(
+                            general_config, ch, alt_zy_calibration_dir)
+                        os.makedirs(calib_dir, exist_ok=True)
+                        noise_tiff_path = os.path.join(
+                            calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
+                        scaler_tiff_path = os.path.join(
+                            calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
+                        tifffile.imwrite(
+                            noise_tiff_path, tile_noise_map.astype(np.float32))
+                        tifffile.imwrite(
+                            scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
                     else:
                         tile_noise_map = alt_zy_noise
                         tile_reciprocal_map = alt_zy_reciprocal_map

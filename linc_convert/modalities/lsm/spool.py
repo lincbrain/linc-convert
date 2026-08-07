@@ -96,7 +96,8 @@ def convert(
             int(parsed.group("z")),
             parsed.group("suffix"),
             tile_folder_name,
-            SpoolSetInterpreter(tile_folder_name, tile_folder_name + "_info.mat"),
+            SpoolSetInterpreter(
+                tile_folder_name, tile_folder_name + "_info.mat"),
         )
         all_tiles_info.append(tile)
         # Check for duplicate tiles
@@ -108,7 +109,8 @@ def convert(
         tiles_info_by_index[(tile.y, tile.z)] = tile
 
     # Set default output path if not provided
-    general_config.set_default_name(all_tiles_info[0].prefix + all_tiles_info[0].suffix)
+    general_config.set_default_name(
+        all_tiles_info[0].prefix + all_tiles_info[0].suffix)
 
     # Determine unique Y and Z tile indices
     z_tiles = set(tile.z for tile in all_tiles_info)
@@ -182,7 +184,8 @@ def convert(
 
     # Initialize Zarr group and array
     omz = from_config(general_config.out, zarr_config)
-    array = omz.create_array("0", shape=fullshape, zarr_config=zarr_config, dtype=dtype)
+    array = omz.create_array("0", shape=fullshape,
+                             zarr_config=zarr_config, dtype=dtype)
     logger.info(general_config.out)
 
     print("Write level 0 with shape", fullshape)

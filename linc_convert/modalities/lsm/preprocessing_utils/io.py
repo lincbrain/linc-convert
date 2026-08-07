@@ -1,19 +1,18 @@
 import math
 import os
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import tifffile
 import yaml
-import warnings
 
 from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     crop_mip_channels,
 )
 from linc_convert.modalities.lsm.preprocessing_utils.masks import (
     compute_tissue_mask,
-    compute_tissue_mask_otsu,
 )
 
 # ---------------------------------------------------------------------
@@ -239,6 +238,38 @@ def get_camera_info(
     slice_number: int,
     crop_stage: str = "stitching",
 ) -> List[dict]:
+    """
+    Get per-channel crop metadata for one camera, at either the
+    "stitching" or "split" crop stage (see `crop_stage`).
+
+    Parameters
+    ----------
+    scan_parameters : dict
+        Loaded scan configuration.
+    camera_id : int
+        Camera identifier (1 or 2).
+    slice_number : int
+        Physical slice number, used to pick the matching configEpoch.
+    crop_stage : {"stitching", "split"}, default="stitching"
+        Which crop definition to read: "stitching" (the final,
+        tighter crop) or "split" (the wider crop used to separate the
+        raw dual-channel frame into per-channel volumes).
+
+    Returns
+    -------
+    list of dict
+        One entry per channel, each with `channel`, `camera_id`,
+        `y_start`, `y_end`, `z_start`, `z_end` (the latter two may be
+        `None`), and `vertical_flip`.
+
+    Raises
+    ------
+    ValueError
+        If `camera_id` or `crop_stage` is invalid.
+    KeyError
+        If the relevant crop/layout metadata is missing for this
+        camera/epoch.
+    """
     if camera_id not in (1, 2):
         raise ValueError(f"Invalid camera_id: {camera_id}")
     if crop_stage not in ("stitching", "split"):
@@ -310,6 +341,15 @@ def get_camera_info(
 
 
 def find_camera_for_channel(scan_parameters: dict, channel: str) -> int:
+    """
+    Find which camera (1 or 2) a given channel name lives on, from
+    `scan_parameters["channelLayout"]`.
+
+    Raises
+    ------
+    KeyError
+        If `channel` isn't found under either camera's layout.
+    """
     layout = scan_parameters.get("channelLayout", {})
 
     for camera_id in (1, 2):

@@ -1,47 +1,13 @@
+import warnings
 from typing import Dict, List, Optional, Tuple
 
-import dask
 import dask.array as da
 import numpy as np
-import warnings
 from dask_image.ndinterp import affine_transform
-from scipy.ndimage import convolve
 
 # ---------------------------------------------------------------------
 # Intensity correction
 # ---------------------------------------------------------------------
-
-
-def _corr_zy_postprocess(
-    corr: np.ndarray,
-    counts: np.ndarray,
-    min_pixels: int,
-    kernel_size: int,
-) -> np.ndarray:
-    corr = corr.copy()
-    corr[counts < min_pixels] = np.nan
-
-    valid_per_z = np.sum(np.isfinite(corr), axis=1)
-    bad_rows = valid_per_z < 10
-
-    fallback = np.nanmedian(corr)
-    if not np.isfinite(fallback):
-        fallback = 1.0
-
-    corr[bad_rows] = fallback
-
-    kernel = np.ones((kernel_size, kernel_size), dtype=np.float32)
-
-    valid = np.isfinite(corr)
-    corr_filled = np.nan_to_num(corr, nan=0)
-
-    num = convolve(corr_filled, kernel, mode="nearest")
-    den = convolve(valid.astype(np.float32), kernel, mode="nearest")
-
-    corr_smooth = num / (den + 1e-6)
-    corr_smooth[corr_smooth < 5] = 99999999.0
-
-    return (corr_smooth / 1000).astype(np.float32)
 
 
 def compute_corr_zy(
@@ -49,8 +15,36 @@ def compute_corr_zy(
     mask: np.ndarray,
     tissue_frac_min: float,
     threshold: float,
-    kernel_size: int = 5,
 ) -> da.Array:
+    """
+    Compute the default per-(Z, Y) stripe-correction divisor for one
+    tile: the median tissue intensity in each row (masked, thresholded,
+    and X-subsampled by 64 for speed), normalized by a fixed constant
+    so `vol / corr_zy` lands back near the original intensity scale.
+
+    Rows with fewer than `tissue_frac_min * X` valid tissue pixels get
+    a large sentinel divisor (9999999.0) instead, so they're
+    effectively suppressed rather than producing an unstable
+    correction from too little data.
+
+    Parameters
+    ----------
+    vol : dask.array.Array
+        Raw (Z, Y, X) volume for one tile.
+    mask : np.ndarray
+        Tissue mask, shape (Y, X) or (Z, Y, X).
+    tissue_frac_min : float
+        Minimum fraction of a row's (subsampled) pixels that must be
+        valid tissue for that row to get a real correction value.
+    threshold : float
+        Intensity threshold; only pixels at or above `threshold * 1.05`
+        are treated as tissue.
+
+    Returns
+    -------
+    dask.array.Array
+        Shape (Z, Y). Apply via `vol / corr_zy`.
+    """
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
 
@@ -84,8 +78,6 @@ def compute_corr_zy(
     # by 1000 here keeps the corrected output at roughly the original
     # intensity scale instead.
     return corr / 1000
-    # corr_smooth = dask.delayed(_corr_zy_postprocess)(
-    #    corr, counts, min_pixels, kernel_size)
 
 
 def compute_alt_zy_calibration_for_tile(
@@ -200,14 +192,16 @@ def compute_alt_zy_calibration_for_tile(
 
     return noise_map, reciprocal_map
 
-    # return da.from_delayed(corr_smooth, shape=(Z, Y), dtype=np.float32)
-
 
 def apply_corr_zy_lazy(
     vol: da.Array,
     corr_zy: "da.Array | np.ndarray",
     eps: float = 1e-6,
 ) -> da.Array:
+    """
+    Apply a per-(Z, Y) correction divisor to a volume: `vol / corr_zy`,
+    clipped to uint16 range. `eps` avoids division by zero.
+    """
     vol = vol.astype(np.float32)
 
     if isinstance(corr_zy, np.ndarray):
@@ -228,6 +222,14 @@ def generate_skew_affine(
     conversion_factors: List[float],
     delta: float = 36.0,
 ):
+    """
+    Build the (Z, Y, X, 1) affine that shears X as a function of Z,
+    correcting for the light-sheet's oblique acquisition angle.
+    `X_out = X_in + shear * Z_in`, where `shear` comes from `delta`
+    (the skew angle) and the ratio of the Z and X voxel sizes in
+    `conversion_factors` (given as [y, z, x]). Z and Y are left
+    unchanged.
+    """
     shear = np.tan(np.deg2rad(delta)) * \
         conversion_factors[1] / conversion_factors[2]
 
@@ -270,6 +272,7 @@ def skew_correction_affine_dask(
 
 
 def apply_affine(vol_yzx: da.Array, affine: np.ndarray) -> da.Array:
+    """Resample a volume through a 4x4 affine (forward-mapping convention)."""
     return affine_transform(
         vol_yzx,
         matrix=np.linalg.inv(affine),
@@ -280,6 +283,7 @@ def apply_affine(vol_yzx: da.Array, affine: np.ndarray) -> da.Array:
 
 
 def maybe_flip_z_lazy(vol: da.Array, flip: bool) -> da.Array:
+    """Flip a (Z, Y, X) volume along Z if `flip` is True, else return as-is."""
     return vol[::-1] if flip else vol
 
 
@@ -384,7 +388,10 @@ def crop_volume_channels(
     return out
 
 
-def get_crop_values(size_z, cam_info_split: List[dict], cam_info_stitching, reference_channel, is_flipped):
+def get_crop_values(
+    size_z, cam_info_split: List[dict], cam_info_stitching,
+    reference_channel, is_flipped,
+):
     """
     Crop `vol` (already cropped to the split-crop bounds for
     `reference_channel`) down to the stitching-crop bounds, expressed
@@ -479,7 +486,10 @@ def crop_mip_channels(
     return out
 
 
-def apply_affine_split(vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_end: int, corr_zy, mask) -> da.Array:
+def apply_affine_split(
+    vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_end: int,
+    corr_zy, mask,
+) -> da.Array:
     """Resample `vol_zyx` through `affine` and return only the requested region.
 
     Internally reads a padded bounding box (large enough to cover the
@@ -580,6 +590,7 @@ def apply_affine_split(vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_en
         crop_x0:crop_x0 + dx,
     ]
 
+
 # ---------------------------------------------------------------------
 # High-level preprocessing
 # ---------------------------------------------------------------------
@@ -593,6 +604,13 @@ def stripe_skew_corr(
     scan_parameters: dict,
     tissue_frac_min: float = 0.02,
 ) -> da.Array:
+    """
+    Full default correction pipeline for one volume: default zy stripe
+    correction (`compute_corr_zy` + `apply_corr_zy_lazy`) followed by
+    skew correction (`skew_correct_volume_lazy`). Used both for the
+    real per-tile correction path and for estimating a sample tile's
+    corrected shape up front.
+    """
     Z, Y, X = vol.shape
     mask_da = da.from_array(mask, chunks=vol.chunks[1:])
 
@@ -621,6 +639,7 @@ def stripe_skew_corr(
 
 
 def embed_zy_affine_for_volume(affine_zy):
+    """Embed a 3x3 (Z, Y) affine into a 4x4 (Z, Y, X, 1) affine, leaving X untouched."""
     affine_zy = np.asarray(affine_zy, dtype=np.float64)
     if affine_zy.shape != (3, 3):
         raise ValueError(
@@ -632,5 +651,6 @@ def embed_zy_affine_for_volume(affine_zy):
 
 
 def apply_channel_affine_volume(vol, affine_zy):
+    """Apply a 3x3 (Z, Y) channel-registration affine to a (Z, Y, X) volume."""
     affine_3d = embed_zy_affine_for_volume(affine_zy)
     return apply_affine(vol, affine_3d)
