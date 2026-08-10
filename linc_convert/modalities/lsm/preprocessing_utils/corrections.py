@@ -588,7 +588,7 @@ def apply_affine_split(
     transformed = affine_transform(
         padded_slice,
         matrix=np.linalg.inv(affine_local),
-        order=0,
+        order=3,
         mode="constant",
         cval=0.0,
     )
