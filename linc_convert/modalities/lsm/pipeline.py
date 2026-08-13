@@ -316,7 +316,7 @@ def _write_checkpoint(filename: str, y: int, ratio=1.0) -> None:
         f.write(f"{y},{ratio}\n")
 
 
-def _read_checkpoint(filename: str, default_y: int, default_ratio=1.0) -> int:
+def _read_checkpoint(filename: str, default_y: int, default_ratio: float = 1.0) -> Tuple[int, float]:
     try:
         with open(filename, "r") as f:
             content = f.read().strip()
@@ -495,6 +495,28 @@ def _scale_affine_translations(
         new_affine[1, 2] = affine[1, 2] / factor
         scaled[ch] = new_affine
     return scaled
+
+
+def _low_percentile_excluding_fallback(arr: np.ndarray, q: float, axis: int) -> np.ndarray:
+    """
+    Like `np.percentile(arr, q, axis=axis)`, but first excludes the
+    ~1e-9 "no valid tissue data" fallback sentinel (see
+    `compute_alt_zy_calibration_for_tile`'s own `nan_to_num(nan=1e-9)`)
+    from the computation via `np.nanpercentile`.
+
+    Without this, a LOW percentile (the intended use here) is exactly
+    where these fallback sentinels -- deliberately tiny, meant to
+    suppress a position, not describe it -- are most likely to get
+    picked up, especially with a small Z extent where even a few
+    fallback slices dominate the low end of the distribution. If
+    EVERY value along an axis is a fallback, that position's result is
+    also the fallback sentinel (nothing valid to report).
+    """
+    masked = np.where(arr > 1e-6, arr, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        result = np.nanpercentile(masked, q=q, axis=axis)
+    return np.where(np.isfinite(result), result, 1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -909,7 +931,7 @@ def pipeline(
         # all.
         alt_zy_noise = None
         alt_zy_reciprocal_map = None
-        if use_alt_zy_correction and not alt_zy_per_tile:
+        if use_alt_zy_correction and (not alt_zy_per_tile or alt_zy_match_overlap):
             if alt_zy_reference_tiles is None:
                 raise ValueError(
                     "use_alt_zy_correction requires exactly 3 tile indices "
@@ -951,7 +973,7 @@ def pipeline(
                 ref_reciprocal_map = np.nan_to_num(
                     ref_reciprocal_map, nan=1e-9)
                 noises.append(ref_noise_map)
-                reciprocal_maps.append(np.percentile(
+                reciprocal_maps.append(_low_percentile_excluding_fallback(
                     ref_reciprocal_map, q=2, axis=0) if alt_zy_match_overlap else ref_reciprocal_map)
                 logger.info(
                     f"[alt zy calibration] tile {ref_index} ({ref_name}): "
@@ -982,7 +1004,7 @@ def pipeline(
 
         out_dir = f"{general_config.out}/{ch}"
 
-        if use_alt_zy_correction and not alt_zy_per_tile:
+        if use_alt_zy_correction and (not alt_zy_per_tile or alt_zy_match_overlap):
             calib_dir = _alt_zy_calibration_dir(
                 general_config, ch, alt_zy_calibration_dir)
             os.makedirs(calib_dir, exist_ok=True)
@@ -1055,12 +1077,14 @@ def pipeline(
         carry: Optional[np.ndarray] = None
 
         # For alt_zy_per_tile + alt_zy_match_overlap: the previous
-        # tile's own (possibly already-adjusted) reciprocal_map, kept
-        # around so the next tile can match its overlap against it.
-        # Reset to None at the start of each channel -- there's no
-        # previous tile to match against for the first one.
+        # tile's own overlap-vs-average-gradient ratio, kept around so
+        # the next tile can compare its overlap against it. prev_ratio
+        # is NOT reset here -- it was already correctly read from the
+        # checkpoint file above (defaults to 1.0 for a fresh channel,
+        # or the persisted value on a resume). Resetting it here would
+        # silently discard that persisted value and restart the
+        # sequential matching chain from 1.0 on every resume.
         prev_overlap_calc: Optional[np.ndarray] = None
-        prev_ratio: int = 1
 
         # Clamp the tile range to [chunk_min, chunk_max] if provided.
         # These compose with the checkpoint: we process tiles that are
@@ -1206,9 +1230,10 @@ def pipeline(
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
                         if alt_zy_match_overlap:
+                            had_no_prev_overlap = prev_overlap_calc is None
                             if prev_overlap_calc is not None and overlap_with_prev > 0:
                                 overlap_calc = alt_zy_reciprocal_map / \
-                                    np.percentile(
+                                    _low_percentile_excluding_fallback(
                                         tile_reciprocal_map, q=2, axis=0)
                                 prev_overlap = np.median(prev_overlap_calc[
                                     y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
@@ -1217,14 +1242,39 @@ def pipeline(
                                 ratio = prev_ratio * this_overlap / prev_overlap
                                 prev_ratio = ratio
                                 prev_overlap_calc = overlap_calc
-                                logger.info(f"ratio: {ratio}")
+                                logger.info(
+                                    f"[alt zy match-overlap] tile {index} ({name}): "
+                                    f"compared against previous tile's overlap "
+                                    f"(overlap_with_prev={overlap_with_prev}), "
+                                    f"prev_overlap={prev_overlap:.4g}, "
+                                    f"this_overlap={this_overlap:.4g}, "
+                                    f"ratio={ratio:.4f}"
+                                )
                             else:
-                                prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
+                                prev_overlap_calc = alt_zy_reciprocal_map / \
+                                    _low_percentile_excluding_fallback(
+                                        tile_reciprocal_map, q=2, axis=0)
                                 ratio = prev_ratio
+                                reason = (
+                                    "no previous tile's overlap data yet "
+                                    "(first tile processed, or previous tile "
+                                    "was skipped)" if had_no_prev_overlap
+                                    else f"overlap_with_prev={overlap_with_prev} "
+                                    f"(this tile doesn't overlap the "
+                                    f"previous one, per y_coords spacing "
+                                    f"vs corrected_sy)"
+                                )
+                                logger.info(
+                                    f"[alt zy match-overlap] tile {index} ({name}): "
+                                    f"no comparison -- {reason}. Using "
+                                    f"carried-forward ratio={ratio:.4f} "
+                                    f"unchanged."
+                                )
                             tile_reciprocal_map = alt_zy_reciprocal_map*ratio
                             tile_reciprocal_map = np.broadcast_to(
                                 tile_reciprocal_map[None, :],
-                                (corrected_sz, tile_reciprocal_map.shape[1])
+                                (raw_vol.shape[0],
+                                 tile_reciprocal_map.shape[0])
                             )
 
                             calib_dir = _alt_zy_calibration_dir(
