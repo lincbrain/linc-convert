@@ -1211,9 +1211,9 @@ def pipeline(
                                     np.percentile(
                                         tile_reciprocal_map, q=0.02, axis=0)
                                 prev_overlap = np.median(prev_overlap_calc[
-                                    :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
+                                    y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
                                 this_overlap = np.median(overlap_calc[
-                                    :, y_start: y_start + overlap_with_prev])
+                                    y_start: y_start + overlap_with_prev])
                                 ratio = prev_ratio * this_overlap / prev_overlap
                                 prev_ratio = ratio
                                 prev_overlap_calc = overlap_calc
