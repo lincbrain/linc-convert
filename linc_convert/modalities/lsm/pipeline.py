@@ -311,19 +311,19 @@ def _corrected_y_chunk(
     return apply_affine_split(vol, affine, y0, y1, corr_zy, mask)
 
 
-def _write_checkpoint(filename: str, y: int) -> None:
+def _write_checkpoint(filename: str, y: int, ratio=1.0) -> None:
     with open(filename, "w") as f:
-        f.write(f"{y}\n")
+        f.write(f"{y},{ratio}\n")
 
 
-def _read_checkpoint(filename: str, default_y: int) -> int:
+def _read_checkpoint(filename: str, default_y: int, default_ratio=1.0) -> int:
     try:
         with open(filename, "r") as f:
             content = f.read().strip()
-            y_str = content
-            return int(y_str)
+            y_str, ratio_str = content.split(",")
+            return int(y_str), float(ratio_str)
     except (FileNotFoundError, ValueError):
-        return default_y
+        return default_y, default_ratio
 
 
 def load_y_coordinates(coords_yaml_path: str) -> List[float]:
@@ -996,7 +996,7 @@ def pipeline(
             )
 
         checkpoint_file = _checkpoint_path(general_config, ch)
-        checkpoint = _read_checkpoint(checkpoint_file, -1)
+        checkpoint, prev_ratio = _read_checkpoint(checkpoint_file, -1, 1.0)
 
         # `omz`/`array` are opened exactly once per channel here, and
         # reused for every tile/chunk below -- no re-opening per tile or
@@ -1333,7 +1333,7 @@ def pipeline(
                 logger.info(
                     f"{name} done in {time.time() - tile_timer:.2f}s"
                 )
-                _write_checkpoint(checkpoint_file, index)
+                _write_checkpoint(checkpoint_file, index, prev_ratio)
 
         gc.collect()
         copy_config = replace(general_config, out=out_dir)
