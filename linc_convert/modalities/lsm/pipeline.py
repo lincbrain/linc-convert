@@ -1210,6 +1210,7 @@ def pipeline(
                         ratio = prev_ratio * this_overlap / prev_overlap
                         prev_ratio = ratio
                         prev_overlap_calc = overlap_calc
+                        logger.info(f"ratio: {ratio}")
                     else:
                         prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
                     tile_reciprocal_map = alt_zy_reciprocal_map*ratio
