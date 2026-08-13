@@ -35,6 +35,7 @@ def compute_tissue_mask(
     downsample: int = 4,
     clip_high_percentile: float = 99.9,
     background_length: int = 5000,
+    threshold_multiplier: float = 1.4,
 ) -> tuple[np.ndarray, float]:
     """
     Generate a binary tissue mask from a 2D image using thresholding and largest-component filtering.
@@ -54,6 +55,10 @@ def compute_tissue_mask(
         Downsampling factor for faster mask estimation.
     clip_high_percentile : float, default=99.9
         Upper percentile used to clip bright outliers.
+    threshold_multiplier : float, default=1.4
+        The edge-derived intensity threshold is multiplied by this
+        before segmenting tissue (`pixel > threshold * threshold_multiplier`).
+        Higher values require brighter pixels to count as tissue.
 
     Returns
     -------
@@ -87,7 +92,7 @@ def compute_tissue_mask(
     np.minimum(small, clip_val, out=small)
 
     # Threshold
-    tissue_small = small > threshold*1.4
+    tissue_small = small > threshold*threshold_multiplier
     del small
 
     # -------------------------

@@ -80,6 +80,7 @@ def load_mask_and_thresholds(
     downsample: int = 8,
     clip_high_percentile: float = 99.0,
     background_length: int = 5000,
+    threshold_multiplier: float = 1.4,
     pre_split: bool = False,
     ch: Optional[str] = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, float]]:
@@ -98,6 +99,9 @@ def load_mask_and_thresholds(
         Downsampling factor for mask computation.
     clip_high_percentile : float, default=99.9
         Percentile used to clip high-intensity outliers.
+    threshold_multiplier : float, default=1.4
+        Passed through to `compute_tissue_mask` -- multiplies the
+        edge-derived threshold before segmenting tissue.
 
     Returns
     -------
@@ -144,7 +148,8 @@ def load_mask_and_thresholds(
             mip,
             downsample=downsample,
             clip_high_percentile=clip_high_percentile,
-            background_length=background_length
+            background_length=background_length,
+            threshold_multiplier=threshold_multiplier,
         )
         masks[out_ch] = mask
         thresholds[out_ch] = thr

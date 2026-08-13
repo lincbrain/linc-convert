@@ -87,6 +87,7 @@ def compute_alt_zy_calibration_for_tile(
     background_length: int = 5000,
     x_stride: int = 64,
     normalize_to: Optional[float] = None,
+    threshold_multiplier: float = 1.05,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ONE reference tile's contribution to the alternate zy
@@ -142,6 +143,13 @@ def compute_alt_zy_calibration_for_tile(
         `compute_corr_zy`'s own fixed constant) instead targets the same
         absolute output scale for every tile, trading that adaptiveness
         for consistency.
+    threshold_multiplier : float, default=1.05
+        A pixel counts as tissue (and its noise-subtracted value gets
+        included in the per-row median) only if the ORIGINAL
+        (pre-subtraction) `vol` is at or above
+        `threshold * threshold_multiplier`. Higher values require
+        brighter pixels to count, giving a stricter (more selective)
+        set of pixels contributing to each row's scaler.
 
     Returns
     -------
@@ -174,7 +182,7 @@ def compute_alt_zy_calibration_for_tile(
             f"mask shape {mask.shape} != volume shape {(Z, Y, X)} or {(Y, X)}")
 
     masked = da.where(
-        mask_da & (vol >= threshold * 1.05) & da.isfinite(vol),
+        mask_da & (vol >= threshold * threshold_multiplier) & da.isfinite(vol),
         vol_denoised, np.nan,
     )
     raw_scaler = da.nanmedian(masked[:, :, ::x_stride], axis=2)  # (Z, Y)

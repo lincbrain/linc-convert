@@ -202,6 +202,7 @@ def _open_raw_channel_volume_and_mask(
     ch: str,
     cam_info,
     background_length: int = 5000,
+    mask_threshold_multiplier: float = 1.4,
     mip_pre_split: bool = False,
     reference_ch=None,
     x_min=None,
@@ -253,6 +254,7 @@ def _open_raw_channel_volume_and_mask(
     masks, thrs = load_mask_and_thresholds(
         name, mip_dir, mip_cam_info,
         background_length=background_length, pre_split=mip_pre_split, ch=ch,
+        threshold_multiplier=mask_threshold_multiplier,
     )
 
     if zarr_level > 0:
@@ -522,6 +524,7 @@ def pipeline(
     x_min: Optional[int] = None,
     x_max: Optional[int] = None,
     background_length: int = 5000,
+    mask_threshold_multiplier: float = 1.4,
     mip_pre_split: bool = False,
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
@@ -534,6 +537,7 @@ def pipeline(
     alt_zy_per_tile: bool = False,
     alt_zy_match_overlap: bool = False,
     alt_zy_calibration_dir: Optional[str] = None,
+    alt_zy_threshold_multiplier: float = 1.05,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -663,6 +667,24 @@ def pipeline(
         `{general_config.out with .ome.zarr stripped}_alt_zy_calibration/{ch}/`
         -- so these diagnostic files never end up mixed into the zarr
         store's own directory alongside zarr.json and chunk data.
+    mask_threshold_multiplier : float, default=1.4
+        Passed through to `compute_tissue_mask`: the edge-derived
+        intensity threshold used for tissue-mask segmentation is
+        multiplied by this before thresholding
+        (`pixel > threshold * mask_threshold_multiplier`). Higher
+        values require brighter pixels to count as tissue, giving a
+        stricter (smaller) mask; lower values give a looser (larger)
+        one.
+    alt_zy_threshold_multiplier : float, default=1.05
+        Only meaningful when `use_alt_zy_correction=True`. Passed
+        through to `compute_alt_zy_calibration_for_tile`: a pixel only
+        contributes to a row's scaler if its ORIGINAL (pre-noise-
+        subtraction) value is at or above `threshold *
+        alt_zy_threshold_multiplier`. This is a separate multiplier
+        from `mask_threshold_multiplier` above -- that one controls
+        which pixels count as tissue at all (the mask itself); this one
+        additionally filters which of those tissue pixels are bright
+        enough to trust for the scaler calculation specifically.
 
     Raises
     ------
@@ -811,6 +833,7 @@ def pipeline(
                 cam_info=reference_cam_info,
                 mip_cam_info=reference_cam_info_full_res,
                 background_length=background_length,
+                mask_threshold_multiplier=mask_threshold_multiplier,
                 mip_pre_split=mip_pre_split,
                 x_min=x_min,
                 x_max=x_max,
@@ -843,6 +866,7 @@ def pipeline(
                 cam_info=reference_cam_info_split,
                 mip_cam_info=reference_cam_info_split_full_res,
                 background_length=background_length,
+                mask_threshold_multiplier=mask_threshold_multiplier,
                 mip_pre_split=mip_pre_split,
                 x_min=x_min,
                 x_max=x_max,
@@ -893,6 +917,7 @@ def pipeline(
                     cam_info=cam_info,
                     mip_cam_info=cam_info_full_res,
                     background_length=background_length,
+                    mask_threshold_multiplier=mask_threshold_multiplier,
                     mip_pre_split=mip_pre_split,
                     x_min=x_min,
                     x_max=x_max,
@@ -903,6 +928,7 @@ def pipeline(
                 ref_noise_map, ref_reciprocal_map = compute_alt_zy_calibration_for_tile(
                     ref_raw_vol, ref_mask, ref_thr,
                     background_length=alt_zy_background_length,
+                    threshold_multiplier=alt_zy_threshold_multiplier,
                 )
                 noises.append(ref_noise_map)
                 reciprocal_maps.append(ref_reciprocal_map)
@@ -1053,6 +1079,7 @@ def pipeline(
                     cam_info=cam_info,
                     mip_cam_info=cam_info_full_res,
                     background_length=background_length,
+                    mask_threshold_multiplier=mask_threshold_multiplier,
                     mip_pre_split=mip_pre_split,
                     x_min=x_min,
                     x_max=x_max,
@@ -1165,6 +1192,7 @@ def pipeline(
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
                             raw_vol, mask, thr, background_length=alt_zy_background_length,
                             normalize_to=1000,
+                            threshold_multiplier=alt_zy_threshold_multiplier,
                         )
                         # Unlike the fixed-calibration mode (which
                         # absorbs NaN positions via nanmean across 3
