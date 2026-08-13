@@ -910,7 +910,7 @@ def pipeline(
         alt_zy_noise = None
         alt_zy_reciprocal_map = None
         if use_alt_zy_correction and not alt_zy_per_tile:
-            if alt_zy_reference_tiles is None or len(alt_zy_reference_tiles) != 3:
+            if alt_zy_reference_tiles is None:
                 raise ValueError(
                     "use_alt_zy_correction requires exactly 3 tile indices "
                     "in alt_zy_reference_tiles (unless alt_zy_per_tile=True)"
