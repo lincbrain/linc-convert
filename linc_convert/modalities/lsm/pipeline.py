@@ -951,7 +951,8 @@ def pipeline(
                 ref_reciprocal_map = np.nan_to_num(
                     ref_reciprocal_map, nan=1e-9)
                 noises.append(ref_noise_map)
-                reciprocal_maps.append(ref_reciprocal_map)
+                reciprocal_maps.append(np.percentile(
+                    ref_reciprocal_map, q=0.02, axis=0) if alt_zy_match_overlap else ref_reciprocal_map)
                 logger.info(
                     f"[alt zy calibration] tile {ref_index} ({ref_name}): "
                     f"noise_map mean={ref_noise_map.mean():.2f}"
@@ -1195,51 +1196,55 @@ def pipeline(
                     raw_vol = raw_vol[::-1]
 
                 if use_alt_zy_correction:
+                    if alt_zy_per_tile or alt_zy_match_overlap:
 
-                    tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
-                        raw_vol, mask, thr, background_length=alt_zy_background_length,
-                        normalize_to=None if alt_zy_match_overlap else 1000,
-                        threshold_multiplier=alt_zy_threshold_multiplier,
-                    )
-                    tile_reciprocal_map = np.nan_to_num(
-                        tile_reciprocal_map, nan=1e-9)
-                    if prev_overlap_calc is not None and overlap_with_prev > 0:
-                        overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
-                        prev_overlap = np.median(prev_overlap_calc[
-                            :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
-                        this_overlap = np.median(overlap_calc[
-                            :, y_start: y_start + overlap_with_prev])
-                        ratio = prev_ratio * this_overlap / prev_overlap
-                        prev_ratio = ratio
-                        prev_overlap_calc = overlap_calc
-                        logger.info(f"ratio: {ratio}")
-                    else:
-                        prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
-                        ratio = prev_ratio
-                    tile_reciprocal_map = alt_zy_reciprocal_map*ratio
+                        tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
+                            raw_vol, mask, thr, background_length=alt_zy_background_length,
+                            normalize_to=None if alt_zy_match_overlap else 1000,
+                            threshold_multiplier=alt_zy_threshold_multiplier,
+                        )
+                        tile_reciprocal_map = np.nan_to_num(
+                            tile_reciprocal_map, nan=1e-9)
+                        if alt_zy_match_overlap:
+                            if prev_overlap_calc is not None and overlap_with_prev > 0:
+                                overlap_calc = alt_zy_reciprocal_map / \
+                                    np.percentile(
+                                        tile_reciprocal_map, q=0.02, axis=0)
+                                prev_overlap = np.median(prev_overlap_calc[
+                                    :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
+                                this_overlap = np.median(overlap_calc[
+                                    :, y_start: y_start + overlap_with_prev])
+                                ratio = prev_ratio * this_overlap / prev_overlap
+                                prev_ratio = ratio
+                                prev_overlap_calc = overlap_calc
+                                logger.info(f"ratio: {ratio}")
+                            else:
+                                prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
+                                ratio = prev_ratio
+                            tile_reciprocal_map = tile_reciprocal_map*ratio
 
-                    calib_dir = _alt_zy_calibration_dir(
-                        general_config, ch, alt_zy_calibration_dir)
-                    os.makedirs(calib_dir, exist_ok=True)
-                    noise_tiff_path = os.path.join(
-                        calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
-                    scaler_tiff_path = os.path.join(
-                        calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
-                    tifffile.imwrite(
-                        noise_tiff_path, tile_noise_map.astype(np.float32))
-                    tifffile.imwrite(
-                        scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
+                            calib_dir = _alt_zy_calibration_dir(
+                                general_config, ch, alt_zy_calibration_dir)
+                            os.makedirs(calib_dir, exist_ok=True)
+                            noise_tiff_path = os.path.join(
+                                calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
+                            scaler_tiff_path = os.path.join(
+                                calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
+                            tifffile.imwrite(
+                                noise_tiff_path, tile_noise_map.astype(np.float32))
+                            tifffile.imwrite(
+                                scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
 
-                    # (vol - noise_map).clip(0) * reciprocal_map is the
-                    # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
-                    # so this reuses the existing apply_corr_zy_lazy
-                    # (division-based) machinery unchanged: pre-subtract
-                    # the (per-Z,Y) noise map here, and feed in the
-                    # RECIPROCAL of the reciprocal map as if it were
-                    # corr_zy.
-                    raw_vol = da.clip(
-                        raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
-                    corr_zy = 1.0 / tile_reciprocal_map
+                        # (vol - noise_map).clip(0) * reciprocal_map is the
+                        # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
+                        # so this reuses the existing apply_corr_zy_lazy
+                        # (division-based) machinery unchanged: pre-subtract
+                        # the (per-Z,Y) noise map here, and feed in the
+                        # RECIPROCAL of the reciprocal map as if it were
+                        # corr_zy.
+                        raw_vol = da.clip(
+                            raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
+                        corr_zy = 1.0 / tile_reciprocal_map
                 else:
                     corr_zy = compute_corr_zy(
                         raw_vol,
