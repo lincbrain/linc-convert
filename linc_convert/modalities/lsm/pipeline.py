@@ -650,15 +650,22 @@ def pipeline(
     alt_zy_match_overlap : bool, default=False
         Only meaningful when `alt_zy_per_tile=True`. Since each tile's
         scaler is calibrated independently there, tile-to-tile
-        brightness can drift visibly at seams. When this is set, for
-        each tile (after the first) the average ratio between the
-        previous tile's and this tile's scaler values in their shared
-        overlap region is computed, and this tile's whole scaler map
-        is multiplied by that ratio -- nudging its overlap to roughly
-        match the previous tile's. The previous tile is never adjusted
-        retroactively; only the tile calibrating "next" moves toward
-        the one before it, the same way tile 0 always keeps its own
-        unmodified calculated values.
+        brightness can drift visibly at seams. When this is set,
+        `alt_zy_reference_tiles` (at least 1 tile index) is required
+        and those tiles act as fixed ANCHORS: they always keep their
+        own independently-calculated values unmodified (their
+        `normalize_to` target is each tile's own median, NOT a fixed
+        1000 -- forcing every tile to one shared constant would
+        flatten out the real tile-to-tile brightness pattern this is
+        meant to preserve). Every OTHER tile still computes its own
+        calibration, but then gets nudged toward the tile before it:
+        the average ratio between the previous tile's and this tile's
+        scaler values in their shared overlap region is computed, and
+        this tile's whole scaler map is multiplied by that ratio. This
+        way the real pattern anchored at the reference tiles
+        propagates outward, tile to tile, via the overlaps, rather
+        than every tile being independently forced toward the same
+        flattened target.
     alt_zy_calibration_dir : str, optional
         Base directory for the alt zy noise/scaler tiff files (see
         `use_alt_zy_correction`/`alt_zy_per_tile` above); files go in
@@ -880,6 +887,17 @@ def pipeline(
         full_y = int(round(y_coords[-1])) + corrected_sy
         full_z = corrected_sz
         fullshape = (full_z, full_y, full_x)
+
+        if alt_zy_per_tile and alt_zy_match_overlap and not alt_zy_reference_tiles:
+            raise ValueError(
+                "alt_zy_per_tile + alt_zy_match_overlap requires at least "
+                "one tile index in alt_zy_reference_tiles -- those tiles "
+                "act as fixed anchors (keeping their own independently-"
+                "calculated values unmodified) that the real tile-to-tile "
+                "brightness pattern propagates outward from via overlap "
+                "matching, instead of every tile being forced toward one "
+                "shared, flattened target."
+            )
 
         # Alternate zy correction: calibrate ONCE per channel from a
         # fixed set of user-chosen reference tiles, then apply the
@@ -1182,16 +1200,22 @@ def pipeline(
                         # reference tiles, just applied to every tile
                         # here instead of just 3 of them.
                         #
-                        # normalize_to=1000 (rather than this tile's
-                        # own median, the function's default) so every
-                        # tile's typical corrected value targets the
-                        # same fixed constant -- consistent output
-                        # scale across tiles, matching compute_corr_zy's
-                        # own fixed-1000 convention, at the cost of the
-                        # per-tile adaptiveness the default would give.
+                        # normalize_to: when alt_zy_match_overlap is
+                        # OFF, use a fixed 1000 (rather than this
+                        # tile's own median) so every tile's typical
+                        # corrected value targets the same constant --
+                        # consistent output scale across tiles, at the
+                        # cost of the per-tile adaptiveness the default
+                        # would give. When alt_zy_match_overlap is ON,
+                        # this must be None (each tile's own median)
+                        # instead -- forcing every tile to the same
+                        # fixed target would flatten out the real
+                        # tile-to-tile brightness pattern the matching
+                        # step below is specifically meant to preserve
+                        # and propagate from the reference tiles.
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
                             raw_vol, mask, thr, background_length=alt_zy_background_length,
-                            normalize_to=1000,
+                            normalize_to=None if alt_zy_match_overlap else 1000,
                             threshold_multiplier=alt_zy_threshold_multiplier,
                         )
                         # Unlike the fixed-calibration mode (which
@@ -1205,14 +1229,32 @@ def pipeline(
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
 
-                        if alt_zy_match_overlap and prev_tile_reciprocal_map is not None and overlap_with_prev > 0:
+                        is_anchor_tile = (
+                            alt_zy_reference_tiles is not None
+                            and index in alt_zy_reference_tiles
+                        )
+
+                        if (
+                            alt_zy_match_overlap
+                            and not is_anchor_tile
+                            and prev_tile_reciprocal_map is not None
+                            and overlap_with_prev > 0
+                        ):
                             # Nudge THIS tile's whole reciprocal_map by
                             # a single average ratio so its overlap
                             # with the PREVIOUS tile roughly matches --
                             # the previous tile is treated as fixed
-                            # (never adjusted retroactively), matching
-                            # how tile 0 always uses its own calculated
-                            # values unmodified.
+                            # (never adjusted retroactively). Reference
+                            # tiles (alt_zy_reference_tiles) are ANCHORS:
+                            # they always keep their own independently-
+                            # calculated values unmodified, exactly like
+                            # tile 0 always does, so the real tile-to-
+                            # tile brightness pattern anchored at those
+                            # 3 known-good tiles propagates outward to
+                            # every tile in between via this same
+                            # sequential matching, rather than every
+                            # tile being forced toward one shared,
+                            # flattened target.
                             #
                             # tile_reciprocal_map is in the SAME
                             # (pre-affine, split-crop) Y frame that
@@ -1242,6 +1284,12 @@ def pipeline(
                                         f"[alt zy per-tile] tile {index} ({name}): "
                                         f"matched overlap with previous tile, ratio={ratio:.4f}"
                                     )
+                        elif alt_zy_match_overlap and is_anchor_tile:
+                            logger.info(
+                                f"[alt zy per-tile] tile {index} ({name}): "
+                                f"reference/anchor tile -- keeping its own "
+                                f"calculated values unmodified"
+                            )
 
                         prev_tile_reciprocal_map = tile_reciprocal_map
 
