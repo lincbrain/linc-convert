@@ -1056,7 +1056,8 @@ def pipeline(
         # around so the next tile can match its overlap against it.
         # Reset to None at the start of each channel -- there's no
         # previous tile to match against for the first one.
-        prev_tile_reciprocal_map: Optional[np.ndarray] = None
+        prev_overlap_calc: Optional[np.ndarray] = None
+        prev_ratio: int = 1
 
         # Clamp the tile range to [chunk_min, chunk_max] if provided.
         # These compose with the checkpoint: we process tiles that are
@@ -1192,121 +1193,38 @@ def pipeline(
                     raw_vol = raw_vol[::-1]
 
                 if use_alt_zy_correction:
-                    if alt_zy_per_tile:
-                        # Recalibrate fresh for THIS tile alone (no
-                        # averaging across reference tiles) -- reuses
-                        # the same per-tile calibration function the
-                        # fixed-calibration mode calls on its 3
-                        # reference tiles, just applied to every tile
-                        # here instead of just 3 of them.
-                        #
-                        # normalize_to: when alt_zy_match_overlap is
-                        # OFF, use a fixed 1000 (rather than this
-                        # tile's own median) so every tile's typical
-                        # corrected value targets the same constant --
-                        # consistent output scale across tiles, at the
-                        # cost of the per-tile adaptiveness the default
-                        # would give. When alt_zy_match_overlap is ON,
-                        # this must be None (each tile's own median)
-                        # instead -- forcing every tile to the same
-                        # fixed target would flatten out the real
-                        # tile-to-tile brightness pattern the matching
-                        # step below is specifically meant to preserve
-                        # and propagate from the reference tiles.
-                        tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
-                            raw_vol, mask, thr, background_length=alt_zy_background_length,
-                            normalize_to=None if alt_zy_match_overlap else 1000,
-                            threshold_multiplier=alt_zy_threshold_multiplier,
-                        )
-                        # Unlike the fixed-calibration mode (which
-                        # absorbs NaN positions via nanmean across 3
-                        # reference tiles), there's no averaging step
-                        # here -- positions with insufficient tissue
-                        # data for THIS tile alone would otherwise
-                        # propagate NaN straight into corr_zy and the
-                        # final uint16 cast. Same fallback: suppress
-                        # via a tiny reciprocal instead.
-                        tile_reciprocal_map = np.nan_to_num(
-                            tile_reciprocal_map, nan=1e-9)
 
-                        is_anchor_tile = (
-                            alt_zy_reference_tiles is not None
-                            and index in alt_zy_reference_tiles
-                        )
-
-                        if (
-                            alt_zy_match_overlap
-                            and not is_anchor_tile
-                            and prev_tile_reciprocal_map is not None
-                            and overlap_with_prev > 0
-                        ):
-                            # Nudge THIS tile's whole reciprocal_map by
-                            # a single average ratio so its overlap
-                            # with the PREVIOUS tile roughly matches --
-                            # the previous tile is treated as fixed
-                            # (never adjusted retroactively). Reference
-                            # tiles (alt_zy_reference_tiles) are ANCHORS:
-                            # they always keep their own independently-
-                            # calculated values unmodified, exactly like
-                            # tile 0 always does, so the real tile-to-
-                            # tile brightness pattern anchored at those
-                            # 3 known-good tiles propagates outward to
-                            # every tile in between via this same
-                            # sequential matching, rather than every
-                            # tile being forced toward one shared,
-                            # flattened target.
-                            #
-                            # tile_reciprocal_map is in the SAME
-                            # (pre-affine, split-crop) Y frame that
-                            # y_start/corrected_sy are defined in -- the
-                            # skew affine never touches Y, and the
-                            # registration affine's Y component is
-                            # typically a modest scale+translation, so
-                            # slicing [y_start : y_start+overlap] here
-                            # lines up with the actual output overlap
-                            # closely, not just approximately.
-                            prev_overlap = prev_tile_reciprocal_map[
-                                :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy]
-                            this_overlap = tile_reciprocal_map[
-                                :, y_start: y_start + overlap_with_prev]
-                            # Exclude "no valid tissue data" fallback
-                            # positions (~1e-9) from both sides before
-                            # averaging, so they don't skew the ratio.
-                            valid = (prev_overlap >
-                                     1e-6) & (this_overlap > 1e-6)
-                            if np.any(valid):
-                                prev_mean = prev_overlap[valid].mean()
-                                this_mean = this_overlap[valid].mean()
-                                if this_mean > 1e-6:
-                                    ratio = float(prev_mean / this_mean)
-                                    tile_reciprocal_map = tile_reciprocal_map * ratio
-                                    logger.info(
-                                        f"[alt zy per-tile] tile {index} ({name}): "
-                                        f"matched overlap with previous tile, ratio={ratio:.4f}"
-                                    )
-                        elif alt_zy_match_overlap and is_anchor_tile:
-                            logger.info(
-                                f"[alt zy per-tile] tile {index} ({name}): "
-                                f"reference/anchor tile -- keeping its own "
-                                f"calculated values unmodified"
-                            )
-
-                        prev_tile_reciprocal_map = tile_reciprocal_map
-
-                        calib_dir = _alt_zy_calibration_dir(
-                            general_config, ch, alt_zy_calibration_dir)
-                        os.makedirs(calib_dir, exist_ok=True)
-                        noise_tiff_path = os.path.join(
-                            calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
-                        scaler_tiff_path = os.path.join(
-                            calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
-                        tifffile.imwrite(
-                            noise_tiff_path, tile_noise_map.astype(np.float32))
-                        tifffile.imwrite(
-                            scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
+                    tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
+                        raw_vol, mask, thr, background_length=alt_zy_background_length,
+                        normalize_to=None if alt_zy_match_overlap else 1000,
+                        threshold_multiplier=alt_zy_threshold_multiplier,
+                    )
+                    tile_reciprocal_map = np.nan_to_num(
+                        tile_reciprocal_map, nan=1e-9)
+                    if prev_overlap_calc is not None and overlap_with_prev > 0:
+                        overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
+                        prev_overlap = np.mean(prev_overlap_calc[
+                            :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
+                        this_overlap = np.mean(overlap_calc[
+                            :, y_start: y_start + overlap_with_prev])
+                        ratio = prev_ratio * this_overlap / prev_overlap
+                        prev_ratio = ratio
+                        prev_overlap_calc = overlap_calc
                     else:
-                        tile_noise_map = alt_zy_noise
-                        tile_reciprocal_map = alt_zy_reciprocal_map
+                        prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
+                    tile_reciprocal_map = alt_zy_reciprocal_map*ratio
+
+                    calib_dir = _alt_zy_calibration_dir(
+                        general_config, ch, alt_zy_calibration_dir)
+                    os.makedirs(calib_dir, exist_ok=True)
+                    noise_tiff_path = os.path.join(
+                        calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
+                    scaler_tiff_path = os.path.join(
+                        calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
+                    tifffile.imwrite(
+                        noise_tiff_path, tile_noise_map.astype(np.float32))
+                    tifffile.imwrite(
+                        scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
 
                     # (vol - noise_map).clip(0) * reciprocal_map is the
                     # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
