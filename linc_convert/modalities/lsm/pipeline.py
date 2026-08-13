@@ -952,7 +952,7 @@ def pipeline(
                     ref_reciprocal_map, nan=1e-9)
                 noises.append(ref_noise_map)
                 reciprocal_maps.append(np.percentile(
-                    ref_reciprocal_map, q=0.02, axis=0) if alt_zy_match_overlap else ref_reciprocal_map)
+                    ref_reciprocal_map, q=2, axis=0) if alt_zy_match_overlap else ref_reciprocal_map)
                 logger.info(
                     f"[alt zy calibration] tile {ref_index} ({ref_name}): "
                     f"noise_map mean={ref_noise_map.mean():.2f}"
@@ -1209,7 +1209,7 @@ def pipeline(
                             if prev_overlap_calc is not None and overlap_with_prev > 0:
                                 overlap_calc = alt_zy_reciprocal_map / \
                                     np.percentile(
-                                        tile_reciprocal_map, q=0.02, axis=0)
+                                        tile_reciprocal_map, q=2, axis=0)
                                 prev_overlap = np.median(prev_overlap_calc[
                                     y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
                                 this_overlap = np.median(overlap_calc[
@@ -1224,7 +1224,7 @@ def pipeline(
                             tile_reciprocal_map = alt_zy_reciprocal_map*ratio
                             tile_reciprocal_map = np.broadcast_to(
                                 tile_reciprocal_map[None, :],
-                                (corrected_sz, tile_reciprocal_map.shape[0])
+                                (corrected_sz, tile_reciprocal_map.shape[1])
                             )
 
                             calib_dir = _alt_zy_calibration_dir(
