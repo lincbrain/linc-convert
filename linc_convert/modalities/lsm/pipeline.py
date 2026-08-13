@@ -1221,7 +1221,11 @@ def pipeline(
                             else:
                                 prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
                                 ratio = prev_ratio
-                            tile_reciprocal_map = tile_reciprocal_map*ratio
+                            tile_reciprocal_map = alt_zy_reciprocal_map*ratio
+                            tile_reciprocal_map = np.broadcast_to(
+                                tile_reciprocal_map[None, :],
+                                (corrected_sz, tile_reciprocal_map.shape[0])
+                            )
 
                             calib_dir = _alt_zy_calibration_dir(
                                 general_config, ch, alt_zy_calibration_dir)
