@@ -948,6 +948,8 @@ def pipeline(
                     background_length=alt_zy_background_length,
                     threshold_multiplier=alt_zy_threshold_multiplier,
                 )
+                ref_reciprocal_map = np.nan_to_num(
+                    ref_reciprocal_map, nan=1e-9)
                 noises.append(ref_noise_map)
                 reciprocal_maps.append(ref_reciprocal_map)
                 logger.info(
@@ -959,10 +961,10 @@ def pipeline(
             # fixed pattern noise varies per pixel/row, it isn't drawn
             # from one shared distribution -- so average elementwise
             # across the 3 reference tiles, same as the reciprocal map.
-            alt_zy_noise = np.mean(np.stack(noises, axis=0), axis=0)
+            alt_zy_noise = np.median(np.stack(noises, axis=0), axis=0)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
-                alt_zy_reciprocal_map = np.nanmean(
+                alt_zy_reciprocal_map = np.nanmedian(
                     np.stack(reciprocal_maps, axis=0), axis=0)
             # Positions with no valid tissue data in ANY of the 3
             # reference tiles stay NaN after nanmean -- replace with a
@@ -1203,9 +1205,9 @@ def pipeline(
                         tile_reciprocal_map, nan=1e-9)
                     if prev_overlap_calc is not None and overlap_with_prev > 0:
                         overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
-                        prev_overlap = np.mean(prev_overlap_calc[
+                        prev_overlap = np.median(prev_overlap_calc[
                             :, y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
-                        this_overlap = np.mean(overlap_calc[
+                        this_overlap = np.median(overlap_calc[
                             :, y_start: y_start + overlap_with_prev])
                         ratio = prev_ratio * this_overlap / prev_overlap
                         prev_ratio = ratio
