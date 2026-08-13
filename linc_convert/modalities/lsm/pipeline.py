@@ -1213,6 +1213,7 @@ def pipeline(
                         logger.info(f"ratio: {ratio}")
                     else:
                         prev_overlap_calc = alt_zy_reciprocal_map/tile_reciprocal_map
+                        ratio = prev_ratio
                     tile_reciprocal_map = alt_zy_reciprocal_map*ratio
 
                     calib_dir = _alt_zy_calibration_dir(
