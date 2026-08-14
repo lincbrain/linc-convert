@@ -511,13 +511,20 @@ def crop_mip_channels(
 
 def apply_affine_split(
     vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_end: int,
-    corr_zy, mask,
+    corr_zy, mask, apply_mask_to_output: bool = True,
 ) -> da.Array:
     """Resample `vol_zyx` through `affine` and return only the requested region.
 
     Internally reads a padded bounding box (large enough to cover the
     requested output region after the affine is applied) rather than the
     whole volume, then crops down to exactly what was asked for.
+
+    `mask` is still used for the zy correction itself (via `corr_zy`,
+    already computed elsewhere from the masked tissue pixels). Whether
+    the mask ALSO gets applied to the pixel values written out here is
+    controlled separately by `apply_mask_to_output` -- when False, the
+    non-tissue background is left in the output image at its corrected
+    intensity, rather than zeroed out.
     """
     z_start = 0
     z_end = vol_zyx.shape[0]
@@ -588,7 +595,8 @@ def apply_affine_split(
         raise ValueError(
             f"mask shape {mask.shape} != volume shape {(Z, Y, X)}")
 
-    masked = da.where(mask_da, padded_slice, 0)
+    masked = da.where(mask_da, padded_slice,
+                      0) if apply_mask_to_output else padded_slice
     corr_zy = corr_zy[pad_z_start:pad_z_end, pad_y_start:pad_y_end]
 
     padded_slice = apply_corr_zy_lazy(masked, corr_zy)

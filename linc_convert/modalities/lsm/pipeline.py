@@ -294,6 +294,7 @@ def _corrected_y_chunk(
     corr_zy: np.ndarray,
     y0: int,
     y1: int,
+    apply_mask_to_output: bool = True,
 ) -> da.Array:
     """Build the lazy corrected dask array for one Y-chunk [y0, y1) of an
     already-opened tile/channel volume.
@@ -305,10 +306,17 @@ def _corrected_y_chunk(
     correction itself, only for slicing the right rows out of `vol` and
     `mask` in the first place.
 
+    `mask` is always used for the zy correction itself; whether it ALSO
+    gets applied to the written pixel values is controlled separately
+    by `apply_mask_to_output` (see `apply_affine_split`).
+
     Nothing is read from `vol` until the caller calls `.compute()`.
     """
 
-    return apply_affine_split(vol, affine, y0, y1, corr_zy, mask)
+    return apply_affine_split(
+        vol, affine, y0, y1, corr_zy, mask,
+        apply_mask_to_output=apply_mask_to_output,
+    )
 
 
 def _write_checkpoint(filename: str, y: int, ratio=1.0) -> None:
@@ -560,6 +568,7 @@ def pipeline(
     alt_zy_match_overlap: bool = False,
     alt_zy_calibration_dir: Optional[str] = None,
     alt_zy_threshold_multiplier: float = 1.05,
+    disable_output_masking: bool = False,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -714,6 +723,15 @@ def pipeline(
         which pixels count as tissue at all (the mask itself); this one
         additionally filters which of those tissue pixels are bright
         enough to trust for the scaler calculation specifically.
+    disable_output_masking : bool, default=False
+        The tissue mask is always used to compute the zy correction
+        itself (deciding which pixels count as tissue for the
+        noise/scaler calculations, regardless of this setting). When
+        True, the mask is NOT additionally applied to the pixel values
+        actually written to the output array -- background outside the
+        mask is left in place at its corrected intensity, instead of
+        being zeroed out. When False (default), unchanged from before:
+        non-tissue background is zeroed in the written image.
 
     Raises
     ------
@@ -1308,7 +1326,8 @@ def pipeline(
                     y1 = min(corrected_sy+y_start, y0 + y_chunk_size)
 
                     lazy_chunk = _corrected_y_chunk(
-                        raw_vol, mask, affine, corr_zy, y0, y1)
+                        raw_vol, mask, affine, corr_zy, y0, y1,
+                        apply_mask_to_output=not disable_output_masking)
                     lazy_chunk = lazy_chunk[z_start:z_end]
                     if lazy_chunk.shape[2] < fullshape[2]:
                         lazy_chunk = da.pad(lazy_chunk, pad_width=(
