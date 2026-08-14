@@ -1289,16 +1289,14 @@ def pipeline(
                             tifffile.imwrite(
                                 scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
 
-                        # (vol - noise_map).clip(0) * reciprocal_map is the
-                        # same as (vol - noise_map).clip(0) / (1/reciprocal_map),
-                        # so this reuses the existing apply_corr_zy_lazy
-                        # (division-based) machinery unchanged: pre-subtract
-                        # the (per-Z,Y) noise map here, and feed in the
-                        # RECIPROCAL of the reciprocal map as if it were
-                        # corr_zy.
-                        raw_vol = da.clip(
-                            raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
-                        corr_zy = 1.0 / tile_reciprocal_map
+                    else:
+                        tile_noise_map = alt_zy_noise
+                        tile_reciprocal_map = alt_zy_reciprocal_map
+
+                    raw_vol = da.clip(
+                        raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
+                    corr_zy = 1.0 / tile_reciprocal_map
+
                 else:
                     corr_zy = compute_corr_zy(
                         raw_vol,
