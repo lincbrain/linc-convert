@@ -569,6 +569,7 @@ def pipeline(
     alt_zy_calibration_dir: Optional[str] = None,
     alt_zy_threshold_multiplier: float = 1.05,
     disable_output_masking: bool = False,
+    alt_zy_skip_noise_subtraction: bool = False,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -732,6 +733,22 @@ def pipeline(
         mask is left in place at its corrected intensity, instead of
         being zeroed out. When False (default), unchanged from before:
         non-tissue background is zeroed in the written image.
+    alt_zy_skip_noise_subtraction : bool, default=False
+        Only meaningful when `use_alt_zy_correction=True`. Skips
+        subtracting the per-row noise map from the volume right before
+        applying the scaler correction (only clips negative values,
+        no subtraction). The scaler itself is NOT affected -- it's
+        still calibrated from noise-subtracted data internally, since
+        that's a per-row median over many tissue pixels and much less
+        sensitive to a slightly-overestimated noise value than a raw
+        per-pixel subtraction is. This flag targets a specific failure
+        mode: if the per-row noise estimate runs even a little high for
+        some rows, subtracting it can clip real signal to 0 in DIM
+        tissue specifically (where there's little margin above the
+        noise floor), producing dark stripes that get worse the dimmer
+        the tissue is. Skipping the subtraction removes that risk
+        entirely, at the cost of leaving the raw background noise floor
+        in the corrected output instead of removing it.
 
     Raises
     ------
@@ -1311,8 +1328,24 @@ def pipeline(
                         tile_noise_map = alt_zy_noise
                         tile_reciprocal_map = alt_zy_reciprocal_map
 
-                    raw_vol = da.clip(
-                        raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
+                    # Noise subtraction happens here, at the APPLICATION
+                    # step -- separate from compute_alt_zy_calibration_for_tile's
+                    # own internal use of noise-subtracted data to compute
+                    # the scaler itself (that one is a per-row MEDIAN over
+                    # many tissue pixels, much less sensitive to a
+                    # slightly-overestimated noise value than this direct
+                    # per-pixel subtraction is). When alt_zy_skip_noise_subtraction
+                    # is set, only THIS step is skipped -- the scaler
+                    # calibration is unaffected -- since this is
+                    # specifically where an overestimated per-row noise
+                    # value can clip real signal to 0 in dim tissue,
+                    # producing dark stripes that get worse the dimmer
+                    # the tissue is.
+                    if alt_zy_skip_noise_subtraction:
+                        raw_vol = da.clip(raw_vol.astype(np.float32), 0, None)
+                    else:
+                        raw_vol = da.clip(
+                            raw_vol.astype(np.float32) - tile_noise_map[:, :, None], 0, None)
                     corr_zy = 1.0 / tile_reciprocal_map
 
                 else:
