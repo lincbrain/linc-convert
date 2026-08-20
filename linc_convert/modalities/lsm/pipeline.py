@@ -554,7 +554,7 @@ def pipeline(
     x_min: Optional[int] = None,
     x_max: Optional[int] = None,
     background_length: int = 5000,
-    mask_threshold_multiplier: float = 1.1,
+    mask_threshold_multiplier: float = 1.4,
     mip_pre_split: bool = False,
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
