@@ -102,7 +102,10 @@ def convert(
     print("Write metadata")
     axes = ["c", "y", "x"] if has_channel else ["y", "x"]
     omz.write_ome_metadata(
-        axes=axes, space_scale=get_pixelsize(j2k), multiscales_type="jpeg2000"
+        axes=axes,
+        space_scale=get_pixelsize(j2k),
+        multiscales_type="jpeg2000",
+        ome_version=zarr_config.ome_version,
     )
 
     if nii_config.nii:
