@@ -95,7 +95,7 @@ class ZarrConfig:
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
-    ome_version: Literal["0.4", "0.5"] = "0.4"
+    ome_version: Literal["0.4", "0.5"] = "0.5"
     overwrite: bool = False
     driver: DriverLike = "zarr-python"
 
@@ -105,10 +105,13 @@ class ZarrConfig:
 
         - Ensure that sharding options (shard, shard_channels, shard_time) are only
           used when zarr_version == 3; otherwise raise NotImplementedError.
+        - Ensure that ome_version == "0.5" when zarr_version == 3.
         """
         if self.zarr_version == 2:
             if self.shard or self.shard_channels or self.shard_time:
                 raise ValueError("Shard is not supported for Zarr 2.")
+        if self.zarr_version == 3 and self.ome_version != "0.5":
+            raise ValueError("OME version must be 0.5 for Zarr version 3.")
 
 
 @Parameter(name="*")

@@ -100,7 +100,11 @@ def convert(
     voxel_size = list(map(float, reversed(voxel_size)))
     # Generate Zarr pyramid and metadata
     omz.generate_pyramid(levels=zarr_config.levels)
-    omz.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
+    omz.write_ome_metadata(
+        axes=["z", "y", "x"],
+        space_scale=voxel_size,
+        ome_version=zarr_config.ome_version,
+    )
 
     if nii_config.nii:
         header = build_nifti_header(

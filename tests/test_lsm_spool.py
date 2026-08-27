@@ -12,7 +12,14 @@ from linc_convert.modalities.lsm import spool
 def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
     expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool.nii.zarr"
-    spool.convert(inp=spool_dat, out=str(output), overlap=0)
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
+    spool.convert(
+        inp=spool_dat,
+        out=str(output),
+        overlap=0,
+        zarr_version=zarr_version,
+        ome_version=ome_version,
+    )
 
     # assert_zarr_equal is assumed available from your test utils
     assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
@@ -22,7 +29,14 @@ def test_lsm_spool_convert(tmp_path, spool_dat, zarr_version):
 def test_lsm_spool_regen_golden(tmp_path, spool_dat, zarr_version):
     expected_zarr = f"data/lsm_spool_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "spool_output.nii.zarr"
-    spool.convert(inp=spool_dat, out=str(output), overlap=0)
+    ome_version = "0.4" if zarr_version == 2 else "0.5"
+    spool.convert(
+        inp=spool_dat,
+        out=str(output),
+        overlap=0,
+        zarr_version=zarr_version,
+        ome_version=ome_version,
+    )
 
     # Write out new golden archive
     base = Path(expected_zarr).with_suffix("")
