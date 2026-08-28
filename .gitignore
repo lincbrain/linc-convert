@@ -160,3 +160,6 @@ cython_debug/
 .idea/
 
 tests/data/000051/
+
+# macOS
+.DS_Store
