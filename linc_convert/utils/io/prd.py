@@ -41,7 +41,7 @@ class PrdSetInterpreter:
         metadata = self.read_kinetix_metadata(prd_set_path)
         self.data_type = metadata["dataType"]
         if self.data_type == 16:
-            self.data_type = "uint16"
+            self.data_type = "<u2"
         self.width = metadata["width"]
         self.height = metadata["height"]
         self.header_bytes = metadata["headerBytes"]
