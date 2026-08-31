@@ -570,24 +570,21 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "glymur"
-version = "0.13.6"
-description = ""
+version = "0.14.8"
+description = "Read and write JPEG 2000 files"
 optional = true
-python-versions = ">=3.8"
+python-versions = ">=3.11"
 groups = ["main"]
 markers = "extra == \"df\" or extra == \"all\""
 files = [
-    {file = "Glymur-0.13.6-py3-none-any.whl", hash = "sha256:34347b1e0443b58c73ed3c7bc3c66cff1e5974a26e81c73d98792c438729165c"},
-    {file = "Glymur-0.13.6.tar.gz", hash = "sha256:18f1f3536fd76cd7fa92de4629950bee55522bdf8a4e94706ac34226d615ac5c"},
+    {file = "glymur-0.14.8-py3-none-any.whl", hash = "sha256:33a53445a66cc91174cabf087cc02d06395e99a14803d80defc6629fe0a48a57"},
+    {file = "glymur-0.14.8.tar.gz", hash = "sha256:29ec048e319e8aadede1e30aa9c26dd5dda48769a26a48848fa844bb0b670d42"},
 ]
 
 [package.dependencies]
 lxml = "*"
 numpy = "*"
-packaging = "*"
-
-[package.extras]
-test = ["pillow", "pytest"]
+pillow = "*"
 
 [[package]]
 name = "google-crc32c"
@@ -2583,4 +2580,4 @@ wk = ["wkw"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "3bd5477aa02c7bf0e7956256846213e07a0a74e2499b1e144e43d601988b6ab7"
+content-hash = "acfee95c5e58b184728f95adcebbbeb5ba9835e28e73753b791819ddd9fd309e"
