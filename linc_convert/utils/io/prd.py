@@ -107,6 +107,8 @@ class PrdSetInterpreter:
         if usable < self.bytes_per_frame:
             raise ValueError(f"File too small to contain one frame: {path}")
 
+        # Floor division discards the padding at the end of the file, which assumes 
+        # the padding is smaller than one stride (frame + gap).
         n_frames = (usable + self.gap_bytes) // self.stride_bytes
 
         if n_frames > self.expectedFramesPerFullFile:
