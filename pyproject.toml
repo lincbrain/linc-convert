@@ -64,6 +64,8 @@ pytest-cov = "^5.0.0"
 ruff = "^0.3.4"
 scikit-image = "*"
 pooch = "*"
+dandi = "*"
+requests = "*"
 
 [tool.poetry.group.docs]
 optional = true
