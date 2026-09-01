@@ -77,6 +77,8 @@ class PrdSetInterpreter:
         }
 
         meta: dict = {}
+        # Assumes the kinetixMetadata.txt file lists one value per line, 
+        # in the same order as `metadata_keys`. 
         with open(path) as fh:
             for key, line in zip(metadata_keys, fh):
                 meta[key] = metadata_keys[key](line.strip())
