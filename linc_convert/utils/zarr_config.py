@@ -1,5 +1,6 @@
 """Configuration related to output Zarr Archive."""
 import inspect
+import types
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from functools import wraps
 from os import PathLike
@@ -18,7 +19,7 @@ from typing import (
 
 from cyclopts import Parameter
 
-DriverLike: TypeAlias = Literal["zarr-python", "tensorstore", "zarrita"]
+DriverLike: TypeAlias = Literal["zarr-python", "tensorstore"]
 
 @Parameter(name="*")
 @dataclass
@@ -77,7 +78,7 @@ class ZarrConfig:
     overwrite
         when no name is supplied and using default output name, if overwrite is set,
         it won't ask if overwrite
-    driver : {"zarr-python", "tensorstore", "zarrita"}
+    driver : {"zarr-python", "tensorstore"}
         library used for Zarr IO Operation
     """
 
@@ -95,7 +96,7 @@ class ZarrConfig:
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
-    ome_version: Literal["0.4", "0.5"] = "0.4"
+    ome_version: Literal["0.4", "0.5"] = "0.5"
     overwrite: bool = False
     driver: DriverLike = "zarr-python"
 
@@ -105,10 +106,13 @@ class ZarrConfig:
 
         - Ensure that sharding options (shard, shard_channels, shard_time) are only
           used when zarr_version == 3; otherwise raise NotImplementedError.
+        - Ensure that ome_version == "0.5" when zarr_version == 3.
         """
         if self.zarr_version == 2:
             if self.shard or self.shard_channels or self.shard_time:
                 raise ValueError("Shard is not supported for Zarr 2.")
+        if self.zarr_version == 3 and self.ome_version != "0.5":
+            raise ValueError("OME version must be 0.5 for Zarr version 3.")
 
 
 @Parameter(name="*")
@@ -129,7 +133,7 @@ class GeneralConfig:
         If True, set log_level to "debug".
     """
 
-    out: Annotated[str, Parameter(name=["--out", "-o"])] = None
+    out: Annotated[str | None, Parameter(name=["--out", "-o"])] = None
     max_load: int = 1024
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     verbose: Annotated[bool, Parameter(name=["--verbose", "-v"])] = False
@@ -237,7 +241,7 @@ def autoconfig(func: Callable) -> Callable:
         if get_origin(tp) is Annotated:
             tp = get_args(tp)[0]
         # Handle Optional[T] / Union[T, None]
-        if get_origin(tp) is Union:
+        if get_origin(tp) in (Union, types.UnionType):
             cand = [t for t in get_args(tp) if t is not type(None)]  # noqa: E721
             if len(cand) == 1:
                 tp = cand[0]
