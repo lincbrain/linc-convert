@@ -38,7 +38,7 @@ dask = "*"
 universal_pathlib = "*"
 
 # optionals
-glymur = { version = "*", optional = true }
+glymur = { version = "^0.14.8", optional = true }
 tifffile = { version = "*", optional = true }
 h5py = { version = "*", optional = true }
 scipy = { version = "*", optional = true }

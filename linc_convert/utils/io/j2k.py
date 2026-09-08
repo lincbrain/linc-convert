@@ -125,9 +125,9 @@ class WrappedJ2K:
         wstop *= 2 ** self.level
         hstop = min(hstop or self.j2k.shape[0], self.j2k.shape[0])
         wstop = min(wstop or self.j2k.shape[1], self.j2k.shape[1])
-        area = (hstart, wstart, hstop, wstop)
 
-        data = self.j2k.read(rlevel=self.level, area=area)
+        step = 2 ** self.level
+        data = self.j2k[hstart:hstop:step, wstart:wstop:step]
         if cidx:
             data = data[:, :, cidx[0]]
             if self.channel_first:

@@ -5214,4 +5214,4 @@ wk = ["wkw"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "9e584b76c908ba61005bc4d4009169295bc60285eac580748d6df7dee6a840bb"
+content-hash = "62796b4880d30d3d7463ae417221eb0df13b0011894c6d7cfbd064bc1a5679fc"

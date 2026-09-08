@@ -27,7 +27,8 @@ def multi_slice_jp2(tmp_path):
     return files
 
 
-def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
+@pytest.mark.parametrize("max_load", [1024, 64])
+def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver, max_load):
     expected_zarr = f"data/df_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.zarr"
     ome_version = "0.4" if zarr_version == 2 else "0.5"
@@ -37,6 +38,7 @@ def test_df_multi_slice(tmp_path, multi_slice_jp2, zarr_version, driver):
             zarr_version=zarr_version,
             ome_version=ome_version,
             driver=driver,
+            max_load=max_load,
     )
     assert_zarr_equal(str(output), zarr.storage.ZipStore(expected_zarr, mode="r"))
 
