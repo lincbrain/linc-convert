@@ -163,3 +163,7 @@ tests/data/000051/
 
 # macOS
 .DS_Store
+
+# AI
+.codex
+AGENTS.md
