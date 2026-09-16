@@ -259,13 +259,21 @@ class MosaicInfo:
                 if len(no_chunk_dim) == 0:  # 2D
                     weighted_tile = t * blend_ramp
                 else:
-                    weighted_tile = t * blend_ramp[:, :, None]
+                    new_axes = tuple(range(2, 2 + len(no_chunk_dim)))
+                    weighted_tile = t * da.expand_dim(blend_ramp, new_axes)
                 block_canvas[xs, ys, ...] = weighted_tile
             else:
                 # Circular mean: convert to sin/cos representation
                 rad = da.deg2rad(t) * 2
-                block_canvas[xs, ys, ..., 0] = da.cos(rad)
-                block_canvas[xs, ys, ..., 1] = da.sin(rad)
+                if len(no_chunk_dim) == 0:  # 2D
+                    block_canvas[xs, ys, ..., 0] = da.cos(rad) * blend_ramp
+                    block_canvas[xs, ys, ..., 1] = da.sin(rad) * blend_ramp
+                else:
+                    new_axes = tuple(range(2, 2 + len(no_chunk_dim)))
+                    new_blend = da.expand_dim(blend_ramp, new_axes)
+                    block_canvas[xs, ys, ..., 0] = da.cos(rad) * new_blend
+                    block_canvas[xs, ys, ..., 1] = da.sin(rad) * new_blend
+                
 
             block_weight[xs, ys] = blend_ramp
 
