@@ -264,13 +264,8 @@ class MosaicInfo:
             else:
                 # Circular mean: convert to sin/cos representation
                 rad = da.deg2rad(t) * 2
-                if len(no_chunk_dim) == 0:  # 2D
-                    block_canvas[xs, ys, ..., 0] = da.cos(rad) * blend_ramp
-                    block_canvas[xs, ys, ..., 1] = da.sin(rad) * blend_ramp
-                else:
-                    block_canvas[xs, ys, ..., 0] = da.cos(rad) * blend_ramp[:, :, None]
-                    block_canvas[xs, ys, ..., 1] = da.sin(rad) * blend_ramp[:, :, None]
-                
+                block_canvas[xs, ys, ..., 0] = da.cos(rad)
+                block_canvas[xs, ys, ..., 1] = da.sin(rad)
 
             block_weight[xs, ys] = blend_ramp
 
