@@ -1,6 +1,8 @@
 """Small local-file regressions for MIP loading and diagnostic JPEGs."""
 
 import importlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import nibabel as nib
 import numpy as np
@@ -9,6 +11,49 @@ import yaml
 from PIL import Image
 
 mosaic_module = importlib.import_module("linc_convert.modalities.psoct.mosaic")
+
+
+def test_mosaic2d_jpeg_tiles(tmp_path):
+    """Stitch nine 3x3 JPEGs with one-pixel overlaps; remove all files afterward."""
+    with TemporaryDirectory(dir=tmp_path) as temporary_directory:
+        directory = Path(temporary_directory)
+        tiles = []
+        for row in range(3):
+            for column in range(3):
+                number = row * 3 + column + 1
+                filename = f"tile_{number:02d}.jpg"
+                pixels = np.full((3, 3), number * 20, dtype=np.uint8)
+                Image.fromarray(pixels).save(directory / filename, quality=100)
+                tiles.append(
+                    {
+                        "filepath": filename,
+                        "tile_number": number,
+                        "x": column * 2,
+                        "y": row * 2,
+                    }
+                )
+        config = directory / "tiles.yaml"
+        config.write_text(
+            yaml.safe_dump({"metadata": {"base_dir": str(directory)}, "tiles": tiles})
+        )
+        output = directory / "mosaic.jpg"
+        mosaic_module.mosaic2d(
+            str(config), jpeg_output=str(output), tile_overlap=1 / 3,
+            circular_mean=False,
+        )
+
+        # Equal edge weights average neighbors at every overlapping row/column.
+        # Asymmetric tile intensities also detect transposed tile placement.
+        positions = np.array([0, 0, 0.5, 1, 1.5, 2, 2])
+        expected = 20 + 60 * positions[:, None] + 20 * positions[None, :]
+        expected = ((expected - 20) / 160 * 255).astype(np.uint8)
+        with Image.open(output) as image:
+            assert image.format == "JPEG"
+            assert image.mode == "L"
+            assert image.size == (7, 7)
+            # Allow small differences from lossy JPEG encoding.
+            np.testing.assert_allclose(np.array(image), expected, atol=8, rtol=0)
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("with_grid", [False, True])
