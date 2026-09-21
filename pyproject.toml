@@ -27,11 +27,11 @@ classifiers = [
 packages = [{include = "linc_convert"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+#python = "^3.11"
 cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
-zarr = "^3.0.0"
+#zarr = "^3.0.0"
 nifti-zarr = "^1.0.0rc7"
 tqdm = "*"
 dask = "*"

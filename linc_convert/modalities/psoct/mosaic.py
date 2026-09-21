@@ -90,6 +90,13 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         data = da.from_array(np.squeeze(img_data), chunks=img_data.shape)
         return data
 
+    # Check for jpg or jpeg images
+    if file_path.endswith((".jpg", ".jpeg")):
+        image = Image.open(file_path)
+        img_data = np.array(image)
+        data = da.from_array(img_data, chunks=img_data.shape)
+        return data
+
     # Try dask-image as fallback
     try:
         import dask_image.imread  # noqa: F401
