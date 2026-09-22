@@ -91,7 +91,7 @@ def compute_alt_zy_calibration_for_tile(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ONE reference tile's contribution to the alternate zy
-    correction (see `pipeline`'s `use_alt_zy_correction`): a per-(Z, Y)
+    correction (see `pipeline`'s `alt_zy_reference_tiles`): a per-(Z, Y)
     background-noise map, and a per-(Z, Y) RECIPROCAL multiplier map
     (i.e. meant to be applied via multiplication, not division).
 
@@ -511,13 +511,20 @@ def crop_mip_channels(
 
 def apply_affine_split(
     vol_zyx: da.Array, affine: np.ndarray, y_start: int, y_end: int,
-    corr_zy, mask, apply_mask_to_output: bool = True,
+    corr_zy, mask, apply_mask_to_output: bool = True, order: int = 0,
 ) -> da.Array:
     """Resample `vol_zyx` through `affine` and return only the requested region.
 
     Internally reads a padded bounding box (large enough to cover the
     requested output region after the affine is applied) rather than the
     whole volume, then crops down to exactly what was asked for.
+
+    order : int, default=0
+        Interpolation order passed through to `scipy`/`dask_image`'s
+        `affine_transform` for this resampling (the skew/registration
+        affine, NOT the zy stripe correction, which is unaffected).
+        `0` is nearest-neighbor (fast, blocky); higher orders (e.g. `3`
+        for cubic) are smoother but slower.
 
     `mask` is still used for the zy correction itself (via `corr_zy`,
     already computed elsewhere from the masked tissue pixels). Whether
@@ -604,7 +611,7 @@ def apply_affine_split(
     transformed = affine_transform(
         padded_slice,
         matrix=np.linalg.inv(affine_local),
-        order=0,
+        order=order,
         mode="constant",
         cval=0.0,
     )
@@ -634,6 +641,7 @@ def stripe_skew_corr(
     camera_id: int,
     scan_parameters: dict,
     tissue_frac_min: float = 0.02,
+    apply_skew: bool = True,
 ) -> da.Array:
     """
     Full default correction pipeline for one volume: default zy stripe
@@ -641,6 +649,12 @@ def stripe_skew_corr(
     skew correction (`skew_correct_volume_lazy`). Used both for the
     real per-tile correction path and for estimating a sample tile's
     corrected shape up front.
+
+    apply_skew : bool, default=True
+        When False, the skew-correction step is skipped entirely (the
+        returned volume is just the zy-stripe-corrected one, with no
+        shear/X-extension applied) -- used to estimate the sample
+        shape consistently when skew correction is disabled elsewhere.
     """
     Z, Y, X = vol.shape
     mask_da = da.from_array(mask, chunks=vol.chunks[1:])
@@ -664,7 +678,8 @@ def stripe_skew_corr(
     masked = da.where(mask_da, vol, 0)
 
     vol = apply_corr_zy_lazy(masked, corr_zy)
-    vol = skew_correct_volume_lazy(vol, scan_parameters, camera_id)
+    if apply_skew:
+        vol = skew_correct_volume_lazy(vol, scan_parameters, camera_id)
 
     return vol
 

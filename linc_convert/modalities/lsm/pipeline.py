@@ -63,7 +63,6 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     apply_affine_split,
     apply_corr_zy_lazy,
     compute_alt_zy_calibration_for_tile,
-    compute_corr_zy,
     crop_volume_channels,
     embed_zy_affine_for_volume,
     generate_skew_affine,
@@ -295,6 +294,7 @@ def _corrected_y_chunk(
     y0: int,
     y1: int,
     apply_mask_to_output: bool = True,
+    affine_order: int = 0,
 ) -> da.Array:
     """Build the lazy corrected dask array for one Y-chunk [y0, y1) of an
     already-opened tile/channel volume.
@@ -316,22 +316,22 @@ def _corrected_y_chunk(
     return apply_affine_split(
         vol, affine, y0, y1, corr_zy, mask,
         apply_mask_to_output=apply_mask_to_output,
+        order=affine_order,
     )
 
 
-def _write_checkpoint(filename: str, y: int, ratio=1.0) -> None:
+def _write_checkpoint(filename: str, y: int) -> None:
     with open(filename, "w") as f:
-        f.write(f"{y},{ratio}\n")
+        f.write(f"{y}\n")
 
 
-def _read_checkpoint(filename: str, default_y: int, default_ratio: float = 1.0) -> Tuple[int, float]:
+def _read_checkpoint(filename: str, default_y: int) -> int:
     try:
         with open(filename, "r") as f:
             content = f.read().strip()
-            y_str, ratio_str = content.split(",")
-            return int(y_str), float(ratio_str)
+            return int(content.split(",")[0])
     except (FileNotFoundError, ValueError):
-        return default_y, default_ratio
+        return default_y
 
 
 def load_y_coordinates(coords_yaml_path: str) -> List[float]:
@@ -505,28 +505,6 @@ def _scale_affine_translations(
     return scaled
 
 
-def _low_percentile_excluding_fallback(arr: np.ndarray, q: float, axis: int) -> np.ndarray:
-    """
-    Like `np.percentile(arr, q, axis=axis)`, but first excludes the
-    ~1e-9 "no valid tissue data" fallback sentinel (see
-    `compute_alt_zy_calibration_for_tile`'s own `nan_to_num(nan=1e-9)`)
-    from the computation via `np.nanpercentile`.
-
-    Without this, a LOW percentile (the intended use here) is exactly
-    where these fallback sentinels -- deliberately tiny, meant to
-    suppress a position, not describe it -- are most likely to get
-    picked up, especially with a small Z extent where even a few
-    fallback slices dominate the low end of the distribution. If
-    EVERY value along an axis is a fallback, that position's result is
-    also the fallback sentinel (nothing valid to report).
-    """
-    masked = np.where(arr > 1e-6, arr, np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        result = np.nanpercentile(masked, q=q, axis=axis)
-    return np.where(np.isfinite(result), result, 1e-9)
-
-
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -561,15 +539,15 @@ def pipeline(
     reference_cords: Optional[str] = None,
     tissue_frac_min: float = 0.02,
     zarr_level: int = 0,
-    use_alt_zy_correction: bool = False,
     alt_zy_reference_tiles: Optional[List[int]] = None,
     only_channel: Optional[str] = None,
-    alt_zy_per_tile: bool = False,
-    alt_zy_match_overlap: bool = False,
     alt_zy_calibration_dir: Optional[str] = None,
     alt_zy_threshold_multiplier: float = 1.05,
     disable_output_masking: bool = False,
-    alt_zy_noise_subtraction_scale: float = 1.0,
+    alt_zy_noise_subtract_min: bool = False,
+    disable_skew_correction: bool = False,
+    disable_zy_correction: bool = False,
+    affine_order: int = 0,
 ) -> None:
     """
     Correct volumetric tile data and stream it directly into a single
@@ -643,18 +621,18 @@ def pipeline(
         zarr pyramid), `voxel_size` (you must pass the value that's
         actually correct for this level yourself), and `x_min`/`x_max`
         (interpreted in whatever level's pixel units you intend).
-    use_alt_zy_correction : bool, default=False
-        Use an alternate zy stripe correction instead of the default
-        per-tile `compute_corr_zy`. Calibrates ONCE per channel from
-        `alt_zy_reference_tiles` (a fixed 3 tiles), instead of
-        recomputing a correction for every tile:
+    alt_zy_reference_tiles : list of int, optional
+        Alternate zy stripe correction is always used (replacing the
+        old default `compute_corr_zy` correction entirely). If given,
+        exactly 3 tile indices to calibrate a SINGLE, shared
+        correction from:
         1. For each reference tile: estimate the camera's own
            background noise as the median of the last
            `background_length` X columns, subtract it (clipped at 0).
         2. On the noise-subtracted data, compute a per-(Z, Y) tissue
-           scaler (same style as the default correction), normalized
-           by that tile's OWN median scaler (not a fixed constant),
-           then inverted to a reciprocal multiplier.
+           scaler (same style as the old default correction),
+           normalized by that tile's OWN median scaler (not a fixed
+           constant), then inverted to a reciprocal multiplier.
         3. Average the noise scalar and the reciprocal maps across the
            3 reference tiles.
         4. Apply the SAME averaged (noise, reciprocal map) pair to
@@ -663,44 +641,19 @@ def pipeline(
         written out as `{calib_dir}/{ch}_alt_zy_noise.tiff` and
         `{calib_dir}/{ch}_alt_zy_scaler.tiff` for inspection, where
         `calib_dir` is `alt_zy_calibration_dir` (see below).
-    alt_zy_reference_tiles : list of int, optional
-        Exactly 3 tile indices to calibrate the alternate correction
-        from. Required when `use_alt_zy_correction=True`.
+
+        If omitted (`None`), each tile instead recalibrates fresh from
+        its own data alone (no averaging across reference tiles). Each
+        tile's own noise/scaler maps are written out as
+        `{calib_dir}/{ch}_{tile_name}_alt_zy_noise.tiff` and
+        `{calib_dir}/{ch}_{tile_name}_alt_zy_scaler.tiff`.
     only_channel : str, optional
         If given, process only this one channel instead of both of
         this camera's channels. Must be one of the two channel names
         for `camera_id` (see `get_channel_names`).
-    alt_zy_per_tile : bool, default=False
-        Only meaningful when `use_alt_zy_correction=True`. Instead of
-        calibrating once from `alt_zy_reference_tiles` (a fixed 3
-        tiles) and reusing that same correction for every tile,
-        recalibrate fresh for EACH tile from its own data alone (no
-        averaging across reference tiles, and `alt_zy_reference_tiles`
-        is unused in this mode). Each tile's own noise/scaler maps are
-        written out as `{calib_dir}/{ch}_{tile_name}_alt_zy_noise.tiff`
-        and `{calib_dir}/{ch}_{tile_name}_alt_zy_scaler.tiff`.
-    alt_zy_match_overlap : bool, default=False
-        Only meaningful when `alt_zy_per_tile=True`. Since each tile's
-        scaler is calibrated independently there, tile-to-tile
-        brightness can drift visibly at seams. When this is set,
-        `alt_zy_reference_tiles` (at least 1 tile index) is required
-        and those tiles act as fixed ANCHORS: they always keep their
-        own independently-calculated values unmodified (their
-        `normalize_to` target is each tile's own median, NOT a fixed
-        1000 -- forcing every tile to one shared constant would
-        flatten out the real tile-to-tile brightness pattern this is
-        meant to preserve). Every OTHER tile still computes its own
-        calibration, but then gets nudged toward the tile before it:
-        the average ratio between the previous tile's and this tile's
-        scaler values in their shared overlap region is computed, and
-        this tile's whole scaler map is multiplied by that ratio. This
-        way the real pattern anchored at the reference tiles
-        propagates outward, tile to tile, via the overlaps, rather
-        than every tile being independently forced toward the same
-        flattened target.
     alt_zy_calibration_dir : str, optional
         Base directory for the alt zy noise/scaler tiff files (see
-        `use_alt_zy_correction`/`alt_zy_per_tile` above); files go in
+        `alt_zy_reference_tiles` above); files go in
         `{alt_zy_calibration_dir}/{ch}/`. If omitted, defaults to a
         directory SIBLING to the zarr output (not inside it) --
         `{general_config.out with .ome.zarr stripped}_alt_zy_calibration/{ch}/`
@@ -715,8 +668,7 @@ def pipeline(
         stricter (smaller) mask; lower values give a looser (larger)
         one.
     alt_zy_threshold_multiplier : float, default=1.05
-        Only meaningful when `use_alt_zy_correction=True`. Passed
-        through to `compute_alt_zy_calibration_for_tile`: a pixel only
+        Passed through to `compute_alt_zy_calibration_for_tile`: a pixel only
         contributes to a row's scaler if its ORIGINAL (pre-noise-
         subtraction) value is at or above `threshold *
         alt_zy_threshold_multiplier`. This is a separate multiplier
@@ -733,28 +685,45 @@ def pipeline(
         mask is left in place at its corrected intensity, instead of
         being zeroed out. When False (default), unchanged from before:
         non-tissue background is zeroed in the written image.
-    alt_zy_noise_subtraction_scale : float, default=1.0
-        Only meaningful when `use_alt_zy_correction=True`. Scales how
-        much of the calibrated per-row noise map actually gets
-        subtracted from the volume right before applying the scaler
-        correction: `(vol - noise_map * alt_zy_noise_subtraction_scale).clip(0)`.
-        `1.0` (default) is full subtraction, unchanged from before this
-        parameter existed. `0.0` disables subtraction entirely (only
-        clips negative values). Values in between apply a fraction of
-        the noise map, e.g. `0.5` subtracts half of it. The scaler
-        itself is NOT affected by this -- it's still calibrated from
-        fully noise-subtracted data internally, since that's a per-row
-        median over many tissue pixels and much less sensitive to a
-        slightly-overestimated noise value than a raw per-pixel
-        subtraction is. This targets a specific failure mode: if the
-        per-row noise estimate runs even a little high for some rows,
-        subtracting it can clip real signal to 0 in DIM tissue
-        specifically (where there's little margin above the noise
-        floor), producing dark stripes that get worse the dimmer the
-        tissue is. Scaling down the subtraction reduces that risk, at
-        the cost of leaving more of the raw background noise floor in
-        the corrected output.
-
+    alt_zy_noise_subtract_min : bool, default=False
+        When True, each tile's per-(Z, Y) noise map has its own
+        minimum value subtracted off (elementwise: `noise_map -
+        noise_map.min()`) before being used for noise subtraction, so
+        the smallest noise value in the map becomes 0 and every other
+        row only has the EXCESS above that minimum subtracted --
+        making the actual amount of noise subtraction very small.
+        This only affects the subtraction applied to the volume; the
+        written-out `*_alt_zy_noise.tiff` diagnostic file (and the
+        scaler/reciprocal map, which is calibrated from fully
+        noise-subtracted data independent of this flag) are
+        unaffected. Applied per tile in `alt_zy_per_tile` mode, or
+        once to the shared averaged noise map otherwise.
+    disable_skew_correction : bool, default=False
+        When True, the light-sheet oblique-acquisition skew correction
+        (the X-shear-as-a-function-of-Z step) is skipped entirely --
+        the skew affine is replaced with identity. Works regardless of
+        whether cross-camera channel registration
+        (`channel_affines_path`) is also being used: the registration
+        affine, if any, is still composed and applied as usual, just
+        without the skew shear combined into it. The zy stripe
+        correction (default or alt zy) is unaffected either way.
+    disable_zy_correction : bool, default=False
+        When True, the zy stripe correction is skipped entirely: no
+        per-tile or fixed-reference-tile alt zy calibration is
+        computed (`alt_zy_reference_tiles` is ignored), no noise
+        subtraction happens, and no `*_alt_zy_noise.tiff` /
+        `*_alt_zy_scaler.tiff` diagnostic files are written. The
+        volume is passed through with `corr_zy` fixed at 1.0
+        (identity -- no scaling) at every position. Everything else
+        (skew correction, masking, blending) is unaffected.
+    affine_order : int, default=0
+        Interpolation order used when resampling through the
+        skew/registration affine (`generate_skew_affine` composed with
+        the channel registration affine, if any) -- NOT the zy stripe
+        correction, which is unaffected. `0` (default) is
+        nearest-neighbor: fast, but blocky/aliased. Higher orders
+        (e.g. `3` for cubic spline) are smoother/more accurate but
+        noticeably slower to compute.
     Raises
     ------
     FileNotFoundError
@@ -765,6 +734,11 @@ def pipeline(
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
+
+    # No fixed reference tiles given -> recalibrate the alt zy
+    # correction fresh for each tile from its own data alone, instead
+    # of calibrating once from a shared set of reference tiles.
+    alt_zy_per_tile = alt_zy_reference_tiles is None
 
     start_timer = time.time()
 
@@ -910,7 +884,8 @@ def pipeline(
             )
         )
         sample_corrected = stripe_skew_corr(
-            sample_raw_vol, sample_mask, sample_thr, camera_id, scan_parameters
+            sample_raw_vol, sample_mask, sample_thr, camera_id, scan_parameters,
+            apply_skew=not disable_skew_correction,
         )
         corrected_sz, corrected_sy, corrected_sx = sample_corrected.shape
         del sample_corrected
@@ -950,33 +925,17 @@ def pipeline(
         full_z = corrected_sz
         fullshape = (full_z, full_y, full_x)
 
-        if alt_zy_per_tile and alt_zy_match_overlap and not alt_zy_reference_tiles:
-            raise ValueError(
-                "alt_zy_per_tile + alt_zy_match_overlap requires at least "
-                "one tile index in alt_zy_reference_tiles -- those tiles "
-                "act as fixed anchors (keeping their own independently-"
-                "calculated values unmodified) that the real tile-to-tile "
-                "brightness pattern propagates outward from via overlap "
-                "matching, instead of every tile being forced toward one "
-                "shared, flattened target."
-            )
-
         # Alternate zy correction: calibrate ONCE per channel from a
         # fixed set of user-chosen reference tiles, then apply the
-        # SAME (averaged) correction to every tile -- instead of the
-        # default per-tile compute_corr_zy. Skipped entirely when
-        # alt_zy_per_tile=True, since that mode recalibrates fresh for
-        # every tile instead (see the main per-tile loop below) and
-        # doesn't need this fixed, reference-tile-based calibration at
-        # all.
+        # SAME (averaged) correction to every tile -- instead of
+        # recalibrating fresh per tile. Skipped entirely when
+        # alt_zy_per_tile=True (i.e. no alt_zy_reference_tiles given),
+        # since that mode recalibrates fresh for every tile instead
+        # (see the main per-tile loop below) and doesn't need this
+        # fixed, reference-tile-based calibration at all.
         alt_zy_noise = None
         alt_zy_reciprocal_map = None
-        if use_alt_zy_correction and (not alt_zy_per_tile or alt_zy_match_overlap):
-            if alt_zy_reference_tiles is None:
-                raise ValueError(
-                    "use_alt_zy_correction requires exactly 3 tile indices "
-                    "in alt_zy_reference_tiles (unless alt_zy_per_tile=True)"
-                )
+        if not disable_zy_correction and not alt_zy_per_tile:
             calib_layout = scan_parameters.get("channelLayout", {})
             calib_vertical_flip = {
                 1: bool(calib_layout["Camera1"]["verticalFlip"]),
@@ -1013,8 +972,7 @@ def pipeline(
                 ref_reciprocal_map = np.nan_to_num(
                     ref_reciprocal_map, nan=1e-9)
                 noises.append(ref_noise_map)
-                reciprocal_maps.append(_low_percentile_excluding_fallback(
-                    ref_reciprocal_map, q=2, axis=0) if alt_zy_match_overlap else ref_reciprocal_map)
+                reciprocal_maps.append(ref_reciprocal_map)
                 logger.info(
                     f"[alt zy calibration] tile {ref_index} ({ref_name}): "
                     f"noise_map mean={ref_noise_map.mean():.2f}"
@@ -1044,7 +1002,7 @@ def pipeline(
 
         out_dir = f"{general_config.out}/{ch}"
 
-        if use_alt_zy_correction and (not alt_zy_per_tile or alt_zy_match_overlap):
+        if not disable_zy_correction and not alt_zy_per_tile:
             calib_dir = _alt_zy_calibration_dir(
                 general_config, ch, alt_zy_calibration_dir)
             os.makedirs(calib_dir, exist_ok=True)
@@ -1061,7 +1019,7 @@ def pipeline(
             )
 
         checkpoint_file = _checkpoint_path(general_config, ch)
-        checkpoint, prev_ratio = _read_checkpoint(checkpoint_file, -1, 1.0)
+        checkpoint = _read_checkpoint(checkpoint_file, -1)
 
         # `omz`/`array` are opened exactly once per channel here, and
         # reused for every tile/chunk below -- no re-opening per tile or
@@ -1115,16 +1073,6 @@ def pipeline(
         # only ever as tall as the relevant overlap -- never the whole
         # tile.
         carry: Optional[np.ndarray] = None
-
-        # For alt_zy_per_tile + alt_zy_match_overlap: the previous
-        # tile's own overlap-vs-average-gradient ratio, kept around so
-        # the next tile can compare its overlap against it. prev_ratio
-        # is NOT reset here -- it was already correctly read from the
-        # checkpoint file above (defaults to 1.0 for a fresh channel,
-        # or the persisted value on a resume). Resetting it here would
-        # silently discard that persisted value and restart the
-        # sequential matching chain from 1.0 on every resume.
-        prev_overlap_calc: Optional[np.ndarray] = None
 
         # Clamp the tile range to [chunk_min, chunk_max] if provided.
         # These compose with the checkpoint: we process tiles that are
@@ -1234,10 +1182,13 @@ def pipeline(
                 withhold_from = withhold_from + y_start
 
                 y0 = y_start
-                delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
-                umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
-                factors = [umps["y"], umps["z"], umps["x"]]
-                affine = generate_skew_affine(factors, delta)
+                if disable_skew_correction:
+                    affine = np.eye(4)
+                else:
+                    delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
+                    umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
+                    factors = [umps["y"], umps["z"], umps["x"]]
+                    affine = generate_skew_affine(factors, delta)
                 if channel_affines_path is not None:
                     affines = load_channel_affines(
                         channel_affines_path, reference_channel)
@@ -1259,115 +1210,65 @@ def pipeline(
                 if vertical_flip[camera_id]:
                     raw_vol = raw_vol[::-1]
 
-                if use_alt_zy_correction:
-                    if alt_zy_per_tile or alt_zy_match_overlap:
-
+                if disable_zy_correction:
+                    # Skip the zy stripe correction entirely: no
+                    # calibration, no noise subtraction, corr_zy fixed
+                    # at 1.0 (identity) everywhere.
+                    corr_zy = np.ones((raw_vol.shape[0], raw_vol.shape[1]))
+                else:
+                    if alt_zy_per_tile:
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
                             raw_vol, mask, thr, background_length=alt_zy_background_length,
-                            normalize_to=None if alt_zy_match_overlap else 1000,
+                            normalize_to=1000,
                             threshold_multiplier=alt_zy_threshold_multiplier,
                         )
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
-                        if alt_zy_match_overlap:
-                            had_no_prev_overlap = prev_overlap_calc is None
-                            if prev_overlap_calc is not None and overlap_with_prev > 0:
-                                overlap_calc = alt_zy_reciprocal_map / \
-                                    _low_percentile_excluding_fallback(
-                                        tile_reciprocal_map, q=2, axis=0)
-                                prev_overlap = np.median(prev_overlap_calc[
-                                    y_start + corrected_sy - overlap_with_prev: y_start + corrected_sy])
-                                this_overlap = np.median(overlap_calc[
-                                    y_start: y_start + overlap_with_prev])
-                                ratio = prev_ratio * this_overlap / prev_overlap
-                                prev_ratio = ratio
-                                prev_overlap_calc = overlap_calc
-                                logger.info(
-                                    f"[alt zy match-overlap] tile {index} ({name}): "
-                                    f"compared against previous tile's overlap "
-                                    f"(overlap_with_prev={overlap_with_prev}), "
-                                    f"prev_overlap={prev_overlap:.4g}, "
-                                    f"this_overlap={this_overlap:.4g}, "
-                                    f"ratio={ratio:.4f}"
-                                )
-                            else:
-                                prev_overlap_calc = alt_zy_reciprocal_map / \
-                                    _low_percentile_excluding_fallback(
-                                        tile_reciprocal_map, q=2, axis=0)
-                                ratio = prev_ratio
-                                reason = (
-                                    "no previous tile's overlap data yet "
-                                    "(first tile processed, or previous tile "
-                                    "was skipped)" if had_no_prev_overlap
-                                    else f"overlap_with_prev={overlap_with_prev} "
-                                    f"(this tile doesn't overlap the "
-                                    f"previous one, per y_coords spacing "
-                                    f"vs corrected_sy)"
-                                )
-                                logger.info(
-                                    f"[alt zy match-overlap] tile {index} ({name}): "
-                                    f"no comparison -- {reason}. Using "
-                                    f"carried-forward ratio={ratio:.4f} "
-                                    f"unchanged."
-                                )
-                            tile_reciprocal_map = alt_zy_reciprocal_map*ratio
-                            tile_reciprocal_map = np.broadcast_to(
-                                tile_reciprocal_map[None, :],
-                                (raw_vol.shape[0],
-                                 tile_reciprocal_map.shape[0])
-                            )
 
-                            calib_dir = _alt_zy_calibration_dir(
-                                general_config, ch, alt_zy_calibration_dir)
-                            os.makedirs(calib_dir, exist_ok=True)
-                            noise_tiff_path = os.path.join(
-                                calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
-                            scaler_tiff_path = os.path.join(
-                                calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
-                            tifffile.imwrite(
-                                noise_tiff_path, tile_noise_map.astype(np.float32))
-                            tifffile.imwrite(
-                                scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
-
+                        calib_dir = _alt_zy_calibration_dir(
+                            general_config, ch, alt_zy_calibration_dir)
+                        os.makedirs(calib_dir, exist_ok=True)
+                        noise_tiff_path = os.path.join(
+                            calib_dir, f"{ch}_{name}_alt_zy_noise.tiff")
+                        scaler_tiff_path = os.path.join(
+                            calib_dir, f"{ch}_{name}_alt_zy_scaler.tiff")
+                        tifffile.imwrite(
+                            noise_tiff_path, tile_noise_map.astype(np.float32))
+                        tifffile.imwrite(
+                            scaler_tiff_path, tile_reciprocal_map.astype(np.float32))
                     else:
                         tile_noise_map = alt_zy_noise
                         tile_reciprocal_map = alt_zy_reciprocal_map
 
                     # Noise subtraction happens here, at the APPLICATION
                     # step -- separate from compute_alt_zy_calibration_for_tile's
-                    # own internal use of (fully) noise-subtracted data
-                    # to compute the scaler itself (that one is a per-row
+                    # own internal use of (fully) noise-subtracted data to
+                    # compute the scaler itself (that one is a per-row
                     # MEDIAN over many tissue pixels, much less sensitive
                     # to a slightly-overestimated noise value than this
-                    # direct per-pixel subtraction is). Scaling THIS
-                    # subtraction down (alt_zy_noise_subtraction_scale
-                    # < 1.0) does not affect the scaler calibration --
-                    # it targets a specific failure mode: if the per-row
-                    # noise estimate runs even a little high for some
-                    # rows, subtracting all of it can clip real signal
-                    # to 0 in dim tissue specifically, producing dark
-                    # stripes that get worse the dimmer the tissue is.
+                    # direct per-pixel subtraction is).
+                    subtraction_map = tile_noise_map
+                    if alt_zy_noise_subtract_min:
+                        # Floor the noise map at its own minimum, so the
+                        # row with the least noise gets none subtracted
+                        # and every other row only loses the EXCESS above
+                        # that minimum -- keeps the subtraction very small
+                        # while preserving the map's relative shape.
+                        subtraction_map = subtraction_map - subtraction_map.min()
                     raw_vol = da.clip(
-                        raw_vol.astype(np.float32)
-                        - tile_noise_map[:, :, None] *
-                        alt_zy_noise_subtraction_scale,
+                        raw_vol.astype(np.float32) -
+                        subtraction_map[:, :, None],
                         0, None,
                     )
                     corr_zy = 1.0 / tile_reciprocal_map
 
-                else:
-                    corr_zy = compute_corr_zy(
-                        raw_vol,
-                        mask,
-                        tissue_frac_min,
-                        thr,
-                    )
                 while y0 < corrected_sy+y_start:
                     y1 = min(corrected_sy+y_start, y0 + y_chunk_size)
 
                     lazy_chunk = _corrected_y_chunk(
                         raw_vol, mask, affine, corr_zy, y0, y1,
-                        apply_mask_to_output=not disable_output_masking)
+                        apply_mask_to_output=not disable_output_masking,
+                        affine_order=affine_order)
                     lazy_chunk = lazy_chunk[z_start:z_end]
                     if lazy_chunk.shape[2] < fullshape[2]:
                         lazy_chunk = da.pad(lazy_chunk, pad_width=(
@@ -1453,7 +1354,7 @@ def pipeline(
                 logger.info(
                     f"{name} done in {time.time() - tile_timer:.2f}s"
                 )
-                _write_checkpoint(checkpoint_file, index, prev_ratio)
+                _write_checkpoint(checkpoint_file, index)
 
         gc.collect()
         copy_config = replace(general_config, out=out_dir)
