@@ -80,7 +80,7 @@ def open_array(
     array_cls = _DRIVER_ARRAY.get(driver)
     if array_cls is None:
         raise UnsupportedDriverError(driver)
-    return array_cls.open(path, mode, zarr_version=zarr_version)
+    return array_cls.open(path, mode=mode, zarr_version=zarr_version)
 
 
 def open_group(
@@ -95,7 +95,7 @@ def open_group(
     group_cls = _DRIVER_GROUP.get(driver)
     if group_cls is None:
         raise UnsupportedDriverError(driver)
-    return group_cls.open(path, mode, zarr_version=zarr_version)
+    return group_cls.open(path, mode=mode, zarr_version=zarr_version)
 
 
 def from_config(out: str | PathLike[str], zarr_config: ZarrConfig) -> ZarrGroup:
