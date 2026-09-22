@@ -201,7 +201,7 @@ def _open_raw_channel_volume_and_mask(
     ch: str,
     cam_info,
     background_length: int = 5000,
-    mask_threshold_multiplier: float = 1.4,
+    mask_threshold_multiplier: float = 1.25,
     mip_pre_split: bool = False,
     reference_ch=None,
     x_min=None,
@@ -532,7 +532,7 @@ def pipeline(
     x_min: Optional[int] = None,
     x_max: Optional[int] = None,
     background_length: int = 5000,
-    mask_threshold_multiplier: float = 1.4,
+    mask_threshold_multiplier: float = 1.05,
     mip_pre_split: bool = False,
     channel_affines_path: Optional[str] = None,
     reference_channel: str = "488",
@@ -659,7 +659,7 @@ def pipeline(
         `{general_config.out with .ome.zarr stripped}_alt_zy_calibration/{ch}/`
         -- so these diagnostic files never end up mixed into the zarr
         store's own directory alongside zarr.json and chunk data.
-    mask_threshold_multiplier : float, default=1.4
+    mask_threshold_multiplier : float, default=1.25
         Passed through to `compute_tissue_mask`: the edge-derived
         intensity threshold used for tissue-mask segmentation is
         multiplied by this before thresholding
