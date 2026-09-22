@@ -83,11 +83,13 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     if file_path.endswith((".nii", ".nii.gz")):
         img = nib.load(file_path)
         img_data = img.get_fdata()
-        if img_data.ndim == 3 and any(dim == 1 for dim in img_data.shape):
+        #if img_data.ndim == 3 and any(dim == 1 for dim in img_data.shape):
             # Squeeze singleton dimensions
-            img_data = np.squeeze(img_data)
+        #    img_data = np.squeeze(img_data)
         # Use a reasonable chunk size for dask array
-        data = da.from_array(np.squeeze(img_data), chunks=img_data.shape)
+        data = da.from_array(img_data, chunks=img_data.shape)
+        if data.ndim == 3 and data.shape[-1] == 1:
+            data = data[..., 0]
         return data
 
     # Check for jpg or jpeg images
