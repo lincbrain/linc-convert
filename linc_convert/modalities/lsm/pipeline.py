@@ -745,8 +745,18 @@ def pipeline(
     voxel_size = list(map(float, reversed(voxel_size)))
 
     scan_parameters = load_scan_parameters(yaml_path)
-    reference_camera_id = find_camera_for_channel(
-        scan_parameters, reference_channel)
+    # Only look up the reference channel's camera when it's actually
+    # needed (cross-camera registration). Without `channel_affines_path`,
+    # every downstream use of `reference_camera_id` below is already
+    # gated on `channel_affines_path is not None` and falls back to
+    # `cam_info`/`camera_id` instead -- so looking it up unconditionally
+    # would fail on datasets whose `channelLayout` doesn't happen to
+    # define `reference_channel` (e.g. its default "488"), even when
+    # registration isn't being used at all.
+    reference_camera_id = (
+        find_camera_for_channel(scan_parameters, reference_channel)
+        if channel_affines_path is not None else camera_id
+    )
     cam_info = get_camera_info(
         scan_parameters, camera_id, slice_number,
         crop_stage="stitching" if channel_affines_path is None else "split",
