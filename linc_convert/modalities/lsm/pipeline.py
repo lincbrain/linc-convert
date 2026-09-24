@@ -63,6 +63,7 @@ from linc_convert.modalities.lsm.preprocessing_utils.corrections import (
     apply_affine_split,
     apply_corr_zy_lazy,
     compute_alt_zy_calibration_for_tile,
+    compute_subtraction_map,
     crop_volume_channels,
     embed_zy_affine_for_volume,
     generate_skew_affine,
@@ -810,6 +811,23 @@ def pipeline(
         if channel_affines_path is not None else cam_info
     )
 
+    # Which subtraction behavior is actually going to be applied to the
+    # volume (see the per-tile application step below) -- passed into
+    # BOTH calibration calls (compute_alt_zy_calibration_for_tile) so the
+    # reciprocal scaler is computed against the SAME subtraction, instead
+    # of always assuming the noise map is fully subtracted. A mismatch
+    # there is what causes the scaler to over-/under-amplify whatever the
+    # subtraction step actually leaves behind (e.g. an unsubtracted noise
+    # floor, or a negative/added-back subtraction).
+    if disable_zy_noise_subtraction:
+        alt_zy_subtraction_mode = "none"
+    elif alt_zy_noise_subtract_median:
+        alt_zy_subtraction_mode = "median"
+    elif alt_zy_noise_subtract_min:
+        alt_zy_subtraction_mode = "min"
+    else:
+        alt_zy_subtraction_mode = "full"
+
     downsample_factor = 2 ** zarr_level
     # For the alt zy correction's noise calculation specifically (NOT
     # the mask/MIP usage of background_length below): that one reads
@@ -1018,6 +1036,7 @@ def pipeline(
                     ref_raw_vol, ref_mask, ref_thr,
                     background_length=alt_zy_background_length,
                     threshold_multiplier=alt_zy_threshold_multiplier,
+                    subtraction_mode=alt_zy_subtraction_mode,
                 )
                 ref_reciprocal_map = np.nan_to_num(
                     ref_reciprocal_map, nan=1e-9)
@@ -1311,6 +1330,7 @@ def pipeline(
                             background_length=alt_zy_background_length,
                             normalize_to=1000,
                             threshold_multiplier=alt_zy_threshold_multiplier,
+                            subtraction_mode=alt_zy_subtraction_mode,
                         )
                         tile_reciprocal_map = np.nan_to_num(
                             tile_reciprocal_map, nan=1e-9)
@@ -1331,33 +1351,15 @@ def pipeline(
                         tile_reciprocal_map = alt_zy_reciprocal_map
 
                     # Noise subtraction happens here, at the APPLICATION
-                    # step -- separate from compute_alt_zy_calibration_for_tile's
-                    # own internal use of (fully) noise-subtracted data to
-                    # compute the scaler itself (that one is a per-row
-                    # MEDIAN over many tissue pixels, much less sensitive
-                    # to a slightly-overestimated noise value than this
-                    # direct per-pixel subtraction is).
-                    subtraction_map = tile_noise_map
-                    if disable_zy_noise_subtraction:
-                        # Skip the subtraction entirely -- pass the raw
-                        # volume through unchanged into the reciprocal
-                        # scaling step below.
-                        subtraction_map = np.zeros_like(subtraction_map)
-                    elif alt_zy_noise_subtract_median:
-                        # Center the noise map on its own median instead
-                        # of its minimum. Rows below the median end up
-                        # with a NEGATIVE subtraction value, so those
-                        # rows have that amount of signal added back in
-                        # rather than removed.
-                        subtraction_map = (
-                            subtraction_map - np.median(subtraction_map))
-                    elif alt_zy_noise_subtract_min:
-                        # Floor the noise map at its own minimum, so the
-                        # row with the least noise gets none subtracted
-                        # and every other row only loses the EXCESS above
-                        # that minimum -- keeps the subtraction very small
-                        # while preserving the map's relative shape.
-                        subtraction_map = subtraction_map - subtraction_map.min()
+                    # step -- using the SAME `compute_subtraction_map` (and
+                    # the SAME `alt_zy_subtraction_mode`) that was already
+                    # passed into `compute_alt_zy_calibration_for_tile`
+                    # above to compute `tile_reciprocal_map`, so the
+                    # scaler is calibrated against exactly the subtraction
+                    # being applied here -- not always assuming the noise
+                    # map is fully subtracted.
+                    subtraction_map = compute_subtraction_map(
+                        tile_noise_map, alt_zy_subtraction_mode)
                     raw_vol = da.clip(
                         raw_vol.astype(np.float32) -
                         subtraction_map[:, :, None],

@@ -80,6 +80,54 @@ def compute_corr_zy(
     return corr / 1000
 
 
+def compute_subtraction_map(
+    noise_map: np.ndarray, subtraction_mode: str = "full",
+) -> np.ndarray:
+    """
+    Turn a per-(Z, Y) `noise_map` into the actual per-(Z, Y) amount to be
+    SUBTRACTED from the volume, according to `subtraction_mode`. Shared
+    between `compute_alt_zy_calibration_for_tile` (so the reciprocal
+    scaler is calibrated against the SAME subtraction that will actually
+    be applied) and `pipeline`'s per-tile application step -- keeping
+    both in sync is the whole point of factoring this out, since a
+    mismatch between them is exactly what causes the scaler to over- or
+    under-amplify whatever the subtraction step leaves behind.
+
+    Parameters
+    ----------
+    noise_map : np.ndarray
+        Shape (Z, Y) background noise estimate (as returned by
+        `compute_alt_zy_calibration_for_tile`).
+    subtraction_mode : str, default="full"
+        - "full": subtract `noise_map` as-is (the original behavior).
+        - "min": floor `noise_map` at its own global minimum first
+          (`noise_map - noise_map.min()`), so the least-noisy row loses
+          nothing and every other row only loses the excess above that
+          minimum -- keeps the subtraction very small.
+        - "median": center `noise_map` on its own global median
+          (`noise_map - median(noise_map)`) -- roughly half the rows
+          get a NEGATIVE subtraction (i.e. addition).
+        - "none": subtract nothing (an all-zero map).
+
+    Returns
+    -------
+    np.ndarray
+        Shape (Z, Y), the amount actually subtracted per row.
+    """
+    if subtraction_mode == "full":
+        return noise_map
+    elif subtraction_mode == "min":
+        return noise_map - noise_map.min()
+    elif subtraction_mode == "median":
+        return noise_map - np.median(noise_map)
+    elif subtraction_mode == "none":
+        return np.zeros_like(noise_map)
+    raise ValueError(
+        f"Unknown subtraction_mode: {subtraction_mode!r} "
+        "(expected 'full', 'min', 'median', or 'none')"
+    )
+
+
 def compute_alt_zy_calibration_for_tile(
     vol: da.Array,
     mask: np.ndarray,
@@ -88,6 +136,7 @@ def compute_alt_zy_calibration_for_tile(
     x_stride: int = 64,
     normalize_to: Optional[float] = None,
     threshold_multiplier: float = 1.05,
+    subtraction_mode: str = "full",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ONE reference tile's contribution to the alternate zy
@@ -150,14 +199,32 @@ def compute_alt_zy_calibration_for_tile(
         `threshold * threshold_multiplier`. Higher values require
         brighter pixels to count, giving a stricter (more selective)
         set of pixels contributing to each row's scaler.
+    subtraction_mode : str, default="full"
+        Passed to `compute_subtraction_map` to decide how much of
+        `noise_map` is actually subtracted before the per-row scaler is
+        computed -- MUST match whatever subtraction mode is actually
+        applied to the volume downstream (see `pipeline`'s
+        `alt_zy_noise_subtract_min`/`alt_zy_noise_subtract_median`/
+        `disable_zy_noise_subtraction`), otherwise the scaler ends up
+        calibrated for a different amount of noise removal than what
+        actually happens, and over- or under-amplifies whatever the
+        mismatch leaves behind (e.g. an unsubtracted noise floor, or an
+        added-back negative subtraction, both getting multiplied by a
+        scaler that assumed a fully-clean row).
 
     Returns
     -------
     noise_map : np.ndarray
-        Shape (Z, Y). Background noise level for each row.
+        Shape (Z, Y). Background noise level for each row (always the
+        RAW estimate, regardless of `subtraction_mode` -- this is what's
+        written to the diagnostic `*_alt_zy_noise.tiff`, and what
+        `pipeline` itself turns into an actual subtraction amount via
+        `compute_subtraction_map`).
     reciprocal_map : np.ndarray
         Shape (Z, Y). Apply via
-        `(vol - noise_map).clip(0) * reciprocal_map`.
+        `(vol - subtraction_map).clip(0) * reciprocal_map`, where
+        `subtraction_map = compute_subtraction_map(noise_map,
+        subtraction_mode)` -- the SAME `subtraction_mode` used here.
     """
     vol = vol.astype(np.float32)
     Z, Y, X = vol.shape
@@ -168,7 +235,8 @@ def compute_alt_zy_calibration_for_tile(
         noise_map = np.asarray(da.nanmedian(edge_region, axis=2).compute())
     noise_map = np.nan_to_num(noise_map, nan=0.0)
 
-    vol_denoised = da.clip(vol - noise_map[:, :, None], 0, None)
+    subtraction_map = compute_subtraction_map(noise_map, subtraction_mode)
+    vol_denoised = da.clip(vol - subtraction_map[:, :, None], 0, None)
 
     if mask.shape == (Y, X):
         mask_da = da.from_array(mask, chunks=vol.chunks[1:]) if isinstance(
