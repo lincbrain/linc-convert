@@ -201,7 +201,7 @@ def _open_raw_channel_volume_and_mask(
     ch: str,
     cam_info,
     background_length: int = 5000,
-    mask_threshold_multiplier: float = 1.25,
+    mask_threshold_multiplier: float = 1.05,
     mip_pre_split: bool = False,
     reference_ch=None,
     x_min=None,
@@ -545,6 +545,8 @@ def pipeline(
     alt_zy_threshold_multiplier: float = 1.05,
     disable_output_masking: bool = False,
     alt_zy_noise_subtract_min: bool = False,
+    alt_zy_noise_subtract_median: bool = False,
+    disable_zy_noise_subtraction: bool = False,
     disable_skew_correction: bool = False,
     disable_zy_correction: bool = False,
     affine_order: int = 0,
@@ -659,7 +661,7 @@ def pipeline(
         `{general_config.out with .ome.zarr stripped}_alt_zy_calibration/{ch}/`
         -- so these diagnostic files never end up mixed into the zarr
         store's own directory alongside zarr.json and chunk data.
-    mask_threshold_multiplier : float, default=1.25
+    mask_threshold_multiplier : float, default=1.05
         Passed through to `compute_tissue_mask`: the edge-derived
         intensity threshold used for tissue-mask segmentation is
         multiplied by this before thresholding
@@ -698,6 +700,31 @@ def pipeline(
         noise-subtracted data independent of this flag) are
         unaffected. Applied per tile in `alt_zy_per_tile` mode, or
         once to the shared averaged noise map otherwise.
+    alt_zy_noise_subtract_median : bool, default=False
+        When True, each tile's per-(Z, Y) noise map has its own MEDIAN
+        value subtracted off (elementwise: `noise_map - median(noise_
+        map)`) before being used for noise subtraction, instead of the
+        minimum as in `alt_zy_noise_subtract_min`. Because roughly half
+        of the map's rows sit below the median, this makes the
+        subtraction negative for those rows -- so instead of being
+        subtracted, they actually have that amount of signal ADDED
+        back in (`raw_vol - subtraction_map` with a negative
+        `subtraction_map`), while rows above the median lose only the
+        excess above it. Mutually exclusive with
+        `alt_zy_noise_subtract_min` (this flag takes precedence if
+        both are set). Same tiff/scaler caveats as
+        `alt_zy_noise_subtract_min` apply.
+    disable_zy_noise_subtraction : bool, default=False
+        When True, the per-pixel noise SUBTRACTION step is skipped
+        entirely -- the raw volume is left as-is going into the
+        reciprocal (`corr_zy`) scaling step, with no `noise_map`
+        subtracted at all. The scaler/reciprocal map is still computed
+        and applied as usual (from fully noise-subtracted data
+        internally, independent of this flag), and the diagnostic
+        tiffs are still written. Takes precedence over both
+        `alt_zy_noise_subtract_min` and `alt_zy_noise_subtract_median`
+        if set. Unlike `disable_zy_correction`, the zy stripe
+        correction (reciprocal scaling) itself still runs.
     disable_skew_correction : bool, default=False
         When True, the light-sheet oblique-acquisition skew correction
         (the X-shear-as-a-function-of-Z step) is skipped entirely --
@@ -1258,7 +1285,20 @@ def pipeline(
                     # to a slightly-overestimated noise value than this
                     # direct per-pixel subtraction is).
                     subtraction_map = tile_noise_map
-                    if alt_zy_noise_subtract_min:
+                    if disable_zy_noise_subtraction:
+                        # Skip the subtraction entirely -- pass the raw
+                        # volume through unchanged into the reciprocal
+                        # scaling step below.
+                        subtraction_map = np.zeros_like(subtraction_map)
+                    elif alt_zy_noise_subtract_median:
+                        # Center the noise map on its own median instead
+                        # of its minimum. Rows below the median end up
+                        # with a NEGATIVE subtraction value, so those
+                        # rows have that amount of signal added back in
+                        # rather than removed.
+                        subtraction_map = (
+                            subtraction_map - np.median(subtraction_map))
+                    elif alt_zy_noise_subtract_min:
                         # Floor the noise map at its own minimum, so the
                         # row with the least noise gets none subtracted
                         # and every other row only loses the EXCESS above
