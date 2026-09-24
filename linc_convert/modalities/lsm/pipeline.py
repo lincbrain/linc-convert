@@ -983,6 +983,19 @@ def pipeline(
             for ref_index in alt_zy_reference_tiles:
                 ref_path = tile_paths[ref_index]
                 ref_name = tile_name(ref_path)
+                # NOTE: x_min/x_max are deliberately NOT passed here.
+                # compute_alt_zy_calibration_for_tile derives each row's
+                # background noise level from the LAST `background_length`
+                # columns of whatever volume it's given -- if `x_min`/
+                # `x_max` narrow the tile to a small window elsewhere in
+                # X (e.g. around a region of interest), that window's own
+                # trailing edge is tissue, not background, and would
+                # produce garbage noise estimates. Opening the reference
+                # tile at full X width here means the noise/reciprocal
+                # maps (which are per-(Z, Y) only, independent of X) are
+                # always calibrated from the true rightmost edge of the
+                # ORIGINAL tile, then applied downstream to the
+                # (possibly x_min/x_max-cropped) output volume as usual.
                 ref_raw_vol, ref_mask, ref_thr = _open_raw_channel_volume_and_mask(
                     ref_path,
                     dandiset_id=dandiset_id,
@@ -995,8 +1008,8 @@ def pipeline(
                     background_length=background_length,
                     mask_threshold_multiplier=mask_threshold_multiplier,
                     mip_pre_split=mip_pre_split,
-                    x_min=x_min,
-                    x_max=x_max,
+                    x_min=None,
+                    x_max=None,
                     zarr_level=zarr_level,
                 )
                 if calib_vertical_flip[camera_id]:
@@ -1254,8 +1267,48 @@ def pipeline(
                     corr_zy = np.ones((raw_vol.shape[0], raw_vol.shape[1]))
                 else:
                     if alt_zy_per_tile:
+                        # Same reasoning as the reference-tile calibration
+                        # block above: `raw_vol` here may already be
+                        # narrowed to `[x_min:x_max]` for the OUTPUT (e.g.
+                        # a small window around a region of interest), but
+                        # compute_alt_zy_calibration_for_tile needs the
+                        # tile's true trailing (highest-X) edge -- which is
+                        # background, not tissue -- to estimate noise.
+                        # Re-open this same tile at full X width just for
+                        # calibration whenever x cropping is active, so
+                        # the noise/reciprocal maps (per-(Z, Y) only) are
+                        # calibrated from the ORIGINAL tile's edge and not
+                        # from within the cropped window. When no x
+                        # cropping is in effect, reuse `raw_vol` directly
+                        # to avoid the extra read.
+                        if x_min is not None or x_max is not None:
+                            calib_raw_vol, calib_mask, calib_thr = (
+                                _open_raw_channel_volume_and_mask(
+                                    path,
+                                    dandiset_id=dandiset_id,
+                                    api_key=api_key,
+                                    mip_dir=mip_dir,
+                                    name=name,
+                                    ch=ch,
+                                    cam_info=cam_info,
+                                    mip_cam_info=cam_info_full_res,
+                                    background_length=background_length,
+                                    mask_threshold_multiplier=mask_threshold_multiplier,
+                                    mip_pre_split=mip_pre_split,
+                                    x_min=None,
+                                    x_max=None,
+                                    zarr_level=zarr_level,
+                                )
+                            )
+                            if vertical_flip[camera_id]:
+                                calib_raw_vol = calib_raw_vol[::-1]
+                        else:
+                            calib_raw_vol, calib_mask, calib_thr = (
+                                raw_vol, mask, thr)
+
                         tile_noise_map, tile_reciprocal_map = compute_alt_zy_calibration_for_tile(
-                            raw_vol, mask, thr, background_length=alt_zy_background_length,
+                            calib_raw_vol, calib_mask, calib_thr,
+                            background_length=alt_zy_background_length,
                             normalize_to=1000,
                             threshold_multiplier=alt_zy_threshold_multiplier,
                         )
