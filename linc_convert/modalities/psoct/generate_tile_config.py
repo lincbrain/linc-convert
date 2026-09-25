@@ -437,21 +437,17 @@ def _generate_snake_by_columns(
 
 @generate_tile_config_cmd.default
 def generate_tile_config(
-    columns: Annotated[int, Parameter(name=["--columns"])] = 20,
-    rows: Annotated[int, Parameter(name=["--rows"])] = 28,
-    tile_size_x: Annotated[int, Parameter(name=["--tile-size-x"])] = 200,
-    tile_size_y: Annotated[int, Parameter(name=["--tile-size-y"])] = 300,
-    tile_size: Annotated[Optional[int], Parameter(name=["--tile-size"])] = None,
-    base_dir: Annotated[str, Parameter(name=["--base-dir"])] = "./",
-    naming_format: Annotated[
-        str, Parameter(name=["--naming-format"])
-    ] = "mosaic_001_tile_{tile_number:04d}_aip.nii",
+    columns: int = 20,
+    rows: int = 28,
+    tile_size_x: int = 200,
+    tile_size_y:int = 300,
+    tile_size: Optional[int] = None,
+    base_dir: str = "./",
+    naming_format: str = "mosaic_001_tile_{tile_number:04d}_aip.nii",
     out: Annotated[str, Parameter(name=["--output", "-o"])] = "tile_config.yaml",
-    grid_type: Annotated[str, Parameter(name=["--grid-type"])] = "snake-by-columns",
-    order: Annotated[Optional[str], Parameter(name=["--order"])] = None,
-    overlap_percentage: Annotated[
-        float, Parameter(name=["--overlap-percentage"])
-    ] = 0.0,
+    grid_type: str = "snake-by-columns",
+    order: str = None,
+    overlap_percentage: float = 0.0,
 ) -> None:
     """
     Generate tile configuration YAML file for Grid/Collection Stitching.
