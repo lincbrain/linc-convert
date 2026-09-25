@@ -230,18 +230,10 @@ class MosaicInfo:
             y_end = (y1c + 1) * ph
 
             # Create block canvas with appropriate shape
-            if not self.circular_mean:
-                block_canvas = da.zeros(
-                    (x_end - x_start, y_end - y_start, *no_chunk_dim),
-                    chunks=(pw, ph, *no_chunk_dim),
-                    dtype=np.float32
-                )
-            else:
-                block_canvas = da.zeros(
-                    (x_end - x_start, y_end - y_start, *no_chunk_dim, 2),
-                    chunks=(pw, ph, *no_chunk_dim, 2),
-                    dtype=np.float32
-                )
+            extra = (2,) if self.circular_mean else ()
+            block_shape = (x_end - x_start, y_end - y_start, *no_chunk_dim, *extra)
+            block_chunks = (pw, ph, *no_chunk_dim, *extra)
+            block_canvas = da.zeros(block_shape, chunks=block_chunks, dtype=np.float32)
 
             block_weight = da.zeros(
                 (x_end - x_start, y_end - y_start),
