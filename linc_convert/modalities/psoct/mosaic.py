@@ -83,19 +83,6 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     if file_path.endswith((".nii", ".nii.gz")):
         img = nib.load(file_path)
         img_data = img.get_fdata()
-        #if img_data.ndim == 3 and any(dim == 1 for dim in img_data.shape):
-            # Squeeze singleton dimensions
-        #    img_data = np.squeeze(img_data)
-        # Use a reasonable chunk size for dask array
-        data = da.from_array(img_data, chunks=img_data.shape)
-        if data.ndim == 3 and data.shape[-1] == 1:
-            data = data[..., 0]
-        return data
-
-    # Check for jpg or jpeg images
-    if file_path.endswith((".jpg", ".jpeg")):
-        image = Image.open(file_path)
-        img_data = np.array(image)
         data = da.from_array(img_data, chunks=img_data.shape)
         return data
 
@@ -117,6 +104,9 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
 
 def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95) -> None:
     """Save image as JPEG."""
+    # Reduce to two dimensions
+    if image.ndim==3:
+        image = np.squeeze(image)
     # Normalize to 0-255 range
     img_min = np.nanmin(image)
     img_max = np.nanmax(image)
@@ -379,6 +369,8 @@ def mosaic2d(
     metadata = tile_info.get("metadata", {})
     if voxel_size_xyz is None:
         voxel_size_xyz = metadata.get("scan_resolution", [10, 10, 2.5])
+    if len(voxel_size_xyz)==2:
+        voxel_size_xyz.append(1)
     file_key = metadata.get("file_key")  # Key for mat file array
     base_dir = metadata.get("base_dir", ".")
     # Get clip values from metadata if not provided as parameters
@@ -535,18 +527,14 @@ def mosaic2d(
         with ProgressBar():
             result = np.array(result)
 
-    voxel_size_2d = voxel_size_xyz[:2] if len(voxel_size_xyz) >= 2 else [0.1, 0.1]
     # Save NIfTI file if requested
     if nifti_output:
         logger.info(f"Saving NIfTI file: {nifti_output}")
         # Create affine matrix for 2D image
         affine = np.eye(4)
-        # Create NIfTI image (2D array needs to be expanded to 3D for NIfTI)
-        # Add a singleton z dimension
-        # result_3d = result_2d[:, :]
         nii_img = nib.Nifti1Image(result, affine)
         nii_img.header.set_xyzt_units(xyz="mm", t="sec")
-        nii_img.header.set_zooms(voxel_size_2d)
+        nii_img.header.set_zooms(voxel_size_xyz)
         nib.save(nii_img, nifti_output)
         logger.info("NIfTI file saved successfully")
     result = result.T
@@ -564,6 +552,9 @@ def mosaic2d(
     # Save to Zarr if output is specified
     if general_config.out:
         logger.info(f"Saving to Zarr: {general_config.out}")
+
+        # Add singleton z axis to match the ["z", "y", "x"] OME-Zarr axes
+        result = result[np.newaxis]
 
         # Compute zarr layout for 2D
         chunk, shard = compute_zarr_layout(result.shape, np.float32, zarr_config)
