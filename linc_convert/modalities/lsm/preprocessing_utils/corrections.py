@@ -117,7 +117,7 @@ def compute_subtraction_map(
     if subtraction_mode == "full":
         return noise_map
     elif subtraction_mode == "min":
-        return noise_map - noise_map.min()
+        return noise_map - np.percentile(noise_map, 2)
     elif subtraction_mode == "median":
         return noise_map - np.median(noise_map)
     elif subtraction_mode == "none":
