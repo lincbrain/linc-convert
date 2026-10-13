@@ -91,10 +91,11 @@ from linc_convert.utils.zarr_config import GeneralConfig, ZarrConfig, autoconfig
 # --------------------------------------------------------------------------
 
 
-def _resolve_tile_paths(input_path: str, camera_id: int, coords_path: str) -> List[str]:
+def _resolve_tile_paths(input_path: str, camera_id: int, coords_path: str,
+                        all_chunks: bool = False) -> List[str]:
     with open(coords_path) as f:
         listed = (yaml.safe_load(f) or {}).get("chunks")
-    if not listed:
+    if all_chunks or not listed:
         return discover_tile_paths(input_path, camera_id)
     tile_paths = [os.path.join(input_path, os.path.basename(str(c).rstrip("/")))
                   for c in listed]
@@ -305,7 +306,7 @@ def stitch_channel(
         if overlap_prev + overlap_next > sy:
             raise ValueError(f"chunk {index}: overlaps ({overlap_prev} + "
                              f"{overlap_next}) exceed the chunk height {sy}")
-        print(f"[{index}] {os.path.basename(path)}  y={ystart} z={zstart}  "
+        print(f"[{index + 1}] {os.path.basename(path)}  y={ystart} z={zstart}  "
               f"overlap prev/next = {overlap_prev}/{overlap_next}")
 
         cur = corrected_tile(raw, noise, scaler, shear_x, shear_z)
@@ -354,6 +355,7 @@ def stitch_chunks(
     *,
     voxel_size: List[float] = [1, 1, 1],
     memory_gb: int = 64,
+    all_chunks: bool = False,
     dz_as_shear_z: bool = False,
     restart: bool = False,
     general_config: Optional[GeneralConfig] = None,
@@ -365,8 +367,9 @@ def stitch_chunks(
     ----------
     input_path : str
         Folder with the chunk ``*.ome.zarr`` folders. If the register_chunks
-        YAML lists ``chunks``, only those (matched by file name) are stitched,
-        in that order; otherwise all chunks of the camera, sorted.
+        YAML lists ``chunks`` (and ``all_chunks`` is False), only those
+        (matched by file name) are stitched, in that order; otherwise all
+        chunks of the camera, sorted.
     yaml_path : str
         Scan metadata YAML (crop definitions, flip, skew).
     camera_id : int
@@ -383,6 +386,10 @@ def stitch_chunks(
         Voxel size in x, y, z (microns) for the output metadata.
     memory_gb : int, default=64
         Total memory, in GB, that the dask cluster may use.
+    all_chunks : bool, default=False
+        Stitch every chunk of the camera (sorted), ignoring the ``chunks`` list
+        in the register_chunks YAML. Use it when the registration was run on a
+        subset of the chunks; positions are still ``round(i * y_offset)``.
     dz_as_shear_z : bool, default=False
         If False, ``weighted_average.dz`` from register_chunks is not applied.
         If True, it is applied as a z shear of every chunk instead of as
@@ -432,7 +439,8 @@ def stitch_chunks(
                 if os.path.exists(ckpt):
                     os.remove(ckpt)
             coords = coords_path.format(channel=channel)
-            tile_paths = _resolve_tile_paths(input_path, camera_id, coords)
+            tile_paths = _resolve_tile_paths(input_path, camera_id, coords,
+                                             all_chunks)
             positions_y, dz = load_tile_positions(coords, len(tile_paths))
             positions_z = [0] * len(tile_paths)
             shear_z = 0.0

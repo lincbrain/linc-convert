@@ -36,7 +36,8 @@ reference tiles. Output per channel ``ch``, in ``{output_dir}/{ch}/``
 * ``{ch}_alt_zy_scaler.tiff`` -- zy-correction map, applied as
   ``(vol - noise).clip(0) * scaler``
 
-``reference_tiles`` are 0-based indices into the camera's tile list: the
+``reference_tiles`` are 1-based positions in the camera's tile list (1 is the
+first chunk, ``chunk-0001``): the
 ``*acq-camera-NN*.ome.zarr`` folders of ``input_path`` in sorted order.
 
 Needs: cyclopts, dask, numpy, tifffile, zarr, pyyaml, and the ``stitching_utils``
@@ -97,7 +98,7 @@ def create_corrections(
     slice_number : int
         Physical slice number (selects the crop definitions).
     reference_tiles : list of int
-        0-based indices of the tiles to calibrate from.
+        1-based positions (1 = first chunk) of the tiles to calibrate from.
     output_dir : str
         TIFFs are written to ``{output_dir}/{channel}/``.
     background_length : int, default=5000
@@ -152,10 +153,10 @@ def create_corrections(
         return results
 
     tile_paths = discover_tile_paths(input_path, camera_id)
-    bad = [i for i in reference_tiles if not 0 <= i < len(tile_paths)]
+    bad = [i for i in reference_tiles if not 1 <= i <= len(tile_paths)]
     if bad:
         raise ValueError(f"reference_tiles {bad} out of range: camera {camera_id} has "
-                         f"{len(tile_paths)} tiles (indices 0..{len(tile_paths) - 1})")
+                         f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
 
     crops = get_crops(scan_parameters, camera_id, slice_number)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
@@ -163,7 +164,7 @@ def create_corrections(
     noises: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     scalers: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     for ref_index in reference_tiles:
-        path = tile_paths[ref_index]
+        path = tile_paths[ref_index - 1]
         print(f"[calibration] tile {ref_index}: {os.path.basename(path)}")
         tile = open_tile_array(path, chunks=(128, 128, 128))
         for ch in todo:
