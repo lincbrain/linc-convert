@@ -359,7 +359,12 @@ def _combine_block(
     if len(total_paint.shape) > 2:
         expand_dim = len(total_paint.shape) - len(total_weight.shape)
         total_weight = total_weight.reshape(total_weight.shape + (1,) * expand_dim)
-    normalized = total_paint / total_weight
+
+    # Swap zero weights for 1 before dividing so no 0/0 is ever evaluated;
+    # those pixels are overwritten with 0 by the da.where below anyway.
+    covered = total_weight > 0
+    safe_weight = da.where(covered, total_weight, 1)
+    normalized = da.where(covered, total_paint / safe_weight, 0)
 
     if not circular_mean:
         return normalized
