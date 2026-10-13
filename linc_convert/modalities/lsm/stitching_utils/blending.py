@@ -12,7 +12,7 @@ RAMP_POWER = 3               # 1 = linear; larger = longer plateau at 0.5
 def sheared_weights(scaler: np.ndarray, shear_z: float, z_out: int) -> np.ndarray:
     """Per-(z, y) blending confidence of a chunk, in the sheared frame."""
     weight = np.where(scaler > MIN_SCALER,
-                      1.0 / np.maximum(scaler, MIN_SCALER), 0.0).astype(np.float32)
+                      (1.0 / np.maximum(scaler, MIN_SCALER)) ** 2, 0.0).astype(np.float32)
     if z_out == weight.shape[0] and shear_z == 0:
         return weight
     return scipy.ndimage.affine_transform(
