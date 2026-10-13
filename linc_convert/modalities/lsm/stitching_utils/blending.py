@@ -6,7 +6,7 @@ import scipy.ndimage
 
 from linc_convert.modalities.lsm.stitching_utils.corrections import MIN_SCALER
 
-RAMP_POWER = 3               # 1 = linear; larger = longer plateau at 0.5
+RAMP_POWER = 5               # 1 = linear; larger = longer plateau at 0.5
 
 
 def sheared_weights(scaler: np.ndarray, shear_z: float, z_out: int) -> np.ndarray:
