@@ -10,7 +10,6 @@ import nibabel as nib
 import numpy as np
 import yaml
 from cyclopts import Parameter
-from dask.diagnostics import ProgressBar
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
@@ -601,8 +600,7 @@ def mosaic2d(
             raise
 
     if nifti_output or jpeg_output or tiff_output:
-        with ProgressBar():
-            result = np.array(result)
+        result = np.array(result)
 
     # Save NIfTI file if requested
     if nifti_output:
@@ -666,8 +664,7 @@ def mosaic2d(
             else:
                 result = da.rechunk(result, chunks=chunk)
 
-            with ProgressBar():
-                da.store(result, dataset, compute=True)
+            da.store(result, dataset, compute=True)
 
         else:
             dataset[...] = result
