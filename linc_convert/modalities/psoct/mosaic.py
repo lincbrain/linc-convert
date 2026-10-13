@@ -90,7 +90,6 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
         import dask_image.imread  # noqa: F401
 
         data = dask_image.imread.imread(file_path)
-        return data
     except ImportError:
         raise ValueError(
             f"Could not load {file_path}. "
@@ -100,6 +99,12 @@ def _load_image_tile(file_path: str, key: str = None) -> da.Array:
     except Exception as e:
         raise ValueError(f"Failed to load {file_path} with dask-image: {e}")
 
+    # For jpeg, a single image is one frame, so drop that leading axis.
+    if data.shape[0] == 1:
+        data = data[0]
+    if data.ndim >= 2:
+        data = da.swapaxes(data, 0, 1)
+    return data
 
 def _save_jpeg(image: np.ndarray, output_path: str, quality: int = 95) -> None:
     """Save image as JPEG."""
@@ -481,6 +486,8 @@ def mosaic2d(
         # Load 2D image
         try:
             image = _load_image_tile(file_path, file_key)
+            if image.ndim == 3 and image.shape[2] == 1:
+                image = image[..., 0]
             if angle_units == "rad" and angle_to_rgb:
               image = da.rad2deg(image)
 
