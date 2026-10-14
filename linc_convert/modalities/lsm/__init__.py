@@ -11,16 +11,22 @@ try:
         "spool",
         "single_volume",
         "strip",
-        "stitch_strips"
+        "stitch_strips",
+        "create_corrections",
+        "register_chunks",
+        "stitch_chunks"
     ]
 
     from . import (
         cli,
+        create_corrections,
         mosaic,
         multi_slice,
         prd,
+        register_chunks,
         single_volume,
         spool,
+        stitch_chunks,
         stitch_strips,
         strip,
     )
