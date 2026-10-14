@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 import numpy as np
 import yaml
+from xarray import DataTree
 
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     compute_noise_map,
@@ -93,7 +94,7 @@ def register_volume_zy(vol_a: np.ndarray, vol_b: np.ndarray, a_y0: float,
     from multiview_stitcher import msi_utils, registration
     from multiview_stitcher import spatial_image_utils as si_utils
 
-    def msim(vol: np.ndarray, tz: float, ty: float) -> Any:
+    def msim(vol: np.ndarray, tz: float, ty: float) -> DataTree:
         sim = si_utils.get_sim_from_array(
             vol, dims=["z", "y", "x"], scale={"z": 1.0, "y": 1.0, "x": 1.0},
             translation={"z": float(tz), "y": float(ty), "x": 0.0},
