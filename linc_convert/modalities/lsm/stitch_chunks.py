@@ -48,8 +48,7 @@ inputs, or ``restart=True``, start over.
 import json
 import os
 import shutil
-from dataclasses import replace
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import cyclopts
 import dask.array as da
@@ -67,8 +66,8 @@ from linc_convert.modalities.lsm.stitching_utils.corrections import (
     sheared_shape,
 )
 from linc_convert.modalities.lsm.stitching_utils.io import (
-    crop_and_flip,
     atomic_write,
+    crop_and_flip,
     discover_tile_paths,
     open_tile_array,
     start_dask,
@@ -134,6 +133,41 @@ def _write_checkpoint(path: str, signature: dict, last_chunk: int,
     atomic_write(path, lambda tmp: tmp.write_text(text))
 
 
+def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
+                     grid: Tuple[int, ...]) -> da.Array:
+    """Rechunk so block edges fall on the output array's chunk/shard grid.
+
+    ``arr`` is written to the output starting at index ``start`` (per axis).
+    Blocks are cut at the multiples of ``grid`` in *output* coordinates, so
+    each block is a whole shard (or chunk) except for the pieces at the two
+    ends of the region. Writing a block that is not aligned would make zarr
+    read, modify and rewrite the shards it straddles.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Data to be stored.
+    start : tuple of int
+        Index in the output array of ``arr``'s first element, per axis.
+    grid : tuple of int
+        Shard shape (or chunk shape if there are no shards) of the output.
+
+    Returns
+    -------
+    dask.array.Array
+        ``arr`` rechunked along the grid.
+    """
+    chunks = {}
+    for axis, (first, step) in enumerate(zip(start, grid)):
+        pos, end, sizes = first, first + arr.shape[axis], []
+        while pos < end:
+            nxt = min((pos // step + 1) * step, end)
+            sizes.append(nxt - pos)
+            pos = nxt
+        chunks[axis] = tuple(sizes)
+    return arr.rechunk(chunks)
+
+
 def corrected_tile(vol: da.Array, noise: np.ndarray, scaler: np.ndarray,
                    shear_x: float, shear_z: float) -> da.Array:
     """Lazily correct and shear a whole chunk.
@@ -179,7 +213,7 @@ def stitch_channel(
     tile_paths: List[str], channel: str, crop: Crop,
     vertical_flip: bool, shear_x: float, shear_z: float, positions_y: List[int],
     positions_z: List[int], corrections_dir: str, out_dir: str,
-    voxel_size: List[float], general_config: GeneralConfig, zarr_config: ZarrConfig,
+    voxel_size: List[float], zarr_config: ZarrConfig,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -208,8 +242,6 @@ def stitch_channel(
         Output ``.ome.zarr`` folder of this channel.
     voxel_size : list of float
         Voxel size in z, y, x order (already reversed).
-    general_config : GeneralConfig
-        Output configuration (its ``out`` is replaced for the pyramid copy).
     zarr_config : ZarrConfig
         Zarr storage configuration.
 
@@ -314,13 +346,19 @@ def stitch_channel(
             assert prev is not None
             blended = blend_overlap(prev, cur, weights, weights, z_origin[index - 1],
                                     zstart, fullshape[0], overlap_prev)
+            blended = _aligned_rechunk(blended, (0, ystart, 0),
+                                       array.shards or array.chunks)
             da.store(blended, array, regions=(slice(0, fullshape[0]),
                                               slice(ystart, ystart +
                                                     overlap_prev),
                                               slice(0, x_out)), lock=True)
         first_row, last_row = overlap_prev, sy - overlap_next
         if last_row > first_row:
-            da.store(cur[:, first_row:last_row],
+            write_vals = cur[:, first_row:last_row]
+            write_vals = _aligned_rechunk(
+                write_vals, (zstart, ystart + first_row, 0),
+                array.shards or array.chunks)
+            da.store(write_vals,
                      array,
                      regions=(slice(zstart, zstart + z_out),
                               slice(ystart + first_row, ystart + last_row),
@@ -328,10 +366,7 @@ def stitch_channel(
         prev = cur
         _write_checkpoint(ckpt, signature, index)
 
-    group.generate_pyramid_staged(levels=zarr_config.levels,
-                                  copy_config=replace(
-                                      general_config, out=out_dir),
-                                  copy_zarr_config=zarr_config)
+    group.generate_pyramid(levels=zarr_config.levels)
     group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
     _write_checkpoint(ckpt, signature, n - 1, done=True)
 
@@ -457,7 +492,7 @@ def stitch_chunks(
             stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
                            shear_z, positions_y, positions_z, corrections_dir,
                            os.path.join(general_config.out, channel),
-                           voxel_size, general_config, zarr_config)
+                           voxel_size, zarr_config)
     finally:
         client.close()
 
