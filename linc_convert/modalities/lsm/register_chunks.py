@@ -38,6 +38,7 @@ import dask.array as da
 import numpy as np
 import yaml
 
+from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.io import (
     crop_and_flip,
     open_tile_array,
@@ -212,10 +213,12 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
 # Main
 # --------------------------------------------------------------------------
 
-app = cyclopts.App(name="register_chunks", help_format="markdown")
+register_chunks = cyclopts.App(
+    name="register_chunks", help_format="markdown")
+lsm.command(register_chunks)
 
 
-@app.default
+@register_chunks.default
 @autoconfig
 def register_chunks(chunks: list[str],
                     *, channel: str, slice_numb: int, camera_numb: int,
@@ -328,7 +331,3 @@ def register_chunks(chunks: list[str],
     }
     write_yaml(out_path, result)
     print(f"wrote {out_path}")
-
-
-if __name__ == "__main__":
-    app()

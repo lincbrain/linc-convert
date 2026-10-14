@@ -46,45 +46,93 @@ folder next to this file.
 
 import os
 import warnings
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import cyclopts
 import numpy as np
 import yaml
+
+from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     calibrate_tile,
     correction_paths,
 )
-from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
-    get_channel_names,
-    get_crops,
-    get_vertical_flip,
-)
-
 from linc_convert.modalities.lsm.stitching_utils.io import (
     crop_and_flip,
     discover_tile_paths,
     open_tile_array,
     write_tiff,
 )
+from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
+    get_channel_names,
+    get_crops,
+    get_vertical_flip,
+)
+from linc_convert.utils.zarr_config import autoconfig
 
-app = cyclopts.App(name="create_corrections", help_format="markdown")
+
+def _create_per_chunk(
+    input_path: str, camera_id: int, slice_number: int, scan_parameters: dict,
+    channels: List[str], chunk_numbers: Optional[List[int]], output_dir: str,
+    background_length: int, zy_threshold_multiplier: float, force: bool,
+) -> Dict[str, Any]:
+    """Calibrate each chunk on its own; see ``create_corrections(per_chunk)``."""
+    tile_paths = discover_tile_paths(input_path, camera_id)
+    numbers = list(chunk_numbers) if chunk_numbers else list(
+        range(1, len(tile_paths) + 1))
+    bad = [i for i in numbers if not 1 <= i <= len(tile_paths)]
+    if bad:
+        raise ValueError(f"chunks {bad} out of range: camera {camera_id} has "
+                         f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
+    crops = get_crops(scan_parameters, camera_id, slice_number)
+    vertical_flip = get_vertical_flip(scan_parameters, camera_id)
+
+    results: Dict[str, Any] = {ch: {} for ch in channels}
+    for number in numbers:
+        todo = []
+        for ch in channels:
+            paths = correction_paths(output_dir, ch, number)
+            results[ch][number] = paths
+            if force or not all(os.path.exists(p) for p in paths.values()):
+                todo.append(ch)
+        if not todo:
+            print(
+                f"[calibration] chunk {number}: TIFFs already exist, skipping")
+            continue
+        path = tile_paths[number - 1]
+        print(f"[calibration] chunk {number}: {os.path.basename(path)}")
+        tile = open_tile_array(path, chunks=(128, 128, 128))
+        for ch in todo:
+            vol = crop_and_flip(tile, crops[ch], vertical_flip)
+            noise_map, scaler_map = calibrate_tile(
+                vol, background_length, zy_threshold_multiplier)
+            write_tiff(results[ch][number]["noise"], noise_map)
+            write_tiff(results[ch][number]["scaler"], scaler_map)
+            print(f"  channel {ch}: noise_map mean={noise_map.mean():.2f}")
+    return results
 
 
-@app.default
+create_corrections = cyclopts.App(
+    name="create_corrections", help_format="markdown")
+lsm.command(create_corrections)
+
+
+@create_corrections.default
+@autoconfig
 def create_corrections(
     input_path: str,
     yaml_path: str,
     camera_id: int,
     slice_number: int,
     *,
-    reference_tiles: List[int],
+    reference_tiles: Optional[List[int]] = None,
     output_dir: str,
+    per_chunk: bool = False,
     background_length: int = 5000,
     zy_threshold_multiplier: float = 1.05,
     only_channel: Optional[str] = None,
     force: bool = False,
-) -> Dict[str, Dict[str, str]]:
+) -> Dict[str, Any]:
     """Create the background-subtraction and zy-correction TIFFs.
 
     Parameters
@@ -97,10 +145,19 @@ def create_corrections(
         Camera number (1 or 2).
     slice_number : int
         Physical slice number (selects the crop definitions).
-    reference_tiles : list of int
+    reference_tiles : list of int, optional
         1-based positions (1 = first chunk) of the tiles to calibrate from.
+        Required unless ``per_chunk`` is set. With ``per_chunk`` it limits
+        which chunks get their own maps (default: all chunks of the camera).
     output_dir : str
         TIFFs are written to ``{output_dir}/{channel}/``.
+    per_chunk : bool, default=False
+        Calibrate every chunk on its own instead of taking the median over
+        reference tiles. Each chunk gets
+        ``{ch}_chunk{NNNN}_alt_zy_noise.tiff`` and ``..._scaler.tiff`` (NNNN is
+        the 1-based chunk number), to be used with ``stitch_chunks`` option
+        ``per_chunk_corrections``. Existing chunk files are skipped unless
+        ``force`` is set.
     background_length : int, default=5000
         Trailing x columns used for each row's noise floor.
     zy_threshold_multiplier : float, default=1.05
@@ -113,9 +170,10 @@ def create_corrections(
 
     Returns
     -------
-    dict of str to dict of str to str
+    dict
         ``{channel: {"noise": path, "scaler": path}}`` for every channel
-        handled. Channels whose TIFFs already exist are reported and
+        handled; with ``per_chunk`` ``{channel: {chunk_number: {"noise": path,
+        "scaler": path}}}``. Maps that already exist are reported and
         skipped unless ``force`` is True.
 
     Raises
@@ -126,7 +184,7 @@ def create_corrections(
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
-    if not reference_tiles:
+    if not per_chunk and not reference_tiles:
         raise ValueError(
             "reference_tiles must contain at least one tile index")
 
@@ -139,6 +197,13 @@ def create_corrections(
                              f"camera {camera_id}'s channels: {channels}")
         channels = [only_channel]
 
+    if per_chunk:
+        return _create_per_chunk(
+            input_path, camera_id, slice_number, scan_parameters, channels,
+            reference_tiles, output_dir, background_length,
+            zy_threshold_multiplier, force)
+
+    assert reference_tiles is not None
     results: Dict[str, Dict[str, str]] = {}
     todo: List[str] = []
     for ch in channels:
@@ -188,7 +253,3 @@ def create_corrections(
               f"{list(reference_tiles)}\n  wrote {results[ch]['noise']}\n"
               f"  wrote {results[ch]['scaler']}")
     return results
-
-
-if __name__ == "__main__":
-    app()

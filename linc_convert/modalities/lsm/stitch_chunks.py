@@ -37,6 +37,11 @@ is ignored unless ``dz_as_shear_z`` is set, which applies it as a z shear
 Output: ``{general_config.out}/{channel}`` (OME-Zarr with a pyramid, written
 with ``space_scale=voxel_size``).
 
+Per-chunk values (optional): ``per_chunk_registration`` uses each pair's own
+``y_offset`` and ``dz`` from the register_chunks YAML instead of the average,
+and ``per_chunk_corrections`` uses each chunk's own noise and scaler maps (made
+by ``create_corrections`` with ``per_chunk``).
+
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
 written, ``{general_config.out}/{channel}.stitch_checkpoint.json`` is updated.
 Running again with the same inputs reopens the output, skips the finished
@@ -55,12 +60,14 @@ import dask.array as da
 import numpy as np
 import yaml
 
+from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.blending import (
     blend_overlap,
     sheared_weights,
 )
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     apply_corrections,
+    correction_paths,
     load_corrections,
     shear_volume,
     sheared_shape,
@@ -73,6 +80,7 @@ from linc_convert.modalities.lsm.stitching_utils.io import (
     start_dask,
 )
 from linc_convert.modalities.lsm.stitching_utils.registration import (
+    load_pair_registration,
     load_tile_positions,
 )
 from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
@@ -168,6 +176,57 @@ def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
     return arr.rechunk(chunks)
 
 
+def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: bool,
+            per_chunk_registration: bool) -> Tuple[List[int], List[int], float]:
+    """Y positions, z origins and z shear of the chunks of one channel.
+
+    Shared registration: chunk ``i`` starts at ``round(i * y_offset)``, all z
+    origins are 0, and ``dz`` becomes ``shear_z = -dz / y_offset`` if
+    ``dz_as_shear_z`` is set.
+
+    Per-chunk registration: every pair uses its own ``y_offset`` and ``dz``
+    (see ``load_pair_registration``). The y positions are the running sum of the
+    offsets. ``shear_z`` is the same for all chunks (``-dz_avg / y_avg`` with
+    ``dz_as_shear_z``, else 0), so the chunks keep one shape. Each pair's own
+    ``dz`` is applied as a z offset of the next chunk,
+    ``dz_i + shear_z * y_offset_i``, which lines the two chunks up exactly
+    (derivation: a feature at row ``r`` of chunk A is at row ``r - y_offset`` of
+    chunk B and ``dz`` lower in z, and the shear moves it by ``shear_z * r``).
+
+    Returns
+    -------
+    positions_y, positions_z : list of int
+    shear_z : float
+    """
+    n = len(tile_paths)
+    if not per_chunk_registration:
+        positions_y, dz = load_tile_positions(coords, n)
+        shear_z = 0.0
+        if dz_as_shear_z:
+            with open(coords) as f:
+                y_offset = float(yaml.safe_load(
+                    f)["weighted_average"]["y_offset"])
+            shear_z = -dz / y_offset
+            print(f"channel {channel}: dz = {dz:.3f} px over y_offset "
+                  f"{y_offset:.2f} px -> shear_z = {shear_z:.6f}")
+        elif abs(dz) > 0.5:
+            print(f"channel {channel}: NOTE dz = {dz:.2f} px is not applied "
+                  "(dz_as_shear_z=False)")
+        return positions_y, [0] * n, shear_z
+
+    names = [os.path.basename(p.rstrip("/")) for p in tile_paths]
+    y, dz_pairs, y_avg, dz_avg = load_pair_registration(coords, names)
+    shear_z = -dz_avg / y_avg if dz_as_shear_z else 0.0
+    positions_y = [int(round(v))
+                   for v in np.concatenate([[0.0], np.cumsum(y)])]
+    z_offsets = np.concatenate([[0.0], np.cumsum(dz_pairs + shear_z * y)])
+    positions_z = [int(round(v)) for v in z_offsets]
+    print(f"channel {channel}: per-chunk registration, shear_z = {shear_z:.6f}; "
+          f"y offsets {y.min():.1f}..{y.max():.1f}, dz {dz_pairs.min():+.2f}.."
+          f"{dz_pairs.max():+.2f} px")
+    return positions_y, positions_z, shear_z
+
+
 def corrected_tile(vol: da.Array, noise: np.ndarray, scaler: np.ndarray,
                    shear_x: float, shear_z: float) -> da.Array:
     """Lazily correct and shear a whole chunk.
@@ -214,6 +273,7 @@ def stitch_channel(
     vertical_flip: bool, shear_x: float, shear_z: float, positions_y: List[int],
     positions_z: List[int], corrections_dir: str, out_dir: str,
     voxel_size: List[float], zarr_config: ZarrConfig,
+    per_chunk_corrections: bool = False,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -244,6 +304,10 @@ def stitch_channel(
         Voxel size in z, y, x order (already reversed).
     zarr_config : ZarrConfig
         Zarr storage configuration.
+    per_chunk_corrections : bool, default=False
+        Use each chunk's own maps (``create_corrections`` with ``per_chunk``,
+        chunk ``i`` uses chunk number ``i + 1``) instead of the shared ones.
+        Each chunk's own blend confidence follows from its own scaler.
 
     Notes
     -----
@@ -274,8 +338,21 @@ def stitch_channel(
     raw_shape = open_tile(tile_paths[0]).shape
     sz, sy, sx = raw_shape
     z_out, _, x_out = sheared_shape(raw_shape, shear_x, abs(shear_z))
-    noise, scaler = load_corrections(corrections_dir, channel)
-    weights = _weights(scaler, shear_z, z_out)
+    if per_chunk_corrections:
+        missing = [p for i in range(n)
+                   for p in correction_paths(corrections_dir, channel, i + 1).values()
+                   if not os.path.exists(p)]
+        if missing:
+            raise FileNotFoundError(
+                f"Missing per-chunk correction file(s), e.g. {missing[0]} "
+                f"({len(missing)} missing)")
+
+    def chunk_maps(index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Noise map, scaler map and blend confidence of one chunk."""
+        noise, scaler = load_corrections(
+            corrections_dir, channel, index + 1 if per_chunk_corrections else None)
+        return noise, scaler, _weights(scaler, shear_z, z_out)
+
     if n > 1 and steps.max() > sy:
         print(f"  WARNING: gap between chunks ({steps.max()} > chunk height {sy}); "
               "the gap is left empty")
@@ -288,7 +365,8 @@ def stitch_channel(
     signature = {"tiles": [os.path.basename(p) for p in tile_paths],
                  "positions_y": [int(y) for y in positions_y],
                  "z_origin": z_origin, "shape": list(fullshape),
-                 "shear": [float(shear_x), float(shear_z)]}
+                 "shear": [float(shear_x), float(shear_z)],
+                 "per_chunk_corrections": bool(per_chunk_corrections)}
     ckpt = _checkpoint_path(out_dir)
     state = _read_checkpoint(ckpt, signature)
     if state is not None and not os.path.isdir(out_dir):
@@ -317,11 +395,13 @@ def stitch_channel(
               f"({start}/{n} written)")
 
     prev: Optional[da.Array] = None
+    prev_weights: Optional[np.ndarray] = None
     if start > 0:
         raw = open_tile(tile_paths[start - 1])
         if raw.shape != raw_shape:
             raise ValueError(f"{os.path.basename(tile_paths[start - 1])} has shape "
                              f"{raw.shape}, expected {raw_shape}")
+        noise, scaler, prev_weights = chunk_maps(start - 1)
         prev = corrected_tile(raw, noise, scaler, shear_x, shear_z)
 
     for index in range(start, n):
@@ -341,10 +421,12 @@ def stitch_channel(
         print(f"[{index + 1}] {os.path.basename(path)}  y={ystart} z={zstart}  "
               f"overlap prev/next = {overlap_prev}/{overlap_next}")
 
+        noise, scaler, cur_weights = chunk_maps(index)
         cur = corrected_tile(raw, noise, scaler, shear_x, shear_z)
         if overlap_prev > 0:
-            assert prev is not None
-            blended = blend_overlap(prev, cur, weights, weights, z_origin[index - 1],
+            assert prev is not None and prev_weights is not None
+            blended = blend_overlap(prev, cur, prev_weights, cur_weights,
+                                    z_origin[index - 1],
                                     zstart, fullshape[0], overlap_prev)
             blended = _aligned_rechunk(blended, (0, ystart, 0),
                                        array.shards or array.chunks)
@@ -363,7 +445,7 @@ def stitch_channel(
                      regions=(slice(zstart, zstart + z_out),
                               slice(ystart + first_row, ystart + last_row),
                               slice(0, x_out)), lock=True)
-        prev = cur
+        prev, prev_weights = cur, cur_weights
         _write_checkpoint(ckpt, signature, index)
 
     group.generate_pyramid(levels=zarr_config.levels)
@@ -375,10 +457,12 @@ def stitch_channel(
 # Main
 # --------------------------------------------------------------------------
 
-app = cyclopts.App(name="stitch_chunks", help_format="markdown")
+stitch_chunks = cyclopts.App(
+    name="stitch_chunks", help_format="markdown")
+lsm.command(stitch_chunks)
 
 
-@app.default
+@stitch_chunks.default
 @autoconfig
 def stitch_chunks(
     input_path: str,
@@ -392,6 +476,8 @@ def stitch_chunks(
     memory_gb: int = 64,
     all_chunks: bool = False,
     dz_as_shear_z: bool = False,
+    per_chunk_registration: bool = False,
+    per_chunk_corrections: bool = False,
     restart: bool = False,
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
@@ -432,6 +518,17 @@ def stitch_chunks(
         step), with all chunk z offsets left at 0. A chunk's rows then move
         in z by ``dz`` over one chunk step, which removes the z drift measured
         between neighbouring chunks.
+    per_chunk_registration : bool, default=False
+        Give every chunk its own registration: each neighbouring pair uses its
+        own ``y_offset`` and ``dz`` from the ``pairs`` in the register_chunks
+        YAML (chunk positions are the running sum of the offsets), instead of
+        the weighted average. Pairs that were not registered, or whose quality
+        is missing or <= 0, use the average. A pair's ``dz`` becomes a z
+        offset of the next chunk (on top of the common ``dz_as_shear_z`` shear,
+        if set).
+    per_chunk_corrections : bool, default=False
+        Give every chunk its own noise and scaler maps (create_corrections
+        with ``per_chunk``), also used for each chunk's blend confidence.
     restart : bool, default=False
         Ignore any checkpoints and rewrite every channel from scratch.
     general_config : GeneralConfig
@@ -476,26 +573,12 @@ def stitch_chunks(
             coords = coords_path.format(channel=channel)
             tile_paths = _resolve_tile_paths(input_path, camera_id, coords,
                                              all_chunks)
-            positions_y, dz = load_tile_positions(coords, len(tile_paths))
-            positions_z = [0] * len(tile_paths)
-            shear_z = 0.0
-            if dz_as_shear_z:
-                with open(coords) as f:
-                    y_offset = float(
-                        yaml.safe_load(f)["weighted_average"]["y_offset"])
-                shear_z = -dz / y_offset
-                print(f"channel {channel}: dz = {dz:.3f} px over y_offset "
-                      f"{y_offset:.2f} px -> shear_z = {shear_z:.6f}")
-            elif abs(dz) > 0.5:
-                print(f"channel {channel}: NOTE dz = {dz:.2f} px is not applied "
-                      "(dz_as_shear_z=False)")
+            positions_y, positions_z, shear_z = _layout(
+                coords, tile_paths, channel, dz_as_shear_z,
+                per_chunk_registration)
             stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
                            shear_z, positions_y, positions_z, corrections_dir,
                            os.path.join(general_config.out, channel),
-                           voxel_size, zarr_config)
+                           voxel_size, zarr_config, per_chunk_corrections)
     finally:
         client.close()
-
-
-if __name__ == "__main__":
-    app()

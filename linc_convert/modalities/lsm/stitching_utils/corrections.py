@@ -3,7 +3,7 @@
 import math
 import os
 import warnings
-from typing import Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -92,20 +92,42 @@ def calibrate_tile(vol: da.Array, background_length: int,
     return noise_map, np.nan_to_num(reciprocal, nan=1e-9)
 
 
-def correction_paths(corrections_dir: str, channel: str) -> Dict[str, str]:
-    """Locate the correction TIFFs of a channel."""
+def correction_paths(corrections_dir: str, channel: str,
+                     chunk: Optional[int] = None) -> Dict[str, str]:
+    """Locate the correction TIFFs of a channel.
+
+    Parameters
+    ----------
+    corrections_dir : str
+        Folder written by ``create_corrections``.
+    channel : str
+        Channel name.
+    chunk : int, optional
+        1-based chunk number for per-chunk corrections
+        (``{ch}_chunk0003_alt_zy_*.tiff``); None for the shared maps.
+
+    Returns
+    -------
+    dict of str to str
+        Paths under the keys ``"noise"`` and ``"scaler"``.
+    """
     folder = os.path.join(corrections_dir, channel)
-    return {"noise": os.path.join(folder, f"{channel}_alt_zy_noise.tiff"),
-            "scaler": os.path.join(folder, f"{channel}_alt_zy_scaler.tiff")}
+    stem = channel if chunk is None else f"{channel}_chunk{chunk:04d}"
+    return {"noise": os.path.join(folder, f"{stem}_alt_zy_noise.tiff"),
+            "scaler": os.path.join(folder, f"{stem}_alt_zy_scaler.tiff")}
 
 
 def load_corrections(
         corrections_dir: str,
-        channel: str
+        channel: str,
+        chunk: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Load the noise and scaler maps made by ``create_corrections``."""
+    """Load the noise and scaler maps made by ``create_corrections``.
+
+    ``chunk`` is the 1-based chunk number for per-chunk maps (None = shared).
+    """
     maps = []
-    for path in correction_paths(corrections_dir, channel).values():
+    for path in correction_paths(corrections_dir, channel, chunk).values():
         if not os.path.exists(path):
             raise FileNotFoundError(f"Missing correction file: {path}")
         arr = tifffile.imread(path).astype(np.float32)

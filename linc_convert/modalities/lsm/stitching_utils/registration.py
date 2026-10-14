@@ -182,3 +182,62 @@ def load_tile_positions(coords_path: str, n_tiles: int) -> Tuple[List[int], floa
         raise ValueError(
             f"weighted_average.y_offset must be > 0, got {y_offset}")
     return [int(round(i * y_offset)) for i in range(n_tiles)], dz
+
+
+def load_pair_registration(
+        coords_path: str, tile_names: List[str]
+) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    """Read the registration of every neighbouring pair of chunks.
+
+    Pairs are matched to ``tile_names`` by file name. A pair that was not
+    registered, or whose quality is missing or <= 0, falls back to the
+    weighted average from register_chunks.
+
+    Parameters
+    ----------
+    coords_path : str
+        YAML written by ``register_chunks``.
+    tile_names : list of str
+        Chunk folder names in stitching order.
+
+    Returns
+    -------
+    y_offsets, dzs : numpy.ndarray
+        y offset and z shift of chunk ``i + 1`` relative to chunk ``i``
+        (``len(tile_names) - 1`` values each, full-resolution pixels).
+    y_average, dz_average : float
+        The weighted averages.
+
+    Raises
+    ------
+    KeyError
+        If the file has no ``weighted_average``.
+    """
+    with open(coords_path) as f:
+        result = yaml.safe_load(f) or {}
+    try:
+        y_avg = float(result["weighted_average"]["y_offset"])
+        dz_avg = float(result["weighted_average"].get("dz", 0.0))
+    except (KeyError, TypeError):
+        raise KeyError(f"{coords_path} has no weighted_average.y_offset "
+                       "(was it written by register_chunks?)")
+    n = len(tile_names)
+    y = np.full(max(n - 1, 0), y_avg)
+    dz = np.full(max(n - 1, 0), dz_avg)
+    position = {name: i for i, name in enumerate(tile_names)}
+    own = 0
+    for pair in result.get("pairs") or []:
+        a = position.get(pair.get("chunk_a"))
+        b = position.get(pair.get("chunk_b"))
+        quality = pair.get("quality")
+        if a is None or b is None or b != a + 1:
+            continue
+        if quality is None or not np.isfinite(quality) or quality <= 0:
+            print(f"  pair {a + 1}->{b + 1}: quality {quality}; "
+                  "using the weighted average")
+            continue
+        y[a], dz[a] = float(pair["y_offset"]), float(pair["dz"])
+        own += 1
+    print(f"  per-chunk registration: {own} of {max(n - 1, 0)} pairs have their own "
+          "values, the rest use the average")
+    return y, dz, y_avg, dz_avg
