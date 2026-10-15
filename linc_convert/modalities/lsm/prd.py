@@ -24,12 +24,11 @@ import tqdm
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.prd import PrdSetInterpreter
 from linc_convert.utils.io.zarr import from_config
-from linc_convert.utils.io.zarr.generate_pyramid import default_levels
 from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
 from linc_convert.utils.io.zarr.stream_pyramid import (
     StreamingPyramidWriter,
-    stream_volume,
     plan_for_memory,
+    stream_volume,
 )
 from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.zarr_config import (

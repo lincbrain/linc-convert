@@ -104,7 +104,7 @@ def ome_v05_to_v06(
 
 
 def ome_v06_to_v05_view(ome: dict[str, Any]) -> dict[str, Any]:
-    """A 0.5-shaped copy of 0.6 metadata (``axes`` + flat scale/translation).
+    """Return a 0.5-shaped copy of 0.6 metadata (``axes``, flat scale/translation).
 
     Used to feed code that predates 0.6; not meant to be written to disk.
     """

@@ -9,10 +9,11 @@ import numpy as np
 import wkw
 import zarr
 
-# internals
-from linc_convert.utils.io.zarr.ome import multiscales_v05_view, ome_v05_to_v06
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.io.zarr import from_config
+
+# internals
+from linc_convert.utils.io.zarr.ome import multiscales_v05_view, ome_v05_to_v06
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
