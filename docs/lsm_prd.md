@@ -5,7 +5,7 @@
 
 ```bash
 linc-convert lsm prd INPUT_DIR --out OUT.nii.zarr \
-    --chunk 32 --max-shard-size 5TB --compressor-opt.clevel 1 --verify
+    --chunk 64 --compressor-opt.clevel 1 --verify
 ```
 
 ## How it works
@@ -32,7 +32,7 @@ whole files and computed the pyramid with dask (validated on the 114 GB
 | Option | Default | Effect |
 |---|---|---|
 | `--chunk N` | 128 | Inner chunk (z, y, x). Smaller chunks give faster small reads and slightly better compression, but slower bulk reads with zarr-python. |
-| `--shard N` / `--max-shard-size S` | none | Shard shape, or the largest uncompressed shard (e.g. `5TB`, the S3 object limit). `--max-shard-size` makes shards span the whole frame in y/x and as many slices along z as fit. |
+| `--shard N` / `--max-shard-size S` | `40GB` | Shard shape, or the largest uncompressed shard (S3 allows up to `5TB`; `none` disables sharding). Shards span the whole frame in y/x and as many slices along z as fit; `40GB` gives ~13 GB shard files at this data's ~3× compression. |
 | `--compressor-opt.clevel L` | 5 | blosc-zstd level. Level 1 is smaller *and* faster on this data (see below). |
 | `--workers N` | all CPUs | Compression threads. |
 | `--slab-depth N` | one chunk | Slices per batch. Deeper slabs only help when compression-bound (many cores, zstd ≥ 3). |
@@ -50,7 +50,7 @@ output goes to node-local disk, reads start with a cold page cache, and runs
 use 8 CPUs. With the input on the same local disk as the output, the
 chunk-32 / zstd-1 conversion wrote at 596 MB/s instead of ~970 MB/s.
 
-### Compression level and chunk size (size and read speed)
+### Compression level and chunk size (local disk)
 
 | chunk / shard | zstd | level 0 ratio | total size | files | zarr-python bulk read | tensorstore bulk read | tensorstore 256² tile | tensorstore XY plane |
 |---|---|---|---|---|---|---|---|---|
@@ -65,8 +65,10 @@ chunk-32 / zstd-1 conversion wrote at 596 MB/s instead of ~970 MB/s.
   compresses about 7× faster per core (985 vs 139 MB/s per core on 128³
   chunks of this data). Level 1 is the better choice for write-once,
   read-many archives of this data.
-- **Chunk 32³ vs 128³.** 32³ is about 3% smaller and 3–5× faster for small
-  reads (tiles, planes, regions) with tensorstore and viewers. Bulk reads
+- **Chunk 32³ vs 128³.** On local disk, 32³ is about 3% smaller and 3–5×
+  faster for small reads (tiles, planes, regions) with tensorstore. On
+  network storage, the extra requests outweigh this and 64³ is the better
+  default (see below). Bulk reads
   with zarr-python are about 4× slower, because of per-chunk Python
   overhead.
 - **Whole-volume shards vs 256³ shards.** One file per level (25 files in
@@ -79,6 +81,35 @@ chunk-32 / zstd-1 conversion wrote at 596 MB/s instead of ~970 MB/s.
 - The default number of pyramid levels grows as chunks shrink (levels are
   added until the coarsest fits in one chunk): 11 levels with 32³ chunks
   vs 9 with 128³ for this stripe. Levels present in both are identical.
+
+### Chunk and shard size on network storage
+
+These reads are from the cluster's network file system (closer to how
+archives are read from S3 than local disk). The outputs were read one at a
+time with zstd 1.
+
+| chunk / shard | size | files | zarr-python bulk | tensorstore 64³ | tensorstore 256² tile | tensorstore XY plane | first read of a shard |
+|---|---|---|---|---|---|---|---|
+| 32 / ~1k slices | 42.97 GB | 72 | 357 MB/s | 15.6 ms | 19.8 ms | 92 ms | 18 ms |
+| 32 / ~4k | 43.00 GB | 35 | 346 MB/s | 16.9 ms | 19.0 ms | 99 ms | 27 ms |
+| 32 / volume | 43.22 GB | 25 | 340 MB/s | 15.8 ms | 18.7 ms | 85 ms | 75 ms |
+| 64 / ~1k | 43.38 GB | 73 | 640 MB/s | 8.4 ms | 13.0 ms | 151 ms | 13 ms |
+| 64 / ~4k | 43.38 GB | 33 | 642 MB/s | 9.8 ms | 14.0 ms | 164 ms | 17 ms |
+| 64 / volume | 43.41 GB | 23 | 711 MB/s | 9.3 ms | 13.9 ms | 149 ms | 18 ms |
+| 128 / ~1k | 44.22 GB | 75 | 727 MB/s | 15.1 ms | 27.2 ms | 336 ms | 25 ms |
+| 128 / ~4k | 44.22 GB | 32 | 744 MB/s | 14.8 ms | 24.3 ms | 334 ms | 29 ms |
+| 128 / volume | 44.22 GB | 21 | 734 MB/s | 27.8 ms | 43.2 ms | 476 ms | 172 ms |
+| 128 / 256³ (existing uploads) | 44.22 GB | 4928 | 1207 MB/s | 25.6 ms | 38.3 ms | 361 ms | 36 ms |
+
+- **Chunk 64 is the best balance.** It has the fastest small reads (about
+  1.5–2× faster than 32 or 128), about 2× the zarr-python bulk speed of 32,
+  and is within 1% of 32's size. Chunk 32 is best only for full XY planes.
+- **Shard size, once large, barely affects steady reads.** It mainly sets the
+  cost of the first read of a shard, which fetches the shard's index. Shards
+  of a few thousand slices keep that low while holding the file count at
+  ~25–75 per stripe, compared with ~4,900 for 256³ shards.
+- The default `--max-shard-size 40GB` (~8,700 slices with chunk 64, ~13 GB
+  per file) sits between the ~4k-slice and whole-volume rows.
 
 ### Write throughput
 

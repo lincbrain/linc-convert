@@ -52,7 +52,7 @@ def convert(
     voxel_size: list[float] = (1, 1, 1),
     workers: int | None = None,
     max_memory: float | None = None,
-    max_shard_size: str | None = "5TB",
+    max_shard_size: str | None = "40GB",
     slab_depth: int | None = None,
     verify: bool = False,
     general_config: GeneralConfig | None = None,
@@ -76,11 +76,12 @@ def convert(
         memory fits; leftover budget deepens the slab (unless `slab_depth`
         is given).
     max_shard_size
-        Largest uncompressed shard size (default "5TB", the S3 object
-        limit), used when `shard` is not given. Shards span the full frame in
-        y and x and as many slices along z as fit. Sharded output is
-        streamed into append-only shard files, so large shards need no extra
-        memory. "none" writes unsharded chunks.
+        Largest uncompressed shard size, used when `shard` is not given
+        (default "40GB": ~13 GB shard files at the ~3x compression of LSM
+        data; S3 allows up to "5TB"). Shards span the full frame in y and x
+        and as many slices along z as fit. Sharded output is streamed into
+        append-only shard files, so large shards need no extra memory.
+        "none" writes unsharded chunks.
     slab_depth
         Slices read, compressed and written per batch (rounded up to the
         inner chunk, or to the shard for non-streamed layouts). Deeper slabs
