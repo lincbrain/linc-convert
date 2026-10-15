@@ -128,13 +128,20 @@ def test_prd_read_frames(tmp_path):
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="1GB")),
         # several shard rows along z, frame-wide shards
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB")),
+        # deep slabs: batches spanning several chunks and shard rows
+        ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB",
+                                    slab_depth=24)),
+        ([37, 37, 11], 21, 34, dict(chunk=(4,), shard=(8,), slab_depth=20)),
+        ([37, 37, 11], 21, 34, dict(chunk=(4,), shard=(8,), slab_depth=20,
+                                    driver="tensorstore")),
     ],
 )
 def test_prd_streaming_matches_legacy(tmp_path, frames, height, width, cfg):
     _write_prd_set(tmp_path / "in", frames, height, width)
     legacy_cfg = dict(cfg, overwrite=True)
     max_shard = legacy_cfg.pop("max_shard_size", None)
-    stream_cfg = dict(legacy_cfg, max_shard_size=max_shard)
+    depth = legacy_cfg.pop("slab_depth", None)
+    stream_cfg = dict(legacy_cfg, max_shard_size=max_shard, slab_depth=depth)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "stream.nii.zarr"),
                 workers=3, **stream_cfg)
     if max_shard:
@@ -195,7 +202,7 @@ def test_prd_max_memory(tmp_path):
 
     shape, unit = (26478, 1200, 1800), (256, 256, 256)
     assert workers_for_memory(64 * 2**30, shape, 2, 256, unit, 8, 8) == 8
-    assert workers_for_memory(int(4 * 2**30), shape, 2, 256, unit, 8, 8) < 8
+    assert 1 <= workers_for_memory(int(5.5 * 2**30), shape, 2, 256, unit, 8, 8) < 8
     with pytest.raises(MemoryError):
         workers_for_memory(2**30, shape, 2, 256, unit, 8, 8)
     # append sink: 32-slice slabs fit comfortably

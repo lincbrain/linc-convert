@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 MAX_UINT_64 = 2**64 - 1
 
 
+def _round_up(n: int, multiple: int) -> int:
+    return -(-int(n) // int(multiple)) * int(multiple)
+
+
 def _crc32c(data: bytes) -> int:
     """CRC-32C (Castagnoli), as used by zarr's crc32c codec.
 
@@ -138,10 +142,11 @@ def _downsample_parallel(
 class ZarrApiSink:
     """Write whole shards (or chunks) of one level through the array API."""
 
-    def __init__(self, arr: ZarrArray) -> None:
+    def __init__(self, arr: ZarrArray, slab_depth: Optional[int] = None) -> None:
         self.arr = arr
         self.unit = tuple(int(u) for u in (arr.shards or arr.chunks))
-        self.unit_z = self.unit[0]
+        # z write unit: whole shards/chunks, optionally several per write
+        self.unit_z = _round_up(slab_depth or self.unit[0], self.unit[0])
 
     def write(
         self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
@@ -164,6 +169,9 @@ class ZarrApiSink:
 
     def close(self) -> None:
         """Nothing to flush."""
+
+    def abort(self) -> None:
+        """Nothing to clean up."""
 
 
 def _inner_encoder(arr: ZarrArray) -> Optional[Callable[[np.ndarray], bytes]]:
@@ -217,15 +225,29 @@ def _inner_encoder(arr: ZarrArray) -> Optional[Callable[[np.ndarray], bytes]]:
 
 
 class ShardAppendSink:
-    """Stream inner chunks of one level into append-only shard files."""
+    """Stream inner chunks of one level into append-only shard files.
 
-    def __init__(self, arr: ZarrArray, encode: Callable[[np.ndarray], bytes]) -> None:
+    Each `write` takes a slab of whole inner chunks along z (a batch of
+    `unit_z` slices). Chunks are compressed by the shared thread pool, one
+    task per (chunk plane, chunk row); offsets are assigned in order on the
+    calling thread, and the bytes are appended by a dedicated I/O thread so
+    the next batch is compressed while this one is written. At most
+    `inflight` batches of compressed bytes are queued.
+    """
+
+    def __init__(
+        self,
+        arr: ZarrArray,
+        encode: Callable[[np.ndarray], bytes],
+        slab_depth: Optional[int] = None,
+        inflight: int = 2,
+    ) -> None:
         inner = arr._array
         self.encode = encode
         self.shape = tuple(int(s) for s in arr.shape)
         self.chunk = tuple(int(c) for c in arr.chunks)
         self.shard = tuple(int(s) for s in arr.shards)
-        self.unit_z = self.chunk[0]
+        self.unit_z = _round_up(slab_depth or self.chunk[0], self.chunk[0])
         self.cps = tuple(s // c for s, c in zip(self.shard, self.chunk))
         self.fill = inner.metadata.fill_value
         self.dtype = np.dtype(arr.dtype)
@@ -234,28 +256,69 @@ class ShardAppendSink:
         # shards open in the current shard row along z: (sy, sx) -> state
         self._open: dict[tuple[int, int], dict] = {}
         self._shard_z: Optional[int] = None
+        self._io = ThreadPoolExecutor(1)
+        self._inflight: list[list] = []
+        self._max_inflight = max(1, inflight)
 
+    # ------------------------------------------------------------- helpers
     def _shard_state(self, sz: int, sy: int, sx: int) -> dict:
         st = self._open.get((sy, sx))
         if st is None:
             path = os.path.join(self.root, self.key((sz, sy, sx)))
-            os.makedirs(os.path.dirname(path), exist_ok=True)
             st = dict(
                 path=path,
-                fh=open(path + ".partial", "wb"),
+                fh=None,
                 offset=0,
                 index=np.full(self.cps + (2,), MAX_UINT_64, dtype="<u8"),
             )
             self._open[(sy, sx)] = st
         return st
 
+    @staticmethod
+    def _append(st: dict, data: bytes) -> None:
+        # runs on the I/O thread, in submission order
+        if st["fh"] is None:
+            os.makedirs(os.path.dirname(st["path"]), exist_ok=True)
+            st["fh"] = open(st["path"] + ".partial", "wb")
+        st["fh"].write(data)
+
+    @staticmethod
+    def _seal(states: list[dict]) -> None:
+        # runs on the I/O thread: write index + crc32c, close, publish
+        for st in states:
+            if st["fh"] is None:
+                os.makedirs(os.path.dirname(st["path"]), exist_ok=True)
+                st["fh"] = open(st["path"] + ".partial", "wb")
+            index = st["index"].tobytes()
+            st["fh"].write(index)
+            st["fh"].write(np.uint32(_crc32c(index)).tobytes())
+            st["fh"].close()
+            os.replace(st["path"] + ".partial", st["path"])
+
+    def _throttle(self, keep: int) -> None:
+        while len(self._inflight) > keep:
+            for fut in self._inflight.pop(0):
+                fut.result()  # re-raises I/O errors
+
+    # ---------------------------------------------------------------- API
     def write(
         self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
     ) -> None:
         """Compress the inner chunks of slab `data` (at `z0`) and append them."""
-        cz, cy, cx = self.chunk
+        cz = self.chunk[0]
         if z0 % cz:
             raise RuntimeError("Appends must be aligned on inner chunks")
+        i, n = 0, data.shape[0]
+        while i < n:  # split at shard boundaries along z
+            zs = z0 + i
+            k = min(n - i, (zs // self.shard[0] + 1) * self.shard[0] - zs)
+            self._write_shard_rows(zs, data[i:i + k], pool)
+            i += k
+
+    def _write_shard_rows(
+        self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
+    ) -> None:
+        cz, cy, cx = self.chunk
         n = data.shape[0]
         sz = z0 // self.shard[0]
         if self._shard_z is not None and sz != self._shard_z:
@@ -264,9 +327,10 @@ class ShardAppendSink:
         ny, nx = self.shape[1:]
         full = (cz, cy, cx)
 
-        def enc_row(y0: int) -> list[tuple[int, bytes]]:
+        def enc_row(task: tuple[int, int]) -> list[tuple[int, bytes]]:
             # one task per row of inner chunks keeps per-task overhead small
-            row = data[:, y0:y0 + cy]
+            dz, y0 = task
+            row = data[dz:dz + cz, y0:y0 + cy]
             out = []
             for x0 in range(0, nx, cx):
                 block = row[:, :, x0:x0 + cx]
@@ -281,11 +345,11 @@ class ShardAppendSink:
                 out.append((x0, self.encode(block)))
             return out
 
-        rows = range(0, ny, cy)
-        encoded = pool.map(enc_row, rows) if pool is not None else map(enc_row, rows)
-        iz = (z0 % self.shard[0]) // cz
+        tasks = [(dz, y0) for dz in range(0, n, cz) for y0 in range(0, ny, cy)]
+        encoded = pool.map(enc_row, tasks) if pool is not None else map(enc_row, tasks)
         pending: dict[tuple[int, int], list[bytes]] = {}
-        for y0, row in zip(rows, encoded):
+        for (dz, y0), row in zip(tasks, encoded):
+            iz = ((z0 + dz) % self.shard[0]) // cz
             sy, iy = y0 // self.shard[1], (y0 % self.shard[1]) // cy
             for x0, buf in row:
                 sx, ix = x0 // self.shard[2], (x0 % self.shard[2]) // cx
@@ -293,28 +357,37 @@ class ShardAppendSink:
                 st["index"][iz, iy, ix] = (st["offset"], len(buf))
                 st["offset"] += len(buf)
                 pending.setdefault((sy, sx), []).append(buf)
-        for key, bufs in pending.items():
-            self._open[key]["fh"].write(b"".join(bufs))
+        futs = [
+            self._io.submit(self._append, self._open[key], b"".join(bufs))
+            for key, bufs in pending.items()
+        ]
+        self._inflight.append(futs)
+        self._throttle(self._max_inflight)
         # shard row complete?
         if z0 + n >= min((sz + 1) * self.shard[0], self.shape[0]):
             self._finalize()
 
     def _finalize(self) -> None:
-        for st in self._open.values():
-            index = st["index"].tobytes()
-            st["fh"].write(index)
-            st["fh"].write(np.uint32(_crc32c(index)).tobytes())
-            st["fh"].close()
-            os.replace(st["path"] + ".partial", st["path"])
+        if self._open:
+            self._inflight.append(
+                [self._io.submit(self._seal, list(self._open.values()))])
         self._open = {}
         self._shard_z = None
 
     def close(self) -> None:
-        """Finalize any shard still open."""
+        """Finalize open shards and wait for all writes."""
         self._finalize()
+        self._throttle(0)
+        self._io.shutdown()
+
+    def abort(self) -> None:
+        """Stop the I/O thread without publishing incomplete shards."""
+        self._io.shutdown(wait=True, cancel_futures=True)
 
 
-def make_sink(arr: ZarrArray, append: Optional[bool] = None):  # noqa: ANN201
+def make_sink(  # noqa: ANN201
+    arr: ZarrArray, append: Optional[bool] = None, slab_depth: Optional[int] = None
+):
     """Pick `ShardAppendSink` when possible (or forced), else `ZarrApiSink`."""
     encode = None
     if append is not False and getattr(arr, "shards", None):
@@ -326,8 +399,8 @@ def make_sink(arr: ZarrArray, append: Optional[bool] = None):  # noqa: ANN201
         if append:
             raise ValueError("Append-only shard writing is not supported for "
                              "this array (needs sharded zarr v3, local store).")
-        return ZarrApiSink(arr)
-    return ShardAppendSink(arr, encode)
+        return ZarrApiSink(arr, slab_depth)
+    return ShardAppendSink(arr, encode, slab_depth)
 
 
 # --------------------------------------------------------------------------
@@ -354,7 +427,8 @@ def estimate_memory(
     slab = unit_z * shape[1] * shape[2] * itemsize
     pyramid = sum(slab / 4**k for k in range(1, levels + 1))
     per_thread = THREAD_OVERHEAD_BYTES + 3 * int(np.prod(tile)) * itemsize
-    return int(3 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_thread)
+    # 2 read buffers + staging + up to ~2 batches of compressed bytes queued
+    return int(4 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_thread)
 
 
 def workers_for_memory(
@@ -385,6 +459,7 @@ class StreamingPyramidWriter:
         no_pyramid_axis: Optional[int] = None,
         max_workers: Optional[int] = None,
         append_shards: Optional[bool] = None,
+        slab_depth: Optional[int] = None,
     ) -> None:
         self.dtype = np.dtype(dtype)
         base = zgroup.create_array(
@@ -399,7 +474,10 @@ class StreamingPyramidWriter:
             self.arrays.append(
                 zgroup.create_array_from_base(str(lvl), tuple(self.shapes[-1]))
             )
-        self.sinks = [make_sink(a, append_shards) for a in self.arrays]
+        # slab_depth: slices per base-level write (rounded up to the native
+        # unit). Deeper slabs use more memory but give the thread pool more
+        # independent tasks per batch.
+        self.sinks = [make_sink(a, append_shards, slab_depth) for a in self.arrays]
         # downsampling factors to go from level l-1 to level l
         self.factors = [None] + [
             [1 if (i == no_pyramid_axis or prev[i] == 1) else 2 for i in range(3)]
@@ -517,7 +595,9 @@ class StreamingPyramidWriter:
             self.shutdown()
 
     def shutdown(self) -> None:
-        """Release the thread pool."""
+        """Release the thread pools."""
+        for sink in getattr(self, "sinks", []):
+            sink.abort()
         if self._pool is not None:
             self._pool.shutdown()
             self._pool = None

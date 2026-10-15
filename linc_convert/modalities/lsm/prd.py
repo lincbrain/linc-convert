@@ -54,6 +54,7 @@ def convert(
     workers: int | None = None,
     max_memory: float | None = None,
     max_shard_size: str | None = None,
+    slab_depth: int | None = None,
     legacy: bool = False,
     general_config: GeneralConfig | None = None,
     zarr_config: ZarrConfig | None = None,
@@ -79,6 +80,11 @@ def convert(
         Shards then span the full frame in y and x and as many slices along
         z as fit; this overrides `shard`. Sharded output is streamed into
         append-only shard files, so large shards need no extra memory.
+    slab_depth
+        Slices read, compressed and written per batch (rounded up to the
+        inner chunk, or to the shard for non-streamed layouts). Deeper slabs
+        use more memory and keep more threads busy. Default: one chunk (or
+        shard) along z.
     legacy
         Use the previous dask-based implementation (high memory use).
     general_config
@@ -126,7 +132,8 @@ def convert(
                 levels = default_levels(reader.shape, chunk[-3:], None)
             appendable = (shard is not None and zarr_config.zarr_version == 3
                           and zarr_config.driver == "zarr-python")
-            unit_z = chunk[-3] if appendable else (shard or chunk)[-3]
+            native = chunk[-3] if appendable else (shard or chunk)[-3]
+            unit_z = -(-(slab_depth or native) // native) * native
             tile = chunk[-3:] if appendable else (shard or chunk)[-3:]
             workers = workers_for_memory(
                 int(max_memory * 2**30), reader.shape, reader.dtype.itemsize,
@@ -136,6 +143,7 @@ def convert(
         writer = StreamingPyramidWriter(
             zgroup, reader.shape, reader.dtype, zarr_config,
             levels=zarr_config.levels, max_workers=workers,
+            slab_depth=slab_depth,
         )
         with tqdm.tqdm(total=reader.shape[0], unit="frame") as pbar:
             stream_volume(writer, reader.read_frames, pbar.update)
