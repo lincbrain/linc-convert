@@ -193,10 +193,10 @@ def _inner_encoder(arr: ZarrArray) -> Optional[Callable[[np.ndarray], bytes]]:
         "<" if endian in (None, "little") else ">")
 
     def encode(chunk: np.ndarray) -> bytes:
-        buf = np.ascontiguousarray(chunk, dtype=target).tobytes()
+        buf = np.ascontiguousarray(chunk, dtype=target)
         for step in steps:
-            buf = bytes(step(buf))
-        return buf
+            buf = step(buf)
+        return bytes(buf)
 
     return encode
 
@@ -247,32 +247,39 @@ class ShardAppendSink:
             self._finalize()
         self._shard_z = sz
         ny, nx = self.shape[1:]
-        tiles = [(y0, x0) for y0 in range(0, ny, cy) for x0 in range(0, nx, cx)]
         full = (cz, cy, cx)
 
-        def enc(tile: tuple[int, int]) -> Optional[bytes]:
-            y0, x0 = tile
-            block = data[:, y0:y0 + cy, x0:x0 + cx]
-            if block.shape != full:  # edge chunk: pad with the fill value
-                padded = np.full(full, self.fill, dtype=self.dtype)
-                padded[: block.shape[0], : block.shape[1], : block.shape[2]] = block
-                block = padded
-            if np.all(block == self.fill):
-                return None  # like zarr-python's write_empty_chunks=False
-            return self.encode(block)
+        def enc_row(y0: int) -> list[tuple[int, bytes]]:
+            # one task per row of inner chunks keeps per-task overhead small
+            row = data[:, y0:y0 + cy]
+            out = []
+            for x0 in range(0, nx, cx):
+                block = row[:, :, x0:x0 + cx]
+                if block.shape != full:  # edge chunk: pad with the fill value
+                    padded = np.full(full, self.fill, dtype=self.dtype)
+                    padded[: block.shape[0], : block.shape[1], : block.shape[2]] = block
+                    block = padded
+                if self.fill == 0 and not block.any():
+                    continue  # like zarr-python's write_empty_chunks=False
+                if self.fill != 0 and np.all(block == self.fill):
+                    continue
+                out.append((x0, self.encode(block)))
+            return out
 
-        encoded = pool.map(enc, tiles) if pool is not None else map(enc, tiles)
+        rows = range(0, ny, cy)
+        encoded = pool.map(enc_row, rows) if pool is not None else map(enc_row, rows)
         iz = (z0 % self.shard[0]) // cz
-        for (y0, x0), buf in zip(tiles, encoded):
-            if buf is None:
-                continue
-            sy, sx = y0 // self.shard[1], x0 // self.shard[2]
-            st = self._shard_state(sz, sy, sx)
-            st["fh"].write(buf)
-            iy = (y0 % self.shard[1]) // cy
-            ix = (x0 % self.shard[2]) // cx
-            st["index"][iz, iy, ix] = (st["offset"], len(buf))
-            st["offset"] += len(buf)
+        pending: dict[tuple[int, int], list[bytes]] = {}
+        for y0, row in zip(rows, encoded):
+            sy, iy = y0 // self.shard[1], (y0 % self.shard[1]) // cy
+            for x0, buf in row:
+                sx, ix = x0 // self.shard[2], (x0 % self.shard[2]) // cx
+                st = self._shard_state(sz, sy, sx)
+                st["index"][iz, iy, ix] = (st["offset"], len(buf))
+                st["offset"] += len(buf)
+                pending.setdefault((sy, sx), []).append(buf)
+        for key, bufs in pending.items():
+            self._open[key]["fh"].write(b"".join(bufs))
         # shard row complete?
         if z0 + n >= min((sz + 1) * self.shard[0], self.shape[0]):
             self._finalize()
