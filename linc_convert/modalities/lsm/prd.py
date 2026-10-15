@@ -29,7 +29,7 @@ from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
 from linc_convert.utils.io.zarr.stream_pyramid import (
     StreamingPyramidWriter,
     stream_volume,
-    workers_for_memory,
+    plan_for_memory,
 )
 from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.zarr_config import (
@@ -72,8 +72,9 @@ def convert(
         Number of threads used to compress and write chunks.
         Default: number of available CPUs.
     max_memory
-        Memory budget in GiB. The number of workers is reduced until the
-        estimated peak memory fits (useful during acquisition).
+        Memory budget in GiB. Workers are reduced until the estimated peak
+        memory fits; leftover budget deepens the slab (unless `slab_depth`
+        is given).
     max_shard_size
         Largest uncompressed shard size, e.g. "5TB" (the S3 object limit).
         Shards then span the full frame in y and x and as many slices along
@@ -122,20 +123,15 @@ def convert(
         len(reader.prd_files), *reader.shape,
     )
     if max_memory:
-        chunk, shard = _compute_zarr_layout(
-            reader.shape, reader.dtype, zarr_config)
-        levels = zarr_config.levels
-        if levels == -1:
-            levels = default_levels(reader.shape, chunk[-3:], None)
+        chunk, shard = _compute_zarr_layout(reader.shape, reader.dtype, zarr_config)
         appendable = shard is not None and zarr_config.driver == "zarr-python"
-        native = chunk[-3] if appendable else (shard or chunk)[-3]
-        unit_z = -(-(slab_depth or native) // native) * native
-        tile = chunk[-3:] if appendable else (shard or chunk)[-3:]
-        workers = workers_for_memory(
+        native = (chunk if appendable else (shard or chunk))[-3:]
+        planned, depth = plan_for_memory(
             int(max_memory * 2**30), reader.shape, reader.dtype.itemsize,
-            unit_z, tile, levels, workers,
-        )
-        logger.info("Using %d worker(s) to fit %.1f GiB", workers, max_memory)
+            native[0], native, workers)
+        workers, slab_depth = planned, slab_depth or depth
+        logger.info("Using %d worker(s), slab depth %d to fit %.1f GiB",
+                    workers, slab_depth, max_memory)
     writer = StreamingPyramidWriter(
         zgroup, reader.shape, reader.dtype, zarr_config,
         levels=zarr_config.levels, max_workers=workers,

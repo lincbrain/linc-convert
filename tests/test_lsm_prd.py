@@ -351,18 +351,23 @@ def test_prd_output_independent_of_threads_and_depth(tmp_path):
 # memory budget
 # --------------------------------------------------------------------------
 def test_prd_max_memory(tmp_path):
-    from linc_convert.utils.io.zarr.stream_pyramid import workers_for_memory
+    from linc_convert.utils.io.zarr.stream_pyramid import plan_for_memory
 
-    shape, unit = (26478, 1200, 1800), (256, 256, 256)
-    assert workers_for_memory(64 * 2**30, shape, 2, 256, unit, 8, 8) == 8
-    assert 1 <= workers_for_memory(int(5.5 * 2**30), shape, 2, 256, unit, 8, 8) < 8
+    shape, gib = (26478, 1200, 1800), 2**30
+    chunk, shard = (32, 32, 32), (256, 256, 256)
+    # streamed shards: all workers, deeper slabs as the budget grows
+    assert plan_for_memory(2 * gib, shape, 2, 32, chunk, 8) == (8, 64)
+    assert plan_for_memory(8 * gib, shape, 2, 32, chunk, 8) == (8, 256)
+    # smaller frames (another acquisition resolution) afford deeper slabs
+    assert plan_for_memory(2 * gib, (70500, 400, 1000), 2, 32, chunk, 8) == (8, 256)
+    # whole-shard writes need a 256-deep slab; workers are cut first
+    assert plan_for_memory(4 * gib, shape, 2, 256, shard, 8)[0] < 8
     with pytest.raises(MemoryError):
-        workers_for_memory(2**30, shape, 2, 256, unit, 8, 8)
-    assert workers_for_memory(2**30, shape, 2, 32, (32, 32, 32), 8, 8) == 8
+        plan_for_memory(gib, shape, 2, 256, shard, 8)
 
     vol = _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "c.nii.zarr"),
-                chunk=(8,), workers=4, max_memory=0.5, max_shard_size="5TB")
+                chunk=(8,), workers=4, max_memory=1, max_shard_size="5TB")
     _assert_pyramid(tmp_path / "c.nii.zarr", _reference_pyramid(vol, 8))
 
 

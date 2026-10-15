@@ -406,44 +406,51 @@ def make_sink(  # noqa: ANN201
 # --------------------------------------------------------------------------
 # writer
 # --------------------------------------------------------------------------
-# main-process heap besides the buffers, and per-thread working memory
-MAIN_OVERHEAD_BYTES = 300 * 2**20
-THREAD_OVERHEAD_BYTES = 16 * 2**20
+# Calibrated on full 1200x1800 uint16 stripes (slab = slab_depth x frame
+# bytes): unconstrained peak RSS with 8 threads was 1.15, 2.1, 3.5 and 6.8 GB
+# for slabs of 32, 128, 256 and 512 slices; under a memory limit it shrinks
+# (a 1 GB limit worked at depth 32 with 8 threads).
+BASE_BYTES = 512 * 2**20
+THREAD_BYTES = 25 * 2**20
 
 
 def estimate_memory(
-    shape: Sequence[int],
-    itemsize: int,
-    unit_z: int,
-    tile: Sequence[int],
+    shape: Sequence[int], itemsize: int, slab_depth: int, tile: Sequence[int],
     workers: int,
-    levels: int,
 ) -> int:
     """Rough peak memory (bytes) of `StreamingPyramidWriter`.
 
-    `unit_z` is the z write unit and `tile` the block encoded by one thread
-    (inner chunk for the append sink, shard otherwise).
+    `tile` is the block one thread encodes at a time (inner chunk for the
+    append sink, shard otherwise).
     """
-    slab = unit_z * shape[1] * shape[2] * itemsize
-    pyramid = sum(slab / 4**k for k in range(1, levels + 1))
-    per_thread = THREAD_OVERHEAD_BYTES + 3 * int(np.prod(tile)) * itemsize
-    # 2 read buffers + staging + up to ~2 batches of compressed bytes queued
-    return int(4 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_thread)
+    slab = slab_depth * shape[1] * shape[2] * itemsize
+    per_thread = THREAD_BYTES + 3 * int(np.prod(tile)) * itemsize
+    return int(BASE_BYTES + 3 * slab + workers * per_thread)
 
 
-def workers_for_memory(
-    max_bytes: int, shape: Sequence[int], itemsize: int, unit_z: int,
-    tile: Sequence[int], levels: int, max_workers: int,
-) -> int:
-    """Largest worker count (<= max_workers, >= 1) whose estimate fits."""
-    for w in range(max_workers, 0, -1):
-        if estimate_memory(shape, itemsize, unit_z, tile, w, levels) <= max_bytes:
-            return w
-    need = estimate_memory(shape, itemsize, unit_z, tile, 1, levels)
-    raise MemoryError(
-        f"Need ~{need / 2**30:.1f} GiB even with one worker; use a smaller "
-        f"write unit along z (current {unit_z}) or allow more memory."
-    )
+def plan_for_memory(
+    max_bytes: int, shape: Sequence[int], itemsize: int, native_z: int,
+    tile: Sequence[int], max_workers: int, max_depth: int = 256,
+) -> tuple[int, int]:
+    """(workers, slab_depth) that fit `max_bytes`.
+
+    Keep as many workers as possible, then double the slab depth (more
+    parallel tasks per batch; helps when compression-bound) up to
+    `max_depth` while the estimate still fits.
+    """
+    def fits(depth: int, workers: int) -> bool:
+        return estimate_memory(shape, itemsize, depth, tile, workers) <= max_bytes
+
+    workers = next((w for w in range(max_workers, 0, -1) if fits(native_z, w)), 0)
+    if not workers:
+        need = estimate_memory(shape, itemsize, native_z, tile, 1)
+        raise MemoryError(
+            f"Need ~{need / 2**30:.1f} GiB even with one worker; use a smaller "
+            f"chunk/shard along z (current {native_z}) or allow more memory.")
+    depth = native_z
+    while depth * 2 <= max_depth and fits(depth * 2, workers):
+        depth *= 2
+    return workers, depth
 
 
 class StreamingPyramidWriter:
