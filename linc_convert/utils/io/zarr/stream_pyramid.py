@@ -1,29 +1,34 @@
 """Single-pass, bounded-memory writer for a 3D array and its pyramid.
 
 Frames are pushed along the first (z) axis in order. Each pyramid level keeps
-a buffer of one write unit (shard, or chunk if unsharded) along z, so peak
-memory is roughly ``3 * unit_z * Y * X * itemsize`` for level 0 plus a
-geometric tail for the coarser levels, independent of the volume size.
+a buffer of one write unit along z, so peak memory is roughly
+``2 * unit_z * Y * X * itemsize`` for level 0 plus a geometric tail for the
+coarser levels, independent of the volume size.
 
 The output is identical to writing level 0 and then calling
 `ZarrGroup.generate_pyramid` with ``mode="mean"``: 2x windows, excess voxels
 trimmed, factor 1 along singleton or `no_pyramid_axis` dimensions, mean cast
 back to the input dtype (truncation).
 
-Level 0 dominates the cost (compression). zarr-python serializes most of the
-shard encoding within one process, so with the zarr-python driver level-0
-tiles are encoded by a pool of worker *processes* reading the slab from
-shared memory, while the main process downsamples and writes the coarser
-levels. With other drivers (tensorstore), worker threads are used.
+Two sinks write a level:
+
+* `ShardAppendSink` (sharded zarr v3, zarr-python driver, local store).
+  Inner chunks are compressed by a thread pool and appended to their shard
+  file as soon as a chunk-thick z slab is available; the shard index is
+  written when the shard is complete. The write unit is one *inner chunk*
+  along z, so shards can be arbitrarily large (e.g. one shard per volume)
+  without read-modify-write. Shard files are written as ``<key>.partial`` and
+  renamed when complete.
+* `ZarrApiSink` (anything else). Whole shards (or chunks) are written through
+  the array API by a thread pool; the write unit is one shard along z.
 """
 
 from __future__ import annotations
 
 import logging
-import multiprocessing as mp
+import os
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import shared_memory
-from typing import Callable, Iterator, Literal, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 import numpy as np
 from numpy.typing import DTypeLike
@@ -34,7 +39,12 @@ from linc_convert.utils.zarr_config import ZarrConfig
 
 logger = logging.getLogger(__name__)
 
+MAX_UINT_64 = 2**64 - 1
 
+
+# --------------------------------------------------------------------------
+# downsampling
+# --------------------------------------------------------------------------
 def _downsample(block: np.ndarray, factors: Sequence[int]) -> np.ndarray:
     """Mean over non-overlapping windows, trimming excess voxels.
 
@@ -84,7 +94,6 @@ def _downsample_parallel(
     """
     out_shape = [s // f for s, f in zip(block.shape, factors)]
     ny_out = out_shape[1]
-    # bytes of input touched per output row
     row_bytes = block.nbytes // max(block.shape[1], 1) * factors[1]
     nbands = max(1, min(ny_out, int(np.ceil(row_bytes * ny_out / band_bytes))))
     if pool is not None:
@@ -109,113 +118,237 @@ def _downsample_parallel(
 
 
 # --------------------------------------------------------------------------
-# process workers (zarr-python driver, local store)
+# sinks
 # --------------------------------------------------------------------------
-_W_BUFS: list[np.ndarray] = []
-_W_SHMS: list[shared_memory.SharedMemory] = []
-_W_ARRS: list = []
+class ZarrApiSink:
+    """Write whole shards (or chunks) of one level through the array API."""
+
+    def __init__(self, arr: ZarrArray) -> None:
+        self.arr = arr
+        self.unit = tuple(int(u) for u in (arr.shards or arr.chunks))
+        self.unit_z = self.unit[0]
+
+    def write(
+        self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
+    ) -> None:
+        """Write `data` at z offset `z0`, one shard/chunk tile per task."""
+        z1 = z0 + data.shape[0]
+        if pool is None:
+            self.arr[z0:z1] = data
+            return
+        _, uy, ux = self.unit
+        ny, nx = data.shape[1:]
+        tiles = [(y0, min(y0 + uy, ny), x0, min(x0 + ux, nx))
+                 for y0 in range(0, ny, uy) for x0 in range(0, nx, ux)]
+
+        def put(tile: tuple[int, int, int, int]) -> None:
+            y0, y1, x0, x1 = tile
+            self.arr[z0:z1, y0:y1, x0:x1] = data[:, y0:y1, x0:x1]
+
+        list(pool.map(put, tiles))
+
+    def close(self) -> None:
+        """Nothing to flush."""
 
 
-def _attach_shm(name: str) -> shared_memory.SharedMemory:
-    """Attach to an existing segment without registering it for cleanup."""
-    try:
-        return shared_memory.SharedMemory(name=name, track=False)
-    except TypeError:  # Python < 3.13
-        from multiprocessing import resource_tracker
+def _inner_encoder(arr: ZarrArray) -> Optional[Callable[[np.ndarray], bytes]]:
+    """Return a numpy->bytes encoder matching the shard's inner codecs.
 
-        register = resource_tracker.register
-        resource_tracker.register = lambda *a, **k: None
-        try:
-            return shared_memory.SharedMemory(name=name)
-        finally:
-            resource_tracker.register = register
+    Supports ``[bytes, blosc|zstd|gzip]`` inner codecs with a
+    ``[bytes, crc32c]`` index at the end of the shard; None otherwise.
+    """
+    import zarr.codecs as zc
 
-
-def _worker_init(
-    buffers: list[tuple[str, tuple]], dtype: str, locations: list[tuple[str, str]]
-) -> None:
-    import zarr
-
-    # one shard at a time per process; avoid per-thread malloc arenas
-    zarr.config.set({"threading.max_workers": 1, "async.concurrency": 4})
-
-    _W_SHMS[:] = [_attach_shm(name) for name, _ in buffers]
-    _W_BUFS[:] = [
-        np.ndarray(shape, dtype, buffer=s.buf)
-        for s, (_, shape) in zip(_W_SHMS, buffers)
-    ]
-    _W_ARRS[:] = [
-        zarr.open_array(zarr.storage.LocalStore(root), path=path, mode="r+")
-        for root, path in locations
-    ]
-
-
-def _worker_put(task: tuple) -> None:
-    b, lvl, z0, n, y0, y1, x0, x1 = task
-    _W_ARRS[lvl][z0: z0 + n, y0:y1, x0:x1] = _W_BUFS[b][:n, y0:y1, x0:x1]
-
-
-def _spawn_pool(processes: int, initializer: Callable, initargs: tuple):  # noqa: ANN202
-    """Spawn a worker pool, limiting glibc malloc arenas in the children."""
-    import os
-
-    env = os.environ.get("MALLOC_ARENA_MAX")
-    os.environ.setdefault("MALLOC_ARENA_MAX", "2")
-    try:
-        return mp.get_context("spawn").Pool(processes, initializer, initargs)
-    finally:
-        if env is None:
-            os.environ.pop("MALLOC_ARENA_MAX", None)
-
-
-def _local_zarr_location(arr: ZarrArray) -> Optional[tuple[str, str]]:
-    """(root, path) of a zarr-python array in a LocalStore, else None."""
-    inner = getattr(arr, "_array", None)
-    store = getattr(inner, "store", None)
-    root = getattr(store, "root", None)
-    if inner is None or root is None or type(store).__name__ != "LocalStore":
+    meta = getattr(getattr(arr, "_array", None), "metadata", None)
+    codecs = getattr(meta, "codecs", None)
+    if not codecs or len(codecs) != 1 or not isinstance(codecs[0], zc.ShardingCodec):
         return None
-    return str(root), str(inner.path)
+    shard_codec = codecs[0]
+    location = getattr(shard_codec.index_location, "value", shard_codec.index_location)
+    if location != "end":
+        return None
+    idx = list(shard_codec.index_codecs)
+    if not (len(idx) == 2 and isinstance(idx[0], zc.BytesCodec)
+            and isinstance(idx[1], zc.Crc32cCodec)):
+        return None
+    inner = list(shard_codec.codecs)
+    if not inner or not isinstance(inner[0], zc.BytesCodec):
+        return None
+    endian = getattr(inner[0].endian, "value", inner[0].endian)
+    steps: list[Callable[[bytes], bytes]] = []
+    for c in inner[1:]:
+        if isinstance(c, zc.BloscCodec):
+            steps.append(c._blosc_codec.encode)
+        elif isinstance(c, zc.ZstdCodec):
+            import numcodecs
+
+            steps.append(numcodecs.Zstd(level=c.level, checksum=c.checksum).encode)
+        elif isinstance(c, zc.GzipCodec):
+            import numcodecs
+
+            steps.append(numcodecs.GZip(level=c.level).encode)
+        else:
+            return None
+    target = np.dtype(arr.dtype).newbyteorder(
+        "<" if endian in (None, "little") else ">")
+
+    def encode(chunk: np.ndarray) -> bytes:
+        buf = np.ascontiguousarray(chunk, dtype=target).tobytes()
+        for step in steps:
+            buf = bytes(step(buf))
+        return buf
+
+    return encode
 
 
-# per-worker overhead (interpreter + numpy/zarr + one shard being encoded)
-WORKER_OVERHEAD_BYTES = 160 * 2**20
-# main process heap besides the buffers
+class ShardAppendSink:
+    """Stream inner chunks of one level into append-only shard files."""
+
+    def __init__(self, arr: ZarrArray, encode: Callable[[np.ndarray], bytes]) -> None:
+        inner = arr._array
+        self.encode = encode
+        self.shape = tuple(int(s) for s in arr.shape)
+        self.chunk = tuple(int(c) for c in arr.chunks)
+        self.shard = tuple(int(s) for s in arr.shards)
+        self.unit_z = self.chunk[0]
+        self.cps = tuple(s // c for s, c in zip(self.shard, self.chunk))
+        self.fill = inner.metadata.fill_value
+        self.dtype = np.dtype(arr.dtype)
+        self.root = os.path.join(str(inner.store.root), inner.path)
+        self.key = inner.metadata.chunk_key_encoding.encode_chunk_key
+        # shards open in the current shard row along z: (sy, sx) -> state
+        self._open: dict[tuple[int, int], dict] = {}
+        self._shard_z: Optional[int] = None
+
+    def _shard_state(self, sz: int, sy: int, sx: int) -> dict:
+        st = self._open.get((sy, sx))
+        if st is None:
+            path = os.path.join(self.root, self.key((sz, sy, sx)))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            st = dict(
+                path=path,
+                fh=open(path + ".partial", "wb"),
+                offset=0,
+                index=np.full(self.cps + (2,), MAX_UINT_64, dtype="<u8"),
+            )
+            self._open[(sy, sx)] = st
+        return st
+
+    def write(
+        self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
+    ) -> None:
+        """Compress the inner chunks of slab `data` (at `z0`) and append them."""
+        cz, cy, cx = self.chunk
+        if z0 % cz:
+            raise RuntimeError("Appends must be aligned on inner chunks")
+        n = data.shape[0]
+        sz = z0 // self.shard[0]
+        if self._shard_z is not None and sz != self._shard_z:
+            self._finalize()
+        self._shard_z = sz
+        ny, nx = self.shape[1:]
+        tiles = [(y0, x0) for y0 in range(0, ny, cy) for x0 in range(0, nx, cx)]
+        full = (cz, cy, cx)
+
+        def enc(tile: tuple[int, int]) -> Optional[bytes]:
+            y0, x0 = tile
+            block = data[:, y0:y0 + cy, x0:x0 + cx]
+            if block.shape != full:  # edge chunk: pad with the fill value
+                padded = np.full(full, self.fill, dtype=self.dtype)
+                padded[: block.shape[0], : block.shape[1], : block.shape[2]] = block
+                block = padded
+            if np.all(block == self.fill):
+                return None  # like zarr-python's write_empty_chunks=False
+            return self.encode(block)
+
+        encoded = pool.map(enc, tiles) if pool is not None else map(enc, tiles)
+        iz = (z0 % self.shard[0]) // cz
+        for (y0, x0), buf in zip(tiles, encoded):
+            if buf is None:
+                continue
+            sy, sx = y0 // self.shard[1], x0 // self.shard[2]
+            st = self._shard_state(sz, sy, sx)
+            st["fh"].write(buf)
+            iy = (y0 % self.shard[1]) // cy
+            ix = (x0 % self.shard[2]) // cx
+            st["index"][iz, iy, ix] = (st["offset"], len(buf))
+            st["offset"] += len(buf)
+        # shard row complete?
+        if z0 + n >= min((sz + 1) * self.shard[0], self.shape[0]):
+            self._finalize()
+
+    def _finalize(self) -> None:
+        import google_crc32c
+
+        for st in self._open.values():
+            index = st["index"].tobytes()
+            st["fh"].write(index)
+            st["fh"].write(np.uint32(google_crc32c.value(index)).tobytes())
+            st["fh"].close()
+            os.replace(st["path"] + ".partial", st["path"])
+        self._open = {}
+        self._shard_z = None
+
+    def close(self) -> None:
+        """Finalize any shard still open."""
+        self._finalize()
+
+
+def make_sink(arr: ZarrArray, append: Optional[bool] = None):  # noqa: ANN201
+    """Pick `ShardAppendSink` when possible (or forced), else `ZarrApiSink`."""
+    encode = None
+    if append is not False and getattr(arr, "shards", None):
+        inner = getattr(arr, "_array", None)
+        store = getattr(inner, "store", None)
+        if type(store).__name__ == "LocalStore":
+            encode = _inner_encoder(arr)
+    if encode is None:
+        if append:
+            raise ValueError("Append-only shard writing is not supported for "
+                             "this array (needs sharded zarr v3, local store).")
+        return ZarrApiSink(arr)
+    return ShardAppendSink(arr, encode)
+
+
+# --------------------------------------------------------------------------
+# writer
+# --------------------------------------------------------------------------
+# main-process heap besides the buffers, and per-thread working memory
 MAIN_OVERHEAD_BYTES = 300 * 2**20
+THREAD_OVERHEAD_BYTES = 16 * 2**20
 
 
 def estimate_memory(
     shape: Sequence[int],
     itemsize: int,
-    unit: Sequence[int],
+    unit_z: int,
+    tile: Sequence[int],
     workers: int,
     levels: int,
 ) -> int:
     """Rough peak memory (bytes) of `StreamingPyramidWriter`.
 
-    `unit` is the (z, y, x) write unit (shard, or chunk if unsharded).
-    Counts two level-0 slabs (read/write ping-pong), one slab per coarser
-    level, and a fixed cost per worker.
+    `unit_z` is the z write unit and `tile` the block encoded by one thread
+    (inner chunk for the append sink, shard otherwise).
     """
-    slab = unit[0] * shape[1] * shape[2] * itemsize
+    slab = unit_z * shape[1] * shape[2] * itemsize
     pyramid = sum(slab / 4**k for k in range(1, levels + 1))
-    shard = int(np.prod(unit)) * itemsize
-    per_worker = WORKER_OVERHEAD_BYTES + 2 * shard
-    return int(2 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_worker)
+    per_thread = THREAD_OVERHEAD_BYTES + 3 * int(np.prod(tile)) * itemsize
+    return int(3 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_thread)
 
 
 def workers_for_memory(
-    max_bytes: int, shape: Sequence[int], itemsize: int, unit: Sequence[int],
-    levels: int, max_workers: int,
+    max_bytes: int, shape: Sequence[int], itemsize: int, unit_z: int,
+    tile: Sequence[int], levels: int, max_workers: int,
 ) -> int:
     """Largest worker count (<= max_workers, >= 1) whose estimate fits."""
     for w in range(max_workers, 0, -1):
-        if estimate_memory(shape, itemsize, unit, w, levels) <= max_bytes:
+        if estimate_memory(shape, itemsize, unit_z, tile, w, levels) <= max_bytes:
             return w
-    need = estimate_memory(shape, itemsize, unit, 1, levels)
+    need = estimate_memory(shape, itemsize, unit_z, tile, 1, levels)
     raise MemoryError(
         f"Need ~{need / 2**30:.1f} GiB even with one worker; use a smaller "
-        f"shard/chunk along z (current {unit[0]}) or allow more memory."
+        f"write unit along z (current {unit_z}) or allow more memory."
     )
 
 
@@ -231,7 +364,7 @@ class StreamingPyramidWriter:
         levels: int = -1,
         no_pyramid_axis: Optional[int] = None,
         max_workers: Optional[int] = None,
-        worker_type: Optional[Literal["process", "thread"]] = None,
+        append_shards: Optional[bool] = None,
     ) -> None:
         self.dtype = np.dtype(dtype)
         base = zgroup.create_array(
@@ -246,64 +379,35 @@ class StreamingPyramidWriter:
             self.arrays.append(
                 zgroup.create_array_from_base(str(lvl), tuple(self.shapes[-1]))
             )
+        self.sinks = [make_sink(a, append_shards) for a in self.arrays]
         # downsampling factors to go from level l-1 to level l
         self.factors = [None] + [
             [1 if (i == no_pyramid_axis or prev[i] == 1) else 2 for i in range(3)]
             for prev in self.shapes[:-1]
         ]
-        # z write unit per level: one shard (or chunk) thick, so each write
-        # touches whole chunks/shards and never needs read-modify-write
-        self.unit = [int((a.shards or a.chunks)[0]) for a in self.arrays]
+        self.unit = [s.unit_z for s in self.sinks]
         self.fill = [0] * self.nlevels
         self.cursor = [0] * self.nlevels
         # frames of level l-1 waiting to be paired along z for level l
         self.carry: list[Optional[np.ndarray]] = [None] * self.nlevels
-
         workers = max(1, int(max_workers or 1))
-        locations = [_local_zarr_location(a) for a in self.arrays]
-        local = all(loc is not None for loc in locations)
-        if worker_type is None:
-            worker_type = "process" if (workers > 1 and local) else "thread"
-        if worker_type == "process" and not local:
-            logger.warning("Process workers need a local zarr-python store; "
-                           "falling back to threads.")
-            worker_type = "thread"
-        self.worker_type = worker_type
-        self._ppool = None
-        self._shms: list[shared_memory.SharedMemory] = []
-        use_procs = worker_type == "process" and workers > 1
-        # threads: write tiles (thread mode) and downsample y-bands (both)
-        self._tpool = ThreadPoolExecutor(workers) if workers > 1 else None
-        # buffers: level 0 gets two (reader/writer ping-pong) + one staging;
-        # each coarser level gets one. Index i of `self._bufs` -> level.
-        shapes = [(self.unit[0], *self.shapes[0][1:])] * 3 + [
-            (u, *s[1:]) for u, s in zip(self.unit[1:], self.shapes[1:])
+        self._pool = ThreadPoolExecutor(workers) if workers > 1 else None
+        # two buffers for the reader/writer ping-pong; one staging buffer per
+        # level for partial units
+        self._base_bufs = [
+            np.empty((self.unit[0], *self.shapes[0][1:]), self.dtype)
+            for _ in range(2)
         ]
-        self._buf_level = [0, 0, 0] + list(range(1, self.nlevels))
-        if use_procs:
-            for shp in shapes:
-                nbytes = int(np.prod(shp)) * self.dtype.itemsize
-                self._shms.append(
-                    shared_memory.SharedMemory(create=True, size=max(nbytes, 1)))
-            self._bufs = [
-                np.ndarray(shp, self.dtype, buffer=m.buf)
-                for shp, m in zip(shapes, self._shms)
-            ]
-            self._ppool = _spawn_pool(
-                workers,
-                _worker_init,
-                ([(m.name, shp) for m, shp in zip(self._shms, shapes)],
-                 self.dtype.str, locations),
-            )
-        else:
-            self._bufs = [np.empty(shp, self.dtype) for shp in shapes]
-        self._base_bufs = self._bufs[:3]
-        self.buf = [self._bufs[2]] + self._bufs[3:]
+        self.buf = [
+            np.empty((u, *s[1:]), dtype=self.dtype)
+            for u, s in zip(self.unit, self.shapes)
+        ]
         logger.info(
-            "Streaming %d levels, z write units %s, %d %s worker(s), "
+            "Streaming %d levels with %s, z write units %s, %d thread(s), "
             "buffers %.1f MB",
-            self.nlevels, self.unit, workers, worker_type,
-            sum(b.nbytes for b in self._bufs) / 2**20,
+            self.nlevels, type(self.sinks[0]).__name__, self.unit, workers,
+            (sum(b.nbytes for b in self._base_bufs)
+             + sum(b.nbytes for b in self.buf)) / 2**20,
         )
 
     @property
@@ -313,56 +417,21 @@ class StreamingPyramidWriter:
 
     def base_buffers(self) -> list[np.ndarray]:
         """Two reusable (unit_z, Y, X) buffers for feeding `write_frames`."""
-        return self._base_bufs[:2]
+        return self._base_bufs
 
     # ------------------------------------------------------------------ write
-    def _tiles(self, lvl: int, ny: int, nx: int) -> list[tuple[int, int, int, int]]:
-        arr = self.arrays[lvl]
-        _, uy, ux = (int(u) for u in (arr.shards or arr.chunks))
-        return [
-            (y0, min(y0 + uy, ny), x0, min(x0 + ux, nx))
-            for y0 in range(0, ny, uy)
-            for x0 in range(0, nx, ux)
-        ]
-
-    def _advance(self, lvl: int, n: int) -> int:
+    def _write(self, lvl: int, data: np.ndarray) -> None:
         z0 = self.cursor[lvl]
-        if z0 + n > self.shapes[lvl][0]:
+        if z0 + data.shape[0] > self.shapes[lvl][0]:
             raise RuntimeError(
-                f"Level {lvl} overflow: {z0 + n} > {self.shapes[lvl][0]}")
-        self.cursor[lvl] = z0 + n
-        return z0
+                f"Level {lvl} overflow: {z0 + data.shape[0]} > {self.shapes[lvl][0]}")
+        self.sinks[lvl].write(z0, data, self._pool)
+        self.cursor[lvl] = z0 + data.shape[0]
 
-    def _write(self, lvl: int, data: np.ndarray):  # noqa: ANN202
-        """Write `data` at the level cursor. May return an async handle."""
-        if self._ppool is not None:
-            idx = next(
-                (i for i, b in enumerate(self._bufs)
-                 if self._buf_level[i] == lvl
-                 and b.ctypes.data == data.ctypes.data), None)
-            if idx is None:
-                staging = 2 if lvl == 0 else self._bufs.index(self.buf[lvl])
-                self._bufs[staging][: data.shape[0]] = data
-                idx = staging
-            z0 = self._advance(lvl, data.shape[0])
-            tasks = [
-                (idx, lvl, z0, data.shape[0], y0, y1, x0, x1)
-                for y0, y1, x0, x1 in self._tiles(lvl, *data.shape[1:])
-            ]
-            return self._ppool.map_async(_worker_put, tasks, chunksize=1)
-        arr = self.arrays[lvl]
-        z0 = self._advance(lvl, data.shape[0])
-        z1 = z0 + data.shape[0]
-        if self._tpool is None:
-            arr[z0:z1] = data
-            return None
-
-        def put(tile: tuple[int, int, int, int]) -> None:
-            y0, y1, x0, x1 = tile
-            arr[z0:z1, y0:y1, x0:x1] = data[:, y0:y1, x0:x1]
-
-        list(self._tpool.map(put, self._tiles(lvl, *data.shape[1:])))
-        return None
+    def _write_and_feed(self, lvl: int, data: np.ndarray) -> None:
+        self._write(lvl, data)
+        if lvl + 1 < self.nlevels:
+            self._feed_next(lvl + 1, data)
 
     def _push(self, lvl: int, frames: np.ndarray) -> None:
         """Append frames (already at the resolution of `lvl`) to its buffer."""
@@ -383,14 +452,6 @@ class StreamingPyramidWriter:
         self._write_and_feed(lvl, self.buf[lvl][:n])
         self.fill[lvl] = 0
 
-    def _write_and_feed(self, lvl: int, data: np.ndarray) -> None:
-        pending = self._write(lvl, data)
-        if lvl + 1 < self.nlevels:
-            # overlaps with the asynchronous level-0 encode, if any
-            self._feed_next(lvl + 1, data)
-        if pending is not None:
-            pending.get()
-
     def _feed_next(self, lvl: int, frames: np.ndarray) -> None:
         """Downsample frames of level `lvl-1` and push them into `lvl`."""
         fz = self.factors[lvl][0]
@@ -403,7 +464,7 @@ class StreamingPyramidWriter:
         if usable:
             self._push(
                 lvl,
-                _downsample_parallel(frames[:usable], self.factors[lvl], self._tpool),
+                _downsample_parallel(frames[:usable], self.factors[lvl], self._pool),
             )
 
     # ------------------------------------------------------------------ API
@@ -416,8 +477,7 @@ class StreamingPyramidWriter:
             raise ValueError(f"Bad frame shape {frames.shape[1:]}")
         last = self.cursor[0] + frames.shape[0] == self.shapes[0][0]
         if self.fill[0] == 0 and (frames.shape[0] == self.unit[0] or last):
-            # aligned full (or final) unit: write straight from the caller's
-            # buffer; the staging buffer is then never touched
+            # aligned full (or final) unit: write straight from the caller
             self._write_and_feed(0, frames)
         else:
             self._push(0, frames)
@@ -427,6 +487,8 @@ class StreamingPyramidWriter:
         try:
             for lvl in range(self.nlevels):
                 self._flush(lvl)
+            for sink in self.sinks:
+                sink.close()
             for lvl, (cur, shp) in enumerate(zip(self.cursor, self.shapes)):
                 if cur != shp[0]:
                     raise RuntimeError(
@@ -435,21 +497,10 @@ class StreamingPyramidWriter:
             self.shutdown()
 
     def shutdown(self) -> None:
-        """Release worker pools and shared memory."""
-        if self._tpool is not None:
-            self._tpool.shutdown()
-            self._tpool = None
-        if self._ppool is not None:
-            self._ppool.close()
-            self._ppool.join()
-            self._ppool = None
-        self._bufs = []
-        self._base_bufs = []
-        self.buf = []
-        for s in self._shms:
-            s.close()
-            s.unlink()
-        self._shms = []
+        """Release the thread pool."""
+        if self._pool is not None:
+            self._pool.shutdown()
+            self._pool = None
 
 
 def stream_volume(

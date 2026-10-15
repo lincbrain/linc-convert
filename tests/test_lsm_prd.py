@@ -123,34 +123,90 @@ def test_prd_read_frames(tmp_path):
         ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,), zarr_version=3)),
         ([5, 5], 3, 40, dict(chunk=(4,), zarr_version=3)),
         ([37, 11], 21, 34, dict(chunk=(8,), zarr_version=3, driver="tensorstore")),
+        ([37, 11], 21, 34, dict(chunk=(8,), shard=(16,), driver="tensorstore")),
+        # one shard per level (append sink), odd edges
+        ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="1GB")),
+        # several shard rows along z, frame-wide shards
+        ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB")),
     ],
 )
-@pytest.mark.parametrize("worker_type", ["process", "thread"])
-def test_prd_streaming_matches_legacy(
-    tmp_path, frames, height, width, cfg, worker_type
-):
+def test_prd_streaming_matches_legacy(tmp_path, frames, height, width, cfg):
     _write_prd_set(tmp_path / "in", frames, height, width)
-    kw = dict(cfg, overwrite=True)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "legacy.nii.zarr"),
-                legacy=True, **kw)
+    legacy_cfg = dict(cfg, overwrite=True)
+    max_shard = legacy_cfg.pop("max_shard_size", None)
+    stream_cfg = dict(legacy_cfg, max_shard_size=max_shard)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "stream.nii.zarr"),
-                workers=3, worker_type=worker_type, **kw)
+                workers=3, **stream_cfg)
+    if max_shard:
+        # legacy does not stream shards: give it the same layout explicitly
+        shards = zarr.open_array(str(tmp_path / "stream.nii.zarr" / "0")).shards
+        legacy_cfg["shard"] = tuple(shards)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "legacy.nii.zarr"),
+                legacy=True, **legacy_cfg)
     assert_zarr_equal(str(tmp_path / "stream.nii.zarr"),
                       str(tmp_path / "legacy.nii.zarr"))
+
+
+def test_prd_append_shards_readable(tmp_path):
+    """Append-written shards decode identically with zarr-python and tensorstore."""
+    vol = _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
+    out = tmp_path / "out.nii.zarr"
+    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,), shard=(8, 12, 16),
+                workers=2)
+    assert not list(out.rglob("*.partial"))
+    arr = zarr.open_array(str(out / "0"))
+    np.testing.assert_array_equal(arr[:], vol)
+    np.testing.assert_array_equal(arr[5:23, 3:19, 7:33], vol[5:23, 3:19, 7:33])
+    try:
+        import tensorstore as ts
+    except ImportError:
+        return
+    t = ts.open({"driver": "zarr3", "kvstore": {"driver": "file",
+                 "path": str(out / "0")}}).result()
+    np.testing.assert_array_equal(t.read().result(), vol)
+
+
+def test_prd_append_matches_api_sink(tmp_path):
+    """Append sink and zarr-python API writes decode to the same pyramid."""
+    from linc_convert.utils.io.zarr import from_config
+    from linc_convert.utils.io.zarr.stream_pyramid import (
+        StreamingPyramidWriter,
+        stream_volume,
+    )
+    from linc_convert.utils.zarr_config import ZarrConfig
+
+    _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
+    reader = PrdSetInterpreter(str(tmp_path / "in"))
+    cfg = ZarrConfig(chunk=(4,), shard=(8,), overwrite=True)
+    for name, append in [("a.zarr", True), ("b.zarr", False)]:
+        g = from_config(str(tmp_path / name), cfg)
+        w = StreamingPyramidWriter(g, reader.shape, reader.dtype, cfg,
+                                   max_workers=2, append_shards=append)
+        stream_volume(w, reader.read_frames)
+    a = zarr.open_group(str(tmp_path / "a.zarr"))
+    b = zarr.open_group(str(tmp_path / "b.zarr"))
+    assert sorted(a.array_keys()) == sorted(b.array_keys())
+    for k in a.array_keys():
+        np.testing.assert_array_equal(a[k][:], b[k][:])
 
 
 def test_prd_max_memory(tmp_path):
     from linc_convert.utils.io.zarr.stream_pyramid import workers_for_memory
 
     shape, unit = (26478, 1200, 1800), (256, 256, 256)
-    assert workers_for_memory(64 * 2**30, shape, 2, unit, 8, 8) == 8
-    assert workers_for_memory(int(3.5 * 2**30), shape, 2, unit, 8, 8) < 8
+    assert workers_for_memory(64 * 2**30, shape, 2, 256, unit, 8, 8) == 8
+    assert workers_for_memory(int(4 * 2**30), shape, 2, 256, unit, 8, 8) < 8
     with pytest.raises(MemoryError):
-        workers_for_memory(2**30, shape, 2, unit, 8, 8)
+        workers_for_memory(2**30, shape, 2, 256, unit, 8, 8)
+    # append sink: 32-slice slabs fit comfortably
+    assert workers_for_memory(2**30, shape, 2, 32, (32, 32, 32), 8, 8) == 8
 
     _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "a.nii.zarr"),
                 chunk=(8,), legacy=True)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "b.nii.zarr"),
                 chunk=(8,), workers=4, max_memory=0.5)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "c.nii.zarr"),
+                chunk=(8,), workers=4, max_memory=0.5, max_shard_size="5TB")
+    assert_zarr_equal(str(tmp_path / "c.nii.zarr"), str(tmp_path / "a.nii.zarr"))
     assert_zarr_equal(str(tmp_path / "b.nii.zarr"), str(tmp_path / "a.nii.zarr"))
