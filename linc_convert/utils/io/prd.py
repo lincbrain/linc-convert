@@ -54,6 +54,17 @@ class PrdSetInterpreter:
         self.bytes_per_frame = self.pixels_per_frame * self.bytes_per_pixel
         self.stride_bytes = self.bytes_per_frame + self.gap_bytes
 
+        self.frames_per_file = [self._frames_in_file(f) for f in self.prd_files]
+        # first global frame index of each file (plus total at the end)
+        self.file_offsets = np.concatenate(
+            [[0], np.cumsum(self.frames_per_file)]
+        ).astype(int)
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        """Shape of the assembled volume: (frames_total, height, width)."""
+        return (int(self.file_offsets[-1]), self.height, self.width)
+
     @staticmethod
     def read_kinetix_metadata(path: str) -> dict:
         """Parse a `kinetixMetadata.txt` file into its geometry parameters.
@@ -139,6 +150,37 @@ class PrdSetInterpreter:
                                         count=self.pixels_per_frame)
 
         return frames.reshape(n_frames, self.height, self.width)
+
+    def read_frames(
+        self, start: int, stop: int, out: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Read global frames `[start, stop)` into a (n, height, width) array.
+
+        Frames may span several `.prd` files. Only the requested frames are
+        read from disk, so memory use is bounded by the size of `out`.
+        """
+        stop = min(stop, self.shape[0])
+        n = stop - start
+        if out is None:
+            out = np.empty((n, self.height, self.width), dtype=self.dtype)
+        else:
+            out = out[:n]
+        flat = out.reshape(n, -1)
+        first = int(np.searchsorted(self.file_offsets, start, side="right")) - 1
+        i = 0
+        for f in range(first, len(self.prd_files)):
+            if i >= n:
+                break
+            local = start + i - int(self.file_offsets[f])
+            count = min(self.frames_per_file[f] - local, n - i)
+            with open(self.prd_files[f], "rb", buffering=0) as fh:
+                for k in range(count):
+                    fh.seek(self.header_bytes + (local + k) * self.stride_bytes)
+                    view = memoryview(flat[i + k]).cast("B")
+                    if fh.readinto(view) != self.bytes_per_frame:
+                        raise IOError(f"Short read in {self.prd_files[f]}")
+            i += count
+        return out
 
     def assemble(self) -> da.Array:
         """

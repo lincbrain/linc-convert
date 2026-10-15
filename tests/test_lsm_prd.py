@@ -83,3 +83,57 @@ def test_lsm_prd_regen_golden(tmp_path, zarr_version):
         zarr_version=zarr_version,
     )
     shutil.make_archive(base, "zip", str(output))
+
+def _write_prd_set(path: Path, frames_per_file, height, width, seed=0):
+    """Write a synthetic Kinetix .prd set; return the full (z, y, x) volume."""
+    rng = np.random.default_rng(seed)
+    header, gap, pad = 64, 18, 10
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "kinetixMetadata.txt").write_text(
+        f"16\n{width}\n{height}\n{header}\n{max(frames_per_file)}\n{gap}\n"
+    )
+    vols = []
+    for i, n in enumerate(frames_per_file):
+        vol = rng.integers(0, 2**16, (n, height, width), dtype="<u2")
+        vols.append(vol)
+        with open(path / f"ss_stack_{i}.prd", "wb") as fh:
+            fh.write(b"\xab" * header)
+            for k in range(n):
+                fh.write(vol[k].tobytes())
+                if k < n - 1:
+                    fh.write(b"\xcd" * gap)
+            fh.write(b"\xef" * pad)
+    return np.concatenate(vols)
+
+
+def test_prd_read_frames(tmp_path):
+    vol = _write_prd_set(tmp_path / "in", [7, 7, 3], 5, 6)
+    reader = PrdSetInterpreter(str(tmp_path / "in"))
+    assert reader.shape == vol.shape
+    np.testing.assert_array_equal(reader.assemble().compute(), vol)
+    for a, b in [(0, 17), (2, 9), (6, 8), (13, 17), (16, 30)]:
+        np.testing.assert_array_equal(reader.read_frames(a, b), vol[a:b])
+
+
+@pytest.mark.parametrize(
+    "frames,height,width,cfg",
+    [
+        ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=3)),
+        ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=2)),
+        ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,), zarr_version=3)),
+        ([5, 5], 3, 40, dict(chunk=(4,), zarr_version=3)),
+        ([37, 11], 21, 34, dict(chunk=(8,), zarr_version=3, driver="tensorstore")),
+    ],
+)
+@pytest.mark.parametrize("worker_type", ["process", "thread"])
+def test_prd_streaming_matches_legacy(
+    tmp_path, frames, height, width, cfg, worker_type
+):
+    _write_prd_set(tmp_path / "in", frames, height, width)
+    kw = dict(cfg, overwrite=True)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "legacy.nii.zarr"),
+                legacy=True, **kw)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "stream.nii.zarr"),
+                workers=3, worker_type=worker_type, **kw)
+    assert_zarr_equal(str(tmp_path / "stream.nii.zarr"),
+                      str(tmp_path / "legacy.nii.zarr"))
