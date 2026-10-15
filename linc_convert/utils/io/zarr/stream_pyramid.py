@@ -42,6 +42,21 @@ logger = logging.getLogger(__name__)
 MAX_UINT_64 = 2**64 - 1
 
 
+def _crc32c(data: bytes) -> int:
+    """CRC-32C (Castagnoli), as used by zarr's crc32c codec.
+
+    Prefers the `crc32c` package (wheels for free-threaded CPython), then
+    `google_crc32c` (zarr's own dependency; pure Python on 3.14t).
+    """
+    try:
+        import crc32c
+    except ImportError:
+        import google_crc32c
+
+        return google_crc32c.value(data)
+    return crc32c.crc32c(data)
+
+
 # --------------------------------------------------------------------------
 # downsampling
 # --------------------------------------------------------------------------
@@ -285,12 +300,10 @@ class ShardAppendSink:
             self._finalize()
 
     def _finalize(self) -> None:
-        import google_crc32c
-
         for st in self._open.values():
             index = st["index"].tobytes()
             st["fh"].write(index)
-            st["fh"].write(np.uint32(google_crc32c.value(index)).tobytes())
+            st["fh"].write(np.uint32(_crc32c(index)).tobytes())
             st["fh"].close()
             os.replace(st["path"] + ".partial", st["path"])
         self._open = {}

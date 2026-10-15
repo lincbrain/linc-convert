@@ -45,10 +45,11 @@ scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
 tensorstore = { version = "*", optional = true }
 dask-image = { version = "*", optional = true }
+crc32c = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile", "dask-image"]
+lsm = ["tifffile", "dask-image", "crc32c"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 ts = ["tensorstore"]
