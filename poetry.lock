@@ -19,7 +19,7 @@ description = "Python wrapper for loading Jason Hood's ANSICON"
 optional = false
 python-versions = "*"
 groups = ["dev"]
-markers = "platform_system == \"Windows\" and sys_platform != \"win32\""
+markers = "sys_platform != \"win32\" and platform_system == \"Windows\""
 files = [
     {file = "ansicon-1.89.0-py2.py3-none-any.whl", hash = "sha256:f1def52d17f65c2c9682cf8370c03f541f410c1752d6a14029f97318e4b9dfec"},
     {file = "ansicon-1.89.0.tar.gz", hash = "sha256:e4d039def5768a47e4afec8e89e83ec3ae5a26bf00ad851f914d1240b444d2b1"},
@@ -210,7 +210,7 @@ files = [
     {file = "cffi-2.1.1-cp315-cp315t-win_arm64.whl", hash = "sha256:d18e5ac0f2f03f4f518d3e23db0f0cad7faa1da8620e9c09461d443bbf6e6692"},
     {file = "cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be"},
 ]
-markers = {main = "extra == \"wk\" or extra == \"all\"", dev = "platform_python_implementation != \"PyPy\" and sys_platform == \"linux\""}
+markers = {main = "extra == \"wk\" or extra == \"all\"", dev = "sys_platform == \"linux\" and platform_python_implementation != \"PyPy\""}
 
 [package.dependencies]
 pycparser = {version = "*", markers = "implementation_name != \"PyPy\""}
@@ -2207,7 +2207,7 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=2.0.0", markers = "python_version < \"3.13\""},
-    {version = ">=2.1.0", markers = "python_version == \"3.13\""},
+    {version = ">=2.1.0", markers = "python_version >= \"3.13\""},
     {version = ">=2.3.0", markers = "python_version >= \"3.14\""},
 ]
 
@@ -2483,14 +2483,14 @@ zstd = ["backports-zstd (>=1.1) ; python_version < \"3.14\""]
 
 [[package]]
 name = "nifti-zarr"
-version = "1.0.0rc7"
+version = "1.0.0rc9"
 description = "Nifti-Zarr conversion tools in Python"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "nifti_zarr-1.0.0rc7-py3-none-any.whl", hash = "sha256:f1f3b36aefac635e4105a6854a0fc4fc20a192074a8eba825100ab0aa005cfe8"},
-    {file = "nifti_zarr-1.0.0rc7.tar.gz", hash = "sha256:bd906d230f679f31644e0dbc363d915004afd9d2e30b1d90c155c81d379a4a9e"},
+    {file = "nifti_zarr-1.0.0rc9-py3-none-any.whl", hash = "sha256:e59691653fa4110abdea289655fa92ef15d8a4729da0c989bb127b156dd5c377"},
+    {file = "nifti_zarr-1.0.0rc9.tar.gz", hash = "sha256:bfbae1fcbf6753b93f4289911722be1ed8114491371d55cb4b6f0ade53f57a0c"},
 ]
 
 [package.dependencies]
@@ -2500,7 +2500,7 @@ numcodecs = ">=0.10.0"
 numpy = ">=1.18"
 packaging = ">=19.0"
 scikit-image = ">=0.19.2"
-zarr = ">=2"
+zarr = ">=3.4"
 
 [package.extras]
 http = ["fsspec[http]", "nibabel (>=5)"]
@@ -3012,7 +3012,7 @@ files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
 ]
-markers = {main = "implementation_name != \"PyPy\" and (extra == \"wk\" or extra == \"all\")", dev = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" and sys_platform == \"linux\""}
+markers = {main = "implementation_name != \"PyPy\" and (extra == \"wk\" or extra == \"all\")", dev = "sys_platform == \"linux\" and implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\""}
 
 [[package]]
 name = "pycryptodomex"
@@ -4241,4 +4241,4 @@ wk = ["wkw"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "3b886bd8556462bcecad1fd10dcb7b887c9ce400a824a68f917a9590b186a8f7"
+content-hash = "4d6bb1d7afc694625e6c11eb22ec44cf8472332e085f85b0fb194e86026da4a4"

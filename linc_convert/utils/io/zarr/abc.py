@@ -33,7 +33,6 @@ from linc_convert.utils.io.zarr.generate_pyramid import (
     default_levels,
     next_level_shape,
 )
-from linc_convert.utils.io.zarr.ome import add_nifti_systems, ome_v05_to_v06
 from linc_convert.utils.zarr_config import ZarrConfig
 
 NiftiHeader: TypeAlias = Nifti1Header | Nifti2Header
@@ -295,16 +294,13 @@ class ZarrGroup(ZarrNode):
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)  # warned below
-            try:
-                niizarr.write_ome_metadata(self, ome_version=ome_version, **kwargs)
-            except ValueError:  # niizarr <= 1.0.0rc8 only writes 0.4/0.5
-                niizarr.write_ome_metadata(self, ome_version="0.5", **kwargs)
+            niizarr.write_ome_metadata(self, ome_version=ome_version, **kwargs)
         if ome_version == "0.5":
             warnings.warn(
                 "Writing OME-Zarr 0.5 will be deprecated in a future release; "
                 "use ome_version='0.6'.", FutureWarning, stacklevel=2)
             return
-        ome = ome_v05_to_v06(dict(self.attrs["ome"]))  # no-op if already 0.6
+        ome = dict(self.attrs["ome"])
         for ms in ome["multiscales"]:
             ms["type"] = multiscales_type or "mean"
             if not multiscales_type:
@@ -319,10 +315,7 @@ class ZarrGroup(ZarrNode):
     def write_nifti_header(self, header: NiftiHeader) -> None:
         """Write a NIfTI header to the Zarr group.
 
-        With OME-Zarr 0.6, the qform/sform spaces are also described as
+        With OME-Zarr 0.6, niizarr also describes the qform/sform spaces as
         the coordinate systems "nifti:qform" / "nifti:sform".
         """
         niizarr.write_nifti_header(self, header)
-        ome = dict(self.attrs).get("ome", {})
-        if ome.get("version") == "0.6":
-            self.attrs["ome"] = add_nifti_systems(ome, header)

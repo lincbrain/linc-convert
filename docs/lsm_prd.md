@@ -169,5 +169,4 @@ frame size, not its length. For 1200×1800 frames:
 - **OME-Zarr 0.6.** Output validates against `ome-zarr-models` (v0.6). The
   voxel-to-physical mapping matches the 0.5 metadata, and the qform/sform
   coordinate systems map voxels to the same world coordinates as the NIfTI
-  header. Reading 0.6 with nifti-zarr requires the release that includes
-  neuroscales/nifti-zarr-py#55.
+  header. Requires nifti-zarr ≥ 1.0.0rc9 (reads and writes 0.6).
