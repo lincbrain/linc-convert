@@ -1,10 +1,9 @@
 """Read overlap volumes and register them with multiview-stitcher (z and y only)."""
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
-from xarray import DataTree
 
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     compute_noise_map,
@@ -17,11 +16,15 @@ if TYPE_CHECKING:
 
 def read_volume_rows(vol: "da.Array", y0: int, y1: int, x0: int, x1: int,
                      background_length: int, subtract_background: bool = True,
-                     band: int = 64) -> np.ndarray:
+                     band: int = 64, scaler: Optional[np.ndarray] = None,
+                     noise: Optional[np.ndarray] = None) -> np.ndarray:
     """Read a block of rows into memory, optionally removing the row background.
 
-    The per-row background (median of the chunk's last ``background_length``
-    x columns) is subtracted. Rows are read in bands to bound the temporaries.
+    The per-row background is subtracted (clipped at 0), then the rows are
+    multiplied by ``scaler`` if it is given. The background is taken from the
+    ``noise`` map where that has a value, and otherwise computed as the median
+    of the chunk's last ``background_length`` x columns. Rows are read in
+    bands to bound the temporaries.
 
     Parameters
     ----------
@@ -37,6 +40,13 @@ def read_volume_rows(vol: "da.Array", y0: int, y1: int, x0: int, x1: int,
         Subtract the background (clipped at 0).
     band : int, default=64
         Number of rows read at a time.
+    scaler : numpy.ndarray, optional
+        zy multiplier per (z, y) row of ``vol``, shape ``vol.shape[:2]`` (see
+        ``create_corrections``); applied after the background subtraction.
+    noise : numpy.ndarray, optional
+        Background per (z, y) row of ``vol``, shape ``vol.shape[:2]`` (the
+        ``create_corrections`` noise map). NaN entries are computed from the
+        chunk instead. Ignored if ``subtract_background`` is False.
 
     Returns
     -------
@@ -49,9 +59,14 @@ def read_volume_rows(vol: "da.Array", y0: int, y1: int, x0: int, x1: int,
         r1 = min(r0 + band, y1)
         slab = np.asarray(vol[:, r0:r1, x0:x1], dtype=np.float32)
         if subtract_background:
-            noise = compute_noise_map(
-                vol[:, r0:r1], background_length)   # (Z, rows)
-            slab = np.asarray(subtract_noise(slab, noise))
+            rows = (np.full((Z, r1 - r0), np.nan, dtype=np.float32)
+                    if noise is None else noise[:, r0:r1].astype(np.float32))
+            if np.isnan(rows).any():           # no map for some rows: measure
+                own = compute_noise_map(vol[:, r0:r1], background_length)
+                rows = np.where(np.isnan(rows), own, rows)
+            slab = np.asarray(subtract_noise(slab, rows))
+        if scaler is not None:
+            slab = slab * scaler[:, r0:r1, None]
         out[:, r0 - y0:r1 - y0] = slab
     return out
 
@@ -94,7 +109,7 @@ def register_volume_zy(vol_a: np.ndarray, vol_b: np.ndarray, a_y0: float,
     from multiview_stitcher import msi_utils, registration
     from multiview_stitcher import spatial_image_utils as si_utils
 
-    def msim(vol: np.ndarray, tz: float, ty: float) -> DataTree:
+    def msim(vol: np.ndarray, tz: float, ty: float) -> Any:
         sim = si_utils.get_sim_from_array(
             vol, dims=["z", "y", "x"], scale={"z": 1.0, "y": 1.0, "x": 1.0},
             translation={"z": float(tz), "y": float(ty), "x": 0.0},

@@ -29,9 +29,10 @@ Needs: multiview-stitcher, dask, numpy, scipy, zarr, pyyaml, cyclopts, and the
 ``stitching_utils`` folder next to this file.
 """
 
+import re
 import time
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import cyclopts
 import dask.array as da
@@ -39,6 +40,9 @@ import numpy as np
 import yaml
 
 from linc_convert.modalities.lsm.cli import lsm
+from linc_convert.modalities.lsm.stitching_utils.corrections import (
+    load_corrections,
+)
 from linc_convert.modalities.lsm.stitching_utils.io import (
     crop_and_flip,
     open_tile_array,
@@ -105,11 +109,100 @@ def load_chunk(path: PathLike, slice_numb: int, camera_numb: int, channel: str,
     return vol
 
 
+def registration_corrections(
+        path: PathLike, slice_numb: int, camera_numb: int, channel: str,
+        layer: int, params: dict[str, Any], corrections_dir: PathLike,
+        per_chunk_corrections: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load the noise and scaler maps of a chunk, laid out on the registration volume.
+
+    ``create_corrections`` makes its maps for the ``stitchingCrop`` (z range
+    and y range, z flipped if the camera is), while the chunks are registered
+    on the ``splitCrop`` y range with all z. The maps are placed at the
+    matching rows of the registration volume; rows outside them get scaler 1
+    and noise NaN (meaning: measure the background from the chunk).
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Chunk ``.ome.zarr`` folder.
+    slice_numb, camera_numb : int
+        Slice and camera (select the crop definitions).
+    channel : str
+        Channel name.
+    layer : int
+        Pyramid level; the maps must come from ``create_corrections`` with
+        the same ``layer``.
+    params : dict
+        Parsed scan metadata YAML.
+    corrections_dir : str or pathlib.Path
+        Folder written by ``create_corrections``.
+    per_chunk_corrections : bool, default=False
+        Use the chunk's own maps; the chunk number is read from the folder
+        name (``..._chunk-0023_...`` is chunk 23).
+
+    Returns
+    -------
+    noise, scaler : numpy.ndarray
+        float32 background and multiplier, shape (Z, Y) of the registration
+        volume (``load_chunk``); noise is NaN where there is no map.
+
+    Raises
+    ------
+    ValueError
+        If the map shape does not match the stitching crop at ``layer``, or
+        the chunk number cannot be read from the name.
+    """
+    chunk = None
+    if per_chunk_corrections:
+        found = re.search(r"chunk-?(\d+)", Path(path).name)
+        if found is None:
+            raise ValueError(
+                f"cannot read the chunk number from {Path(path).name}")
+        chunk = int(found.group(1))
+    noise, scaler = load_corrections(str(corrections_dir), channel, chunk)
+
+    scale = 2 ** layer
+    raw_z, raw_y, _ = open_tile_array(path, layer).shape
+    z0, z1, t0, t1 = get_crop(params, camera_numb, slice_numb, channel,
+                              kind="stitchingCrop", include_z=True)
+    _, _, s0, s1 = get_crop(params, camera_numb, slice_numb, channel,
+                            kind="splitCrop", include_z=False)
+    s0, sy = s0 // scale, min(s1 // scale, raw_y) - s0 // scale
+    t0, t1 = t0 // scale, min(t1 // scale, raw_y)
+    zc0, zc1 = (0, raw_z) if z0 is None or z1 is None else (
+        max(z0 // scale, 0), min(z1 // scale, raw_z))
+    if scaler.shape != (zc1 - zc0, t1 - t0):
+        raise ValueError(
+            f"corrections for channel {channel} have shape {scaler.shape} but "
+            f"the stitching crop at layer {layer} is (Z, Y)=({zc1 - zc0}, "
+            f"{t1 - t0}); run create_corrections with layer={layer}")
+    z_off = raw_z - zc1 if get_vertical_flip(params, camera_numb) else zc0
+    y_off = t0 - s0                       # registration row i <-> map row i - y_off
+
+    full = np.ones((raw_z, sy), dtype=np.float32)
+    full_noise = np.full((raw_z, sy), np.nan, dtype=np.float32)
+    zi0, zi1 = max(z_off, 0), min(z_off + scaler.shape[0], raw_z)
+    yi0, yi1 = max(y_off, 0), min(y_off + scaler.shape[1], sy)
+    if zi0 < zi1 and yi0 < yi1:
+        src = (slice(zi0 - z_off, zi1 - z_off),
+               slice(yi0 - y_off, yi1 - y_off))
+        full[zi0:zi1, yi0:yi1] = scaler[src]
+        full_noise[zi0:zi1, yi0:yi1] = noise[src]
+    covered = (zi1 - zi0) * (yi1 - yi0) / \
+        (raw_z * sy) if zi1 > zi0 and yi1 > yi0 else 0
+    print(f"  {Path(path).name}: correction maps cover {covered:.0%} of the "
+          "registration volume (other rows: own background, no scaling)")
+    return full_noise, full
+
+
 def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         slice_numb: int, camera_numb: int, yaml_path: PathLike,
                         overlap: float, layer: int = 1, background_length: int = 400,
                         subtract_background: bool = True,
-                        smooth_sigma: float = 1.0) -> Pair:
+                        smooth_sigma: float = 1.0,
+                        corrections_dir: Optional[PathLike] = None,
+                        per_chunk_corrections: bool = False) -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
     Parameters
@@ -136,6 +229,14 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     smooth_sigma : float, default=1.0
         Gaussian sigma (in this level's pixels) applied before registering;
         0 disables it.
+    corrections_dir : str or pathlib.Path, optional
+        If given, the noise and zy scaler maps of ``create_corrections`` (made
+        with the same ``layer``) are applied to both chunks, as
+        ``(vol - noise).clip(0) * scaler``, exactly like the stitching. The
+        background is then not measured again from each chunk (rows the maps
+        do not cover still are).
+    per_chunk_corrections : bool, default=False
+        Use each chunk's own maps (``create_corrections`` with ``per_chunk``).
 
     Returns
     -------
@@ -188,11 +289,22 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
           f"reading {nbytes / 2**30:.2f} GiB of float32 (+ similar temporaries)"
           + ("; consider a higher layer" if nbytes > 2**33 else ""))
 
+    noise_a = scaler_a = noise_b = scaler_b = None
+    if corrections_dir is not None:
+        noise_a, scaler_a = registration_corrections(
+            chunk_a, slice_numb, camera_numb, channel, layer, params,
+            corrections_dir, per_chunk_corrections)
+        noise_b, scaler_b = registration_corrections(
+            chunk_b, slice_numb, camera_numb, channel, layer, params,
+            corrections_dir, per_chunk_corrections)
+
     t0 = time.time()
     sub_a = read_volume_rows(vol_a, a_y0, sy, 0, sx,
-                             bg_len, subtract_background)
+                             bg_len, subtract_background, scaler=scaler_a,
+                             noise=noise_a)
     sub_b = read_volume_rows(vol_b, 0, b_rows, 0, sx,
-                             bg_len, subtract_background)
+                             bg_len, subtract_background, scaler=scaler_b,
+                             noise=noise_b)
     if smooth_sigma > 0:
         from scipy.ndimage import gaussian_filter
         sub_a = gaussian_filter(sub_a, smooth_sigma)
@@ -224,7 +336,9 @@ def register_chunks(chunks: list[str],
                     *, channel: str, slice_numb: int, camera_numb: int,
                     yaml_path: str, overlap: float, out: str, layer: int = 1,
                     background_length: int = 400, subtract_background: bool = True,
-                    smooth_sigma: float = 1.0, force: bool = False) -> None:
+                    smooth_sigma: float = 1.0, force: bool = False,
+                    corrections_dir: Optional[str] = None,
+                    per_chunk_corrections: bool = False) -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -268,6 +382,15 @@ def register_chunks(chunks: list[str],
         0 disables it.
     force : bool, default=False
         Recompute even if ``out`` already exists.
+    corrections_dir : str, optional
+        Folder written by ``create_corrections`` (with the same ``layer``). If
+        given, the chunks are corrected with its noise and scaler maps,
+        ``(vol - noise).clip(0) * scaler``, before registering (instead of
+        measuring the background again), so dark or unevenly lit rows no
+        longer dominate the correlation.
+    per_chunk_corrections : bool, default=False
+        Use each chunk's own scaler map (``create_corrections`` with
+        ``per_chunk``; the chunk number is read from the folder name).
 
     Raises
     ------
@@ -292,7 +415,9 @@ def register_chunks(chunks: list[str],
                                   overlap, layer=layer,
                                   background_length=background_length,
                                   subtract_background=subtract_background,
-                                  smooth_sigma=smooth_sigma)
+                                  smooth_sigma=smooth_sigma,
+                                  corrections_dir=corrections_dir,
+                                  per_chunk_corrections=per_chunk_corrections)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
     avg = average_pairs(pairs)
@@ -326,7 +451,11 @@ def register_chunks(chunks: list[str],
         ],
         "settings": {"background_length": int(background_length),
                      "subtract_background": bool(subtract_background),
-                     "smooth_sigma": float(smooth_sigma), "crop": "splitCrop"},
+                     "smooth_sigma": float(smooth_sigma), "crop": "splitCrop",
+                     "scaler_correction": corrections_dir is not None,
+                     "corrections_dir": (None if corrections_dir is None
+                                         else str(corrections_dir)),
+                     "per_chunk_corrections": bool(per_chunk_corrections)},
         "chunks": [str(c) for c in chunks],
     }
     write_yaml(out_path, result)
