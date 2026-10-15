@@ -417,6 +417,10 @@ def stitch_channel(
         print(f"channel {channel}: resuming after chunk {start - 1} "
               f"({start}/{n} written)")
 
+    # dask pickles the store target to its workers; hand them the plain zarr
+    # array (a wrapper with a recursive __getattr__ cannot be unpickled)
+    target = getattr(array, "_array", array)
+
     prev: Optional[da.Array] = None
     prev_weights: Optional[np.ndarray] = None
     if start > 0:
@@ -453,10 +457,10 @@ def stitch_channel(
                                     zstart, fullshape[0], overlap_prev)
             blended = _aligned_rechunk(blended, (0, ystart, 0),
                                        array.shards or array.chunks)
-            da.store(blended, array, regions=(slice(0, fullshape[0]),
-                                              slice(ystart, ystart +
-                                                    overlap_prev),
-                                              slice(0, x_out)), lock=True)
+            da.store(blended, target, regions=(slice(0, fullshape[0]),
+                                               slice(ystart, ystart +
+                                                     overlap_prev),
+                                               slice(0, x_out)), lock=True)
         first_row, last_row = overlap_prev, sy - overlap_next
         if last_row > first_row:
             write_vals = cur[:, first_row:last_row]
@@ -464,7 +468,7 @@ def stitch_channel(
                 write_vals, (zstart, ystart + first_row, 0),
                 array.shards or array.chunks)
             da.store(write_vals,
-                     array,
+                     target,
                      regions=(slice(zstart, zstart + z_out),
                               slice(ystart + first_row, ystart + last_row),
                               slice(0, x_out)), lock=True)
