@@ -65,6 +65,7 @@ import cyclopts
 import dask.array as da
 import numpy as np
 import yaml
+from dask.distributed import get_client, progress
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.blending import (
@@ -145,6 +146,29 @@ def _write_checkpoint(path: str, signature: dict, last_chunk: int,
     text = json.dumps({"signature": signature, "last_chunk": last_chunk,
                        "done": done})
     atomic_write(path, lambda tmp: tmp.write_text(text))
+
+
+def _store(arr: da.Array, target: object, regions: Tuple[slice, ...],
+           label: str) -> None:
+    """``da.store`` on the dask cluster, with a live progress bar.
+
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Data to write.
+    target : object
+        Array (``__setitem__``) to write into.
+    regions : tuple of slice
+        Region of ``target`` that ``arr`` fills.
+    label : str
+        Printed before the bar.
+    """
+    print(f"  {label}", flush=True)
+    future = get_client().compute(
+        da.store(arr, target, regions=regions, lock=True, compute=False))
+    progress(future, notebook=False)
+    future.result()
+    print(flush=True)
 
 
 def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
@@ -457,21 +481,21 @@ def stitch_channel(
                                     zstart, fullshape[0], overlap_prev)
             blended = _aligned_rechunk(blended, (0, ystart, 0),
                                        array.shards or array.chunks)
-            da.store(blended, target, regions=(slice(0, fullshape[0]),
-                                               slice(ystart, ystart +
-                                                     overlap_prev),
-                                               slice(0, x_out)), lock=True)
+            _store(blended, target,
+                   (slice(0, fullshape[0]),
+                    slice(ystart, ystart + overlap_prev), slice(0, x_out)),
+                   f"chunk {index + 1}/{n}: blended overlap ({overlap_prev} rows)")
         first_row, last_row = overlap_prev, sy - overlap_next
         if last_row > first_row:
             write_vals = cur[:, first_row:last_row]
             write_vals = _aligned_rechunk(
                 write_vals, (zstart, ystart + first_row, 0),
                 array.shards or array.chunks)
-            da.store(write_vals,
-                     target,
-                     regions=(slice(zstart, zstart + z_out),
-                              slice(ystart + first_row, ystart + last_row),
-                              slice(0, x_out)), lock=True)
+            _store(write_vals, target,
+                   (slice(zstart, zstart + z_out),
+                    slice(ystart + first_row, ystart + last_row),
+                    slice(0, x_out)),
+                   f"chunk {index + 1}/{n}: own rows ({last_row - first_row})")
         prev, prev_weights = cur, cur_weights
         _write_checkpoint(ckpt, signature, index)
 
