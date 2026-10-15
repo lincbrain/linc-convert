@@ -92,7 +92,7 @@ class ZarrConfig:
     dimension_separator: Literal[".", "/"] = "/"
     order: Literal["C", "F"] = "C"
     compressor: Literal["blosc", "zlib", "none"] = "blosc"
-    compressor_opt: dict[str, float | str] = field(default_factory=dict)
+    compressor_opt: dict[str, int | float | str] = field(default_factory=dict)
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
