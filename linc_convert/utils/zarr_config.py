@@ -37,7 +37,7 @@ class ZarrConfig:
         * four+:  used for channels and spatial dimensions ([c, z, y, x])
         If `"auto"`, find chunk size smaller than 1 MB (TODO: not implemented)
     zarr_version
-        Zarr version to use. If `shard` is used, 3 is required.
+        Zarr version to write. Only 3 is supported (v2 inputs can be read).
     chunk_channels:
         Put channels in different chunk.
         If False, combine all channels in a single chunk.
@@ -74,7 +74,9 @@ class ZarrConfig:
         If set to -1, all possible levels are generated until the smallest level
         fits into one chunk.
     ome_version
-        Version of the OME-Zarr specification to use
+        Version of the OME-Zarr specification to use. With 0.6, NIfTI-Zarr
+        outputs also describe the qform/sform spaces as coordinate systems.
+        Writing 0.5 will be deprecated in a future release.
     overwrite
         when no name is supplied and using default output name, if overwrite is set,
         it won't ask if overwrite
@@ -82,7 +84,7 @@ class ZarrConfig:
         library used for Zarr IO Operation
     """
 
-    zarr_version: Literal[2, 3] = 3
+    zarr_version: Literal[3] = 3
     chunk: tuple[int] = (128,)
     chunk_channels: bool = False
     chunk_time: bool = True
@@ -96,26 +98,14 @@ class ZarrConfig:
     no_time: bool = False
     no_pyramid_axis: Literal["x", "y", "z"] | None = None
     levels: int = -1
-    ome_version: Literal["0.4", "0.5", "0.6"] = "0.5"
+    ome_version: Literal["0.5", "0.6"] = "0.6"
     overwrite: bool = False
     driver: DriverLike = "zarr-python"
 
     def __post_init__(self) -> None:
-        """
-        Perform post-initialization checks and adjustments.
-
-        - Ensure that sharding options (shard, shard_channels, shard_time) are only
-          used when zarr_version == 3; otherwise raise NotImplementedError.
-        - Ensure that ome_version is "0.5" or "0.6" when zarr_version == 3,
-          and that 0.6 is not used with zarr_version == 2.
-        """
-        if self.zarr_version == 2:
-            if self.shard or self.shard_channels or self.shard_time:
-                raise ValueError("Shard is not supported for Zarr 2.")
-        if self.zarr_version == 3 and self.ome_version not in ("0.5", "0.6"):
-            raise ValueError("OME version must be 0.5 or 0.6 for Zarr version 3.")
-        if self.zarr_version == 2 and self.ome_version == "0.6":
-            raise ValueError("OME version 0.6 requires Zarr version 3.")
+        """Only Zarr v3 is written; OME-Zarr 0.5 writing will be deprecated."""
+        if self.zarr_version != 3:
+            raise ValueError("Writing Zarr v2 is no longer supported.")
 
 
 @Parameter(name="*")

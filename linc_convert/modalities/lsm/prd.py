@@ -127,8 +127,7 @@ def convert(
         levels = zarr_config.levels
         if levels == -1:
             levels = default_levels(reader.shape, chunk[-3:], None)
-        appendable = (shard is not None and zarr_config.zarr_version == 3
-                      and zarr_config.driver == "zarr-python")
+        appendable = shard is not None and zarr_config.driver == "zarr-python"
         native = chunk[-3] if appendable else (shard or chunk)[-3]
         unit_z = -(-(slab_depth or native) // native) * native
         tile = chunk[-3:] if appendable else (shard or chunk)[-3:]

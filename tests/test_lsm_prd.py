@@ -1,4 +1,5 @@
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -190,7 +191,6 @@ LOSSLESS_CASES = {
     "v3-blosc-noshuffle": dict(chunk=(8,), compressor_opt={"shuffle": "noshuffle"}),
     "v3-zstd-codec": dict(chunk=(8,), compressor="zlib"),
     "v3-uncompressed": dict(chunk=(8,), compressor="none"),
-    "v2-blosc": dict(chunk=(8,), zarr_version=2),
     "v3-shard": dict(chunk=(4,), shard=(8,)),
     "v3-shard-uneven": dict(chunk=(4,), shard=(8, 12, 16)),
     "v3-shard-volume": dict(chunk=(4,), max_shard_size="5TB"),
@@ -228,11 +228,10 @@ def test_prd_level0_lossless(tmp_path, case, pattern):
         z, y, x = (int(rng.integers(0, s)) for s in raw.shape)
         sl = (slice(z, z + 9), slice(y, y + 7), slice(x, x + 11))
         np.testing.assert_array_equal(level0[sl], raw[sl])
-    if kw.get("zarr_version", 3) == 3:
-        ts = pytest.importorskip("tensorstore")
-        t = ts.open({"driver": "zarr3", "kvstore": {
-            "driver": "file", "path": str(out / "0")}}).result()
-        np.testing.assert_array_equal(t.read().result(), raw)
+    ts = pytest.importorskip("tensorstore")
+    t = ts.open({"driver": "zarr3", "kvstore": {
+        "driver": "file", "path": str(out / "0")}}).result()
+    np.testing.assert_array_equal(t.read().result(), raw)
 
 
 def test_prd_level0_lossless_real_subset(tmp_path):
@@ -266,7 +265,6 @@ def test_prd_verify_detects_corruption(tmp_path):
     "frames,height,width,cfg",
     [
         ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=3)),
-        ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=2)),
         ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,))),
         ([5, 5], 3, 40, dict(chunk=(4,))),
         ([37, 11], 21, 34, dict(chunk=(8,), driver="tensorstore")),
@@ -412,9 +410,13 @@ def test_prd_ome_v06(tmp_path):
     outs = {}
     for v in ("0.5", "0.6"):
         outs[v] = tmp_path / f"o{v}.nii.zarr"
-        prd.convert(str(tmp_path / "in"), out=str(outs[v]), chunk=(8,),
-                    max_shard_size="5TB", voxel_size=[0.75, 0.75, 2.0],
-                    ome_version=v)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            prd.convert(str(tmp_path / "in"), out=str(outs[v]), chunk=(8,),
+                        max_shard_size="5TB", voxel_size=[0.75, 0.75, 2.0],
+                        ome_version=v)
+        future = [w for w in caught if issubclass(w.category, FutureWarning)]
+        assert bool(future) == (v == "0.5")
     g5 = zarr.open_group(str(outs["0.5"]), mode="r")
     g6 = zarr.open_group(str(outs["0.6"]), mode="r")
     ome6 = dict(g6.attrs)["ome"]
@@ -437,8 +439,29 @@ def test_prd_ome_v06(tmp_path):
     assert bytes(g5["nifti"][:]) == bytes(g6["nifti"][:])
     nii = niizarr.zarr2nii(str(outs["0.5"]))
     np.testing.assert_array_equal(np.asarray(nii.dataobj), vol.transpose(2, 1, 0))
-    # Known limitation: niizarr (<= 1.0.0rc8) reads multiscales[0]["axes"],
-    # which 0.6 replaces by coordinateSystems. Update this when nifti-zarr-py
-    # supports RFC-5 (neuroscales/nifti-zarr-py#31).
+    # 0.6: the NIfTI qform/sform spaces are coordinate systems whose affines
+    # map voxel indices to the same world coordinates as the NIfTI header
+    header = niizarr.zarr2nii(str(outs["0.5"])).header
+    ms6 = ome6["multiscales"][0]
+    axes = [a["name"] for a in ms6["coordinateSystems"][0]["axes"]]
+    scale = ms6["datasets"][0]["coordinateTransformations"][0]["scale"]
+    kinds = [t["output"]["name"] for t in ms6["coordinateTransformations"]]
+    assert kinds == ["nifti:qform", "nifti:sform"]
+    ijk = {"x": 3, "y": 5, "z": 7}
+    point = [ijk[a] * s for a, s in zip(axes, scale)] + [1]
+    for trf in ms6["coordinateTransformations"]:
+        affine = header.get_qform() if trf["output"]["name"].endswith("qform") \
+            else header.get_sform()
+        world = dict(zip(axes, np.asarray(trf["affine"]) @ point))
+        np.testing.assert_allclose(
+            [world["x"], world["y"], world["z"]],
+            (affine @ [ijk["x"], ijk["y"], ijk["z"], 1])[:3], atol=1e-6)
+    # Known limitation: released niizarr (1.0.0rc8) reads multiscales[0]["axes"],
+    # which 0.6 replaces by coordinateSystems; fixed in neuroscales/nifti-zarr-py#55.
     with pytest.raises(KeyError, match="axes"):
         niizarr.zarr2nii(str(outs["0.6"]))
+
+
+def test_zarr_v2_write_unsupported(tmp_path):
+    with pytest.raises(ValueError, match="Zarr v2"):
+        prd.convert(PRD_INPUT_DIR, out=str(tmp_path / "o.nii.zarr"), zarr_version=2)

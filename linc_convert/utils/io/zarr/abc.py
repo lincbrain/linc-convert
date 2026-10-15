@@ -1,6 +1,7 @@
 """Abstract base classes for ZarrIO interfaces."""
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from numbers import Number
 from os import PathLike
@@ -32,7 +33,7 @@ from linc_convert.utils.io.zarr.generate_pyramid import (
     default_levels,
     next_level_shape,
 )
-from linc_convert.utils.io.zarr.ome import ome_v05_to_v06
+from linc_convert.utils.io.zarr.ome import add_nifti_systems, ome_v05_to_v06
 from linc_convert.utils.zarr_config import ZarrConfig
 
 NiftiHeader: TypeAlias = Nifti1Header | Nifti2Header
@@ -248,7 +249,7 @@ class ZarrGroup(ZarrNode):
         levels: Optional[int] = None,
         no_pool: Optional[int] = None,
         multiscales_type: str = "",
-        ome_version: Literal["0.4", "0.5", "0.6"] = "0.5",
+        ome_version: Literal["0.5", "0.6"] = "0.6",
     ) -> None:
         """
         Write OME-compatible metadata into this group.
@@ -278,9 +279,9 @@ class ZarrGroup(ZarrNode):
             when generating pyramid levels.
         multiscales_type: str
             Override the type field in multiscale attribute.
-        ome_version: {"0.4", "0.5", "0.6"}
-            Version of the OME-Zarr specification to use. 0.6 (RFC-5
-            coordinate systems) requires Zarr v3.
+        ome_version: {"0.5", "0.6"}
+            Version of the OME-Zarr specification to use. Writing 0.5 will
+            be deprecated in a future release.
 
         Returns
         -------
@@ -298,8 +299,12 @@ class ZarrGroup(ZarrNode):
             levels=levels,
             no_pool=no_pool,
             multiscales_type=multiscales_type,
-            ome_version="0.5" if ome_version == "0.6" else ome_version,
+            ome_version="0.5",
         )
+        if ome_version == "0.5":
+            warnings.warn(
+                "Writing OME-Zarr 0.5 will be deprecated in a future release; "
+                "use ome_version='0.6'.", FutureWarning, stacklevel=2)
         if ome_version == "0.6":
             method = None
             if not multiscales_type:
@@ -316,5 +321,12 @@ class ZarrGroup(ZarrNode):
             )
 
     def write_nifti_header(self, header: NiftiHeader) -> None:
-        """Write a NIfTI header to the Zarr group."""
+        """Write a NIfTI header to the Zarr group.
+
+        With OME-Zarr 0.6, the qform/sform spaces are also described as
+        the coordinate systems "nifti:qform" / "nifti:sform".
+        """
         niizarr.write_nifti_header(self, header)
+        ome = dict(self.attrs).get("ome", {})
+        if ome.get("version") == "0.6":
+            self.attrs["ome"] = add_nifti_systems(ome, header)
