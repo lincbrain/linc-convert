@@ -31,6 +31,7 @@ Needs: multiview-stitcher, dask, numpy, scipy, zarr, pyyaml, cyclopts, and the
 
 import re
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -109,18 +110,34 @@ def load_chunk(path: PathLike, slice_numb: int, camera_numb: int, channel: str,
     return vol
 
 
+def _block_mean(frame: np.ndarray, factor: int) -> np.ndarray:
+    """Mean over ``factor`` x ``factor`` blocks, ignoring NaN (all-NaN stays NaN)."""
+    if factor == 1:
+        return frame
+    nz, ny = frame.shape
+    pz, py = -nz % factor, -ny % factor
+    padded = np.pad(frame, ((0, pz), (0, py)), constant_values=np.nan)
+    blocks = padded.reshape(padded.shape[0] // factor, factor,
+                            padded.shape[1] // factor, factor)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return np.nanmean(blocks, axis=(1, 3)).astype(np.float32)
+
+
 def registration_corrections(
         path: PathLike, slice_numb: int, camera_numb: int, channel: str,
         layer: int, params: dict[str, Any], corrections_dir: PathLike,
-        per_chunk_corrections: bool = False,
+        per_chunk_corrections: bool = False, corrections_layer: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load the noise and scaler maps of a chunk, laid out on the registration volume.
 
     ``create_corrections`` makes its maps for the ``stitchingCrop`` (z range
-    and y range, z flipped if the camera is), while the chunks are registered
-    on the ``splitCrop`` y range with all z. The maps are placed at the
-    matching rows of the registration volume; rows outside them get scaler 1
-    and noise NaN (meaning: measure the background from the chunk).
+    and y range, z flipped if the camera is), at the pyramid level
+    ``corrections_layer``. The chunks are registered at ``layer`` (>=
+    ``corrections_layer``) on the ``splitCrop`` y range with all z. The maps
+    are put back into the raw chunk's frame, averaged down to ``layer`` and cut
+    to the registration volume. Rows the maps do not cover get scaler 1 and
+    noise NaN (meaning: measure the background from the chunk).
 
     Parameters
     ----------
@@ -131,8 +148,7 @@ def registration_corrections(
     channel : str
         Channel name.
     layer : int
-        Pyramid level; the maps must come from ``create_corrections`` with
-        the same ``layer``.
+        Pyramid level the chunks are registered at.
     params : dict
         Parsed scan metadata YAML.
     corrections_dir : str or pathlib.Path
@@ -140,6 +156,8 @@ def registration_corrections(
     per_chunk_corrections : bool, default=False
         Use the chunk's own maps; the chunk number is read from the folder
         name (``..._chunk-0023_...`` is chunk 23).
+    corrections_layer : int, default=0
+        Pyramid level ``create_corrections`` was run at (``--layer`` there).
 
     Returns
     -------
@@ -150,9 +168,13 @@ def registration_corrections(
     Raises
     ------
     ValueError
-        If the map shape does not match the stitching crop at ``layer``, or
-        the chunk number cannot be read from the name.
+        If ``corrections_layer`` is above ``layer``, the map shape does not
+        match the stitching crop at ``corrections_layer``, or the chunk number
+        cannot be read from the name.
     """
+    if corrections_layer > layer:
+        raise ValueError(f"corrections_layer {corrections_layer} is coarser than "
+                         f"the registration layer {layer}")
     chunk = None
     if per_chunk_corrections:
         found = re.search(r"chunk-?(\d+)", Path(path).name)
@@ -162,38 +184,48 @@ def registration_corrections(
         chunk = int(found.group(1))
     noise, scaler = load_corrections(str(corrections_dir), channel, chunk)
 
-    scale = 2 ** layer
-    raw_z, raw_y, _ = open_tile_array(path, layer).shape
+    # 1. maps -> the raw chunk's frame at corrections_layer (unflipped, uncropped)
+    c_scale = 2 ** corrections_layer
+    raw_zc, raw_yc, _ = open_tile_array(path, corrections_layer).shape
     z0, z1, t0, t1 = get_crop(params, camera_numb, slice_numb, channel,
                               kind="stitchingCrop", include_z=True)
-    _, _, s0, s1 = get_crop(params, camera_numb, slice_numb, channel,
-                            kind="splitCrop", include_z=False)
-    s0, sy = s0 // scale, min(s1 // scale, raw_y) - s0 // scale
-    t0, t1 = t0 // scale, min(t1 // scale, raw_y)
-    zc0, zc1 = (0, raw_z) if z0 is None or z1 is None else (
-        max(z0 // scale, 0), min(z1 // scale, raw_z))
+    t0, t1 = t0 // c_scale, min(t1 // c_scale, raw_yc)
+    zc0, zc1 = (0, raw_zc) if z0 is None or z1 is None else (
+        max(z0 // c_scale, 0), min(z1 // c_scale, raw_zc))
     if scaler.shape != (zc1 - zc0, t1 - t0):
         raise ValueError(
             f"corrections for channel {channel} have shape {scaler.shape} but "
-            f"the stitching crop at layer {layer} is (Z, Y)=({zc1 - zc0}, "
-            f"{t1 - t0}); run create_corrections with layer={layer}")
-    z_off = raw_z - zc1 if get_vertical_flip(params, camera_numb) else zc0
-    y_off = t0 - s0                       # registration row i <-> map row i - y_off
+            f"the stitching crop at layer {corrections_layer} is (Z, Y)="
+            f"({zc1 - zc0}, {t1 - t0}); pass the layer create_corrections was "
+            "run at as corrections_layer")
+    flip = get_vertical_flip(params, camera_numb)
+    frames = []
+    for m in (noise, scaler):
+        frame = np.full((raw_zc, raw_yc), np.nan, dtype=np.float32)
+        # crop is flipped after cutting
+        frame[zc0:zc1, t0:t1] = m[::-1] if flip else m
+        frames.append(_block_mean(frame, 2 ** (layer - corrections_layer)))
 
-    full = np.ones((raw_z, sy), dtype=np.float32)
-    full_noise = np.full((raw_z, sy), np.nan, dtype=np.float32)
-    zi0, zi1 = max(z_off, 0), min(z_off + scaler.shape[0], raw_z)
-    yi0, yi1 = max(y_off, 0), min(y_off + scaler.shape[1], sy)
-    if zi0 < zi1 and yi0 < yi1:
-        src = (slice(zi0 - z_off, zi1 - z_off),
-               slice(yi0 - y_off, yi1 - y_off))
-        full[zi0:zi1, yi0:yi1] = scaler[src]
-        full_noise[zi0:zi1, yi0:yi1] = noise[src]
-    covered = (zi1 - zi0) * (yi1 - yi0) / \
-        (raw_z * sy) if zi1 > zi0 and yi1 > yi0 else 0
+    # 2. cut to the registration volume: splitCrop rows, all z, flipped
+    raw_z, raw_y, _ = open_tile_array(path, layer).shape
+    scale = 2 ** layer
+    _, _, s0, s1 = get_crop(params, camera_numb, slice_numb, channel,
+                            kind="splitCrop", include_z=False)
+    s0, s1 = s0 // scale, min(s1 // scale, raw_y)
+    out = []
+    for frame in frames:
+        full = np.full((raw_z, raw_y), np.nan, dtype=np.float32)
+        nz_, ny_ = min(raw_z, frame.shape[0]), min(raw_y, frame.shape[1])
+        full[:nz_, :ny_] = frame[:nz_, :ny_]
+        vol = full[:, s0:s1]
+        out.append(vol[::-1] if flip else vol)
+    noise_reg, scaler_reg = out
+    covered = float(np.isfinite(scaler_reg).mean())
+    scaler_reg = np.where(np.isfinite(scaler_reg),
+                          scaler_reg, 1.0).astype(np.float32)
     print(f"  {Path(path).name}: correction maps cover {covered:.0%} of the "
           "registration volume (other rows: own background, no scaling)")
-    return full_noise, full
+    return noise_reg, scaler_reg
 
 
 def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
@@ -202,7 +234,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         subtract_background: bool = True,
                         smooth_sigma: float = 1.0,
                         corrections_dir: Optional[PathLike] = None,
-                        per_chunk_corrections: bool = False) -> Pair:
+                        per_chunk_corrections: bool = False,
+                        corrections_layer: int = 0) -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
     Parameters
@@ -237,6 +270,9 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
         do not cover still are).
     per_chunk_corrections : bool, default=False
         Use each chunk's own maps (``create_corrections`` with ``per_chunk``).
+    corrections_layer : int, default=0
+        Pyramid level ``create_corrections`` was run at; its maps are averaged
+        down to ``layer``.
 
     Returns
     -------
@@ -293,10 +329,10 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     if corrections_dir is not None:
         noise_a, scaler_a = registration_corrections(
             chunk_a, slice_numb, camera_numb, channel, layer, params,
-            corrections_dir, per_chunk_corrections)
+            corrections_dir, per_chunk_corrections, corrections_layer)
         noise_b, scaler_b = registration_corrections(
             chunk_b, slice_numb, camera_numb, channel, layer, params,
-            corrections_dir, per_chunk_corrections)
+            corrections_dir, per_chunk_corrections, corrections_layer)
 
     t0 = time.time()
     sub_a = read_volume_rows(vol_a, a_y0, sy, 0, sx,
@@ -338,7 +374,8 @@ def register_chunks(chunks: list[str],
                     background_length: int = 400, subtract_background: bool = True,
                     smooth_sigma: float = 1.0, force: bool = False,
                     corrections_dir: Optional[str] = None,
-                    per_chunk_corrections: bool = False) -> None:
+                    per_chunk_corrections: bool = False,
+                    corrections_layer: int = 0) -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -391,6 +428,11 @@ def register_chunks(chunks: list[str],
     per_chunk_corrections : bool, default=False
         Use each chunk's own scaler map (``create_corrections`` with
         ``per_chunk``; the chunk number is read from the folder name).
+    corrections_layer : int, default=0
+        Pyramid level that ``create_corrections`` was run at (its ``--layer``,
+        0 = full resolution). The maps are averaged down to ``layer``, so
+        registering at a lower resolution than the corrections is fine; it
+        cannot be above ``layer``.
 
     Raises
     ------
@@ -417,7 +459,8 @@ def register_chunks(chunks: list[str],
                                   subtract_background=subtract_background,
                                   smooth_sigma=smooth_sigma,
                                   corrections_dir=corrections_dir,
-                                  per_chunk_corrections=per_chunk_corrections)
+                                  per_chunk_corrections=per_chunk_corrections,
+                                  corrections_layer=corrections_layer)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
     avg = average_pairs(pairs)
@@ -455,7 +498,8 @@ def register_chunks(chunks: list[str],
                      "scaler_correction": corrections_dir is not None,
                      "corrections_dir": (None if corrections_dir is None
                                          else str(corrections_dir)),
-                     "per_chunk_corrections": bool(per_chunk_corrections)},
+                     "per_chunk_corrections": bool(per_chunk_corrections),
+                     "corrections_layer": int(corrections_layer)},
         "chunks": [str(c) for c in chunks],
     }
     write_yaml(out_path, result)
