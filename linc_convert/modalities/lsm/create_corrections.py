@@ -52,6 +52,7 @@ import cyclopts
 import numpy as np
 import yaml
 
+from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     calibrate_tile,
     correction_paths,
@@ -67,8 +68,7 @@ from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
     get_crops,
     get_vertical_flip,
 )
-
-app = cyclopts.App(name="create_corrections", help_format="markdown")
+from linc_convert.utils.zarr_config import autoconfig
 
 
 def _create_per_chunk(
@@ -112,7 +112,13 @@ def _create_per_chunk(
     return results
 
 
-@app.default
+create_corrections = cyclopts.App(
+    name="create_corrections", help_format="markdown")
+lsm.command(create_corrections)
+
+
+@create_corrections.default
+@autoconfig
 def create_corrections(
     input_path: str,
     yaml_path: str,
@@ -246,7 +252,3 @@ def create_corrections(
         print(f"channel {ch}: averaged noise_map mean={noise.mean():.2f} over tiles "
               f"{list(reference_tiles)}\n  wrote {results[ch]['noise']}\n"
               f"  wrote {results[ch]['scaler']}")
-
-
-if __name__ == "__main__":
-    app()
