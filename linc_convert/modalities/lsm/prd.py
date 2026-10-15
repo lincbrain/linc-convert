@@ -75,12 +75,14 @@ def convert(
         memory fits; leftover budget deepens the slab (unless `slab_depth`
         is given).
     max_shard_size
-        Largest uncompressed shard size, used when `shard` is not given
-        (default "40GB": ~13 GB shard files at the ~3x compression of LSM
-        data; S3 allows up to "5TB"). Shards span the full frame in y and x
-        and as many slices along z as fit. Sharded output is streamed into
-        append-only shard files, so large shards need no extra memory.
-        "none" writes unsharded chunks.
+        Cap on the uncompressed bytes per shard, used when `shard` is not
+        given. A stored shard never exceeds its uncompressed size, so this
+        also bounds each object (S3 objects are limited to 5 TB stored);
+        stored shards are smaller by the compression ratio. The default
+        "40GB" gives ~13 GB shard files at the ~3x compression of LSM data.
+        Shards span the full frame in y and x and as many slices along z as
+        fit, and are streamed into append-only files, so large shards need
+        no extra memory. "none" writes unsharded chunks.
     slab_depth
         Slices read, compressed and written per batch (rounded up to the
         inner chunk, or to the shard for non-streamed layouts). Deeper slabs

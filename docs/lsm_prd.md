@@ -32,7 +32,7 @@ whole files and computed the pyramid with dask (validated on the 114 GB
 | Option | Default | Effect |
 |---|---|---|
 | `--chunk N` | 128 | Inner chunk (z, y, x). Smaller chunks give faster small reads and slightly better compression, but slower bulk reads with zarr-python. |
-| `--shard N` / `--max-shard-size S` | `40GB` | Shard shape, or the largest uncompressed shard (S3 allows up to `5TB`; `none` disables sharding). Shards span the whole frame in y/x and as many slices along z as fit; `40GB` gives ~13 GB shard files at the ~3× compression of this data. |
+| `--shard N` / `--max-shard-size S` | `40GB` | Shard shape, or a cap on the uncompressed bytes per shard (`none` disables sharding). Shards span the whole frame in y/x and as many slices along z as fit. A stored shard never exceeds its uncompressed size, so the cap also bounds each object (S3's 5 TB limit is on the stored object); stored shards are smaller by the compression ratio, so `40GB` gives ~13 GB files at the ~3× compression of this data. |
 | `--compressor-opt.clevel L` | 5 | blosc-zstd level. Level 1 is smaller *and* faster on this data (see below). |
 | `--workers N` | all CPUs | Compression threads. |
 | `--slab-depth N` | one chunk | Slices per batch. Deeper slabs only help when compression-bound (many cores, zstd ≥ 3). |
