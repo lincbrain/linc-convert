@@ -463,10 +463,16 @@ def test_prd_ome_v06(tmp_path):
         np.testing.assert_allclose(
             [world["x"], world["y"], world["z"]],
             (affine @ [ijk["x"], ijk["y"], ijk["z"], 1])[:3], atol=1e-6)
-    # Known limitation: released niizarr (1.0.0rc8) reads multiscales[0]["axes"],
-    # which 0.6 replaces by coordinateSystems; fixed in neuroscales/nifti-zarr-py#55.
-    with pytest.raises(KeyError, match="axes"):
-        niizarr.zarr2nii(str(outs["0.6"]))
+    # niizarr reads 0.6 since neuroscales/nifti-zarr-py#55; 1.0.0rc8 cannot
+    from niizarr import _zarr2nii
+
+    if hasattr(_zarr2nii, "_as_v05"):
+        nii6 = niizarr.zarr2nii(str(outs["0.6"]))
+        assert str(nii6.header) == str(nii.header)
+        np.testing.assert_array_equal(np.asarray(nii6.dataobj), np.asarray(nii.dataobj))
+    else:
+        with pytest.raises(KeyError, match="axes"):
+            niizarr.zarr2nii(str(outs["0.6"]))
 
 
 def test_zarr_v2_write_unsupported(tmp_path):

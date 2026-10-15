@@ -287,38 +287,34 @@ class ZarrGroup(ZarrNode):
         -------
         None.
         """
-        niizarr.write_ome_metadata(
-            self,
-            space_scale=space_scale,
-            time_scale=time_scale,
-            space_unit=space_unit,
-            time_unit=time_unit,
-            axes=axes,
-            name=name,
-            pyramid_aligns=pyramid_aligns,
-            levels=levels,
-            no_pool=no_pool,
+        kwargs = dict(
+            space_scale=space_scale, time_scale=time_scale,
+            space_unit=space_unit, time_unit=time_unit, axes=axes, name=name,
+            pyramid_aligns=pyramid_aligns, levels=levels, no_pool=no_pool,
             multiscales_type=multiscales_type,
-            ome_version="0.5",
         )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)  # warned below
+            try:
+                niizarr.write_ome_metadata(self, ome_version=ome_version, **kwargs)
+            except ValueError:  # niizarr <= 1.0.0rc8 only writes 0.4/0.5
+                niizarr.write_ome_metadata(self, ome_version="0.5", **kwargs)
         if ome_version == "0.5":
             warnings.warn(
                 "Writing OME-Zarr 0.5 will be deprecated in a future release; "
                 "use ome_version='0.6'.", FutureWarning, stacklevel=2)
-        if ome_version == "0.6":
-            method = None
+            return
+        ome = ome_v05_to_v06(dict(self.attrs["ome"]))  # no-op if already 0.6
+        for ms in ome["multiscales"]:
+            ms["type"] = multiscales_type or "mean"
             if not multiscales_type:
-                method = {
+                ms["metadata"] = {
                     "description": "non-overlapping 2x windows along pyramid "
                     "axes; mean, cast back to the input dtype by truncation; "
                     "trailing odd voxels trimmed",
                     "method": "linc_convert",
                 }
-            self.attrs["ome"] = ome_v05_to_v06(
-                dict(self.attrs["ome"]),
-                downsampling_type=multiscales_type or "mean",
-                method=method,
-            )
+        self.attrs["ome"] = ome
 
     def write_nifti_header(self, header: NiftiHeader) -> None:
         """Write a NIfTI header to the Zarr group.

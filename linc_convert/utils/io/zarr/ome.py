@@ -117,8 +117,11 @@ def ome_v06_to_v05_view(ome: dict[str, Any]) -> dict[str, Any]:
             views.append(copy.deepcopy(ms))
             continue
         cs = ms["coordinateSystems"][0]
+        # multiscale-level 0.6 transforms map "intrinsic" to other systems
+        # (e.g. nifti:qform); 0.5 has no equivalent, so they are dropped
         new = {k: copy.deepcopy(v) for k, v in ms.items()
-               if k not in ("coordinateSystems", "datasets")}
+               if k not in ("coordinateSystems", "datasets",
+                            "coordinateTransformations")}
         new["axes"] = copy.deepcopy(cs["axes"])
         new["datasets"] = []
         for ds in ms["datasets"]:
