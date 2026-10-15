@@ -39,13 +39,14 @@ def apply_corrections(vol: da.Array, noise: np.ndarray,
 
 
 def calibrate_tile(vol: da.Array, background_length: int,
-                   threshold_multiplier: float) -> Tuple[np.ndarray, np.ndarray]:
+                   threshold_multiplier: float,
+                   x_stride: int = X_STRIDE) -> Tuple[np.ndarray, np.ndarray]:
     """Compute the noise map and zy scaler map for one chunk and channel.
 
     Steps: noise map (``compute_noise_map``); threshold = median of the noise
     map; a pixel is signal only if its raw value is at least
     ``threshold * threshold_multiplier``; raw scaler = median over x (every
-    ``X_STRIDE``-th column) of the noise-subtracted signal pixels, invalid
+    ``x_stride``-th column) of the noise-subtracted signal pixels, invalid
     where it is ``<= MIN_SCALER`` or undefined; scaler =
     ``1 / (raw scaler / median(raw scaler))``, with 1e-9 for invalid rows.
 
@@ -57,6 +58,9 @@ def calibrate_tile(vol: da.Array, background_length: int,
         Number of trailing x columns used for each row's noise floor.
     threshold_multiplier : float
         See above.
+    x_stride : int, default=X_STRIDE
+        Every ``x_stride``-th x column feeds the per-row scaler median (use a
+        smaller value on lower-resolution levels).
 
     Returns
     -------
@@ -76,7 +80,7 @@ def calibrate_tile(vol: da.Array, background_length: int,
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         raw_scaler = np.asarray(
-            da.nanmedian(signal[:, :, ::X_STRIDE], axis=2).compute())
+            da.nanmedian(signal[:, :, ::x_stride], axis=2).compute())
 
     # a row whose median signal is ~0 is as unusable as one with no data
     raw_scaler = np.where(np.isfinite(raw_scaler) & (raw_scaler > MIN_SCALER),

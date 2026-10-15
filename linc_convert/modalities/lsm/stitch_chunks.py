@@ -42,6 +42,12 @@ Per-chunk values (optional): ``per_chunk_registration`` uses each pair's own
 and ``per_chunk_corrections`` uses each chunk's own noise and scaler maps (made
 by ``create_corrections`` with ``per_chunk``).
 
+Lower resolution (optional): ``layer`` stitches a lower pyramid level of the
+raw chunks (each level halves every axis) for fast test runs. Use the same
+``layer`` for ``create_corrections`` (smaller correction maps) and
+``register_chunks``; the registration YAML stays in full-resolution pixels and
+is scaled here.
+
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
 written, ``{general_config.out}/{channel}.stitch_checkpoint.json`` is updated.
 Running again with the same inputs reopens the output, skips the finished
@@ -177,7 +183,8 @@ def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
 
 
 def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: bool,
-            per_chunk_registration: bool) -> Tuple[List[int], List[int], float]:
+            per_chunk_registration: bool,
+            layer: int = 0) -> Tuple[List[int], List[int], float]:
     """Y positions, z origins and z shear of the chunks of one channel.
 
     Shared registration: chunk ``i`` starts at ``round(i * y_offset)``, all z
@@ -193,12 +200,18 @@ def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: boo
     (derivation: a feature at row ``r`` of chunk A is at row ``r - y_offset`` of
     chunk B and ``dz`` lower in z, and the shear moves it by ``shear_z * r``).
 
+    The registration YAML is in full-resolution pixels. On a lower pyramid
+    ``layer`` the positions are divided by ``2 ** layer``; ``shear_z`` is a
+    ratio and does not change.
+
     Returns
     -------
     positions_y, positions_z : list of int
+        In pixels of ``layer``.
     shear_z : float
     """
     n = len(tile_paths)
+    scale = 2 ** layer
     if not per_chunk_registration:
         positions_y, dz = load_tile_positions(coords, n)
         shear_z = 0.0
@@ -212,15 +225,15 @@ def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: boo
         elif abs(dz) > 0.5:
             print(f"channel {channel}: NOTE dz = {dz:.2f} px is not applied "
                   "(dz_as_shear_z=False)")
-        return positions_y, [0] * n, shear_z
+        return [int(round(y / scale)) for y in positions_y], [0] * n, shear_z
 
     names = [os.path.basename(p.rstrip("/")) for p in tile_paths]
     y, dz_pairs, y_avg, dz_avg = load_pair_registration(coords, names)
     shear_z = -dz_avg / y_avg if dz_as_shear_z else 0.0
-    positions_y = [int(round(v))
+    positions_y = [int(round(v / scale))
                    for v in np.concatenate([[0.0], np.cumsum(y)])]
     z_offsets = np.concatenate([[0.0], np.cumsum(dz_pairs + shear_z * y)])
-    positions_z = [int(round(v)) for v in z_offsets]
+    positions_z = [int(round(v / scale)) for v in z_offsets]
     print(f"channel {channel}: per-chunk registration, shear_z = {shear_z:.6f}; "
           f"y offsets {y.min():.1f}..{y.max():.1f}, dz {dz_pairs.min():+.2f}.."
           f"{dz_pairs.max():+.2f} px")
@@ -273,7 +286,7 @@ def stitch_channel(
     vertical_flip: bool, shear_x: float, shear_z: float, positions_y: List[int],
     positions_z: List[int], corrections_dir: str, out_dir: str,
     voxel_size: List[float], zarr_config: ZarrConfig,
-    per_chunk_corrections: bool = False,
+    per_chunk_corrections: bool = False, layer: int = 0,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -308,6 +321,10 @@ def stitch_channel(
         Use each chunk's own maps (``create_corrections`` with ``per_chunk``,
         chunk ``i`` uses chunk number ``i + 1``) instead of the shared ones.
         Each chunk's own blend confidence follows from its own scaler.
+    layer : int, default=0
+        Pyramid level of the raw chunks to stitch (0 = full resolution). The
+        crop is scaled to it; ``positions_y``/``positions_z``, the corrections
+        and ``voxel_size`` must already be for this level.
 
     Notes
     -----
@@ -333,7 +350,8 @@ def stitch_channel(
         raise ValueError("chunk positions must increase")
 
     def open_tile(path: str) -> da.Array:
-        return crop_and_flip(open_tile_array(path), crop, vertical_flip)
+        return crop_and_flip(open_tile_array(path, layer), crop, vertical_flip,
+                             layer)
 
     raw_shape = open_tile(tile_paths[0]).shape
     sz, sy, sx = raw_shape
@@ -351,6 +369,11 @@ def stitch_channel(
         """Noise map, scaler map and blend confidence of one chunk."""
         noise, scaler = load_corrections(
             corrections_dir, channel, index + 1 if per_chunk_corrections else None)
+        if noise.shape != (sz, sy) or scaler.shape != (sz, sy):
+            raise ValueError(
+                f"corrections for channel {channel} have shape {noise.shape}, "
+                f"but chunks at layer {layer} are (Z, Y)=({sz}, {sy}); run "
+                f"create_corrections with layer={layer}")
         return noise, scaler, _weights(scaler, shear_z, z_out)
 
     if n > 1 and steps.max() > sy:
@@ -479,6 +502,7 @@ def stitch_chunks(
     per_chunk_registration: bool = False,
     per_chunk_corrections: bool = False,
     restart: bool = False,
+    layer: int = 0,
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
 ) -> None:
@@ -531,6 +555,13 @@ def stitch_chunks(
         with ``per_chunk``), also used for each chunk's blend confidence.
     restart : bool, default=False
         Ignore any checkpoints and rewrite every channel from scratch.
+    layer : int, default=0
+        Pyramid level of the raw chunks to stitch (0 = full resolution), for
+        quick low-resolution test runs. Everything is scaled to the level: the
+        registration positions (``/ 2**layer``), the output voxel size
+        (``* 2**layer``) and the crops. ``corrections_dir`` must come from
+        ``create_corrections`` with the same ``layer``, and ``out`` should be
+        a different folder from the full-resolution output.
     general_config : GeneralConfig
         Output configuration; ``out`` is the output folder.
     zarr_config : ZarrConfig
@@ -546,7 +577,7 @@ def stitch_chunks(
     """
     if general_config is None or not getattr(general_config, "out", None):
         raise ValueError("general_config.out (the output folder) is required")
-    voxel_size = list(map(float, reversed(voxel_size)))
+    voxel_size = [float(v) * 2 ** layer for v in reversed(voxel_size)]
 
     with open(yaml_path) as f:
         scan_parameters = yaml.safe_load(f)
@@ -575,10 +606,10 @@ def stitch_chunks(
                                              all_chunks)
             positions_y, positions_z, shear_z = _layout(
                 coords, tile_paths, channel, dz_as_shear_z,
-                per_chunk_registration)
+                per_chunk_registration, layer)
             stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
                            shear_z, positions_y, positions_z, corrections_dir,
                            os.path.join(general_config.out, channel),
-                           voxel_size, zarr_config, per_chunk_corrections)
+                           voxel_size, zarr_config, per_chunk_corrections, layer)
     finally:
         client.close()

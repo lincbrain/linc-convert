@@ -46,7 +46,7 @@ folder next to this file.
 
 import os
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import cyclopts
 import numpy as np
@@ -54,6 +54,7 @@ import yaml
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
+    X_STRIDE,
     calibrate_tile,
     correction_paths,
 )
@@ -71,10 +72,17 @@ from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
 from linc_convert.utils.zarr_config import autoconfig
 
 
+def _level_settings(background_length: int, layer: int) -> Tuple[int, int]:
+    """Background length and x stride scaled from full resolution to ``layer``."""
+    scale = 2 ** layer
+    return max(1, background_length // scale), max(1, X_STRIDE // scale)
+
+
 def _create_per_chunk(
     input_path: str, camera_id: int, slice_number: int, scan_parameters: dict,
     channels: List[str], chunk_numbers: Optional[List[int]], output_dir: str,
     background_length: int, zy_threshold_multiplier: float, force: bool,
+    layer: int = 0,
 ) -> Dict[str, Any]:
     """Calibrate each chunk on its own; see ``create_corrections(per_chunk)``."""
     tile_paths = discover_tile_paths(input_path, camera_id)
@@ -87,6 +95,7 @@ def _create_per_chunk(
     crops = get_crops(scan_parameters, camera_id, slice_number)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
 
+    bg_len, x_stride = _level_settings(background_length, layer)
     results: Dict[str, Any] = {ch: {} for ch in channels}
     for number in numbers:
         todo = []
@@ -101,11 +110,11 @@ def _create_per_chunk(
             continue
         path = tile_paths[number - 1]
         print(f"[calibration] chunk {number}: {os.path.basename(path)}")
-        tile = open_tile_array(path, chunks=(128, 128, 128))
+        tile = open_tile_array(path, layer, chunks=(128, 128, 128))
         for ch in todo:
-            vol = crop_and_flip(tile, crops[ch], vertical_flip)
+            vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
             noise_map, scaler_map = calibrate_tile(
-                vol, background_length, zy_threshold_multiplier)
+                vol, bg_len, zy_threshold_multiplier, x_stride)
             write_tiff(results[ch][number]["noise"], noise_map)
             write_tiff(results[ch][number]["scaler"], scaler_map)
             print(f"  channel {ch}: noise_map mean={noise_map.mean():.2f}")
@@ -132,6 +141,7 @@ def create_corrections(
     zy_threshold_multiplier: float = 1.05,
     only_channel: Optional[str] = None,
     force: bool = False,
+    layer: int = 0,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
@@ -159,7 +169,8 @@ def create_corrections(
         ``per_chunk_corrections``. Existing chunk files are skipped unless
         ``force`` is set.
     background_length : int, default=5000
-        Trailing x columns used for each row's noise floor.
+        Trailing x columns (full-resolution pixels) used for each row's noise
+        floor.
     zy_threshold_multiplier : float, default=1.05
         A pixel counts toward the scaler only if its raw value is at least
         ``median(noise_map) * zy_threshold_multiplier``.
@@ -167,6 +178,12 @@ def create_corrections(
         Process just this channel of the camera.
     force : bool, default=False
         Recompute channels whose TIFFs already exist.
+    layer : int, default=0
+        Pyramid level of the raw chunks to calibrate on (0 = full resolution).
+        Each level halves every axis, so the maps are ``2**layer`` times
+        smaller in z and y; ``background_length`` and the x sampling are
+        scaled to the level. Use the same ``layer`` (and a separate
+        ``output_dir``) with ``stitch_chunks``.
 
     Notes
     -----
@@ -200,7 +217,7 @@ def create_corrections(
         _create_per_chunk(
             input_path, camera_id, slice_number, scan_parameters, channels,
             reference_tiles, output_dir, background_length,
-            zy_threshold_multiplier, force)
+            zy_threshold_multiplier, force, layer)
         return
 
     assert reference_tiles is not None
@@ -226,16 +243,17 @@ def create_corrections(
     crops = get_crops(scan_parameters, camera_id, slice_number)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
 
+    bg_len, x_stride = _level_settings(background_length, layer)
     noises: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     scalers: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     for ref_index in reference_tiles:
         path = tile_paths[ref_index - 1]
         print(f"[calibration] tile {ref_index}: {os.path.basename(path)}")
-        tile = open_tile_array(path, chunks=(128, 128, 128))
+        tile = open_tile_array(path, layer, chunks=(128, 128, 128))
         for ch in todo:
-            vol = crop_and_flip(tile, crops[ch], vertical_flip)
+            vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
             noise_map, scaler_map = calibrate_tile(
-                vol, background_length, zy_threshold_multiplier)
+                vol, bg_len, zy_threshold_multiplier, x_stride)
             noises[ch].append(noise_map)
             scalers[ch].append(scaler_map)
             print(f"  channel {ch}: noise_map mean={noise_map.mean():.2f}")
