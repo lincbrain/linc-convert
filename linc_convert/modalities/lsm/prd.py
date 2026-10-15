@@ -52,7 +52,7 @@ def convert(
     voxel_size: list[float] = (1, 1, 1),
     workers: int | None = None,
     max_memory: float | None = None,
-    max_shard_size: str | None = None,
+    max_shard_size: str | None = "5TB",
     slab_depth: int | None = None,
     verify: bool = False,
     general_config: GeneralConfig | None = None,
@@ -76,10 +76,11 @@ def convert(
         memory fits; leftover budget deepens the slab (unless `slab_depth`
         is given).
     max_shard_size
-        Largest uncompressed shard size, e.g. "5TB" (the S3 object limit).
-        Shards then span the full frame in y and x and as many slices along
-        z as fit; this overrides `shard`. Sharded output is streamed into
-        append-only shard files, so large shards need no extra memory.
+        Largest uncompressed shard size (default "5TB", the S3 object
+        limit), used when `shard` is not given. Shards span the full frame in
+        y and x and as many slices along z as fit. Sharded output is
+        streamed into append-only shard files, so large shards need no extra
+        memory. "none" writes unsharded chunks.
     slab_depth
         Slices read, compressed and written per batch (rounded up to the
         inner chunk, or to the shard for non-streamed layouts). Deeper slabs
@@ -100,7 +101,9 @@ def convert(
     # Set default output path if not provided
     general_config.set_default_name(os.path.basename(inp))
 
-    if max_shard_size:
+    if str(max_shard_size).lower() == "none":
+        max_shard_size = None
+    if max_shard_size and not zarr_config.shard:
         zarr_config = replace(zarr_config, shard=_shard_for_size(
             reader.shape, reader.dtype, zarr_config, _parse_size(max_shard_size)))
         logger.info("Shard shape %s", zarr_config.shard)

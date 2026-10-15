@@ -184,13 +184,13 @@ def test_prd_read_frames(tmp_path):
 # --------------------------------------------------------------------------
 LOSSLESS_CASES = {
     # name: convert kwargs
-    "v3-blosc-zstd5": dict(chunk=(8,)),
+    "v3-blosc-zstd5": dict(chunk=(8,), max_shard_size=None),
     "v3-blosc-zstd1": dict(chunk=(8,), compressor_opt={"clevel": 1}),
     "v3-blosc-zstd9": dict(chunk=(8,), compressor_opt={"clevel": 9}),
     "v3-blosc-lz4": dict(chunk=(8,), compressor_opt={"cname": "lz4"}),
     "v3-blosc-noshuffle": dict(chunk=(8,), compressor_opt={"shuffle": "noshuffle"}),
     "v3-zstd-codec": dict(chunk=(8,), compressor="zlib"),
-    "v3-uncompressed": dict(chunk=(8,), compressor="none"),
+    "v3-uncompressed": dict(chunk=(8,), compressor="none", max_shard_size=None),
     "v3-shard": dict(chunk=(4,), shard=(8,)),
     "v3-shard-uneven": dict(chunk=(4,), shard=(8, 12, 16)),
     "v3-shard-volume": dict(chunk=(4,), max_shard_size="5TB"),
@@ -199,7 +199,7 @@ LOSSLESS_CASES = {
     "v3-shard-deep-zstd1": dict(chunk=(4,), shard=(8,), slab_depth=20,
                                 compressor_opt={"clevel": 1}),
     "v3-shard-1worker": dict(chunk=(4,), max_shard_size="5TB", workers=1),
-    "ts-v3": dict(chunk=(8,), driver="tensorstore"),
+    "ts-v3": dict(chunk=(8,), driver="tensorstore", max_shard_size=None),
     "ts-v3-shard-deep": dict(chunk=(4,), shard=(8,), slab_depth=20,
                              driver="tensorstore"),
     "v3-ome06-shard-volume": dict(chunk=(4,), max_shard_size="5TB",
@@ -264,10 +264,12 @@ def test_prd_verify_detects_corruption(tmp_path):
 @pytest.mark.parametrize(
     "frames,height,width,cfg",
     [
-        ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=3)),
+        ([37, 37, 11], 21, 34, dict(chunk=(8,), max_shard_size=None)),
+        ([37, 37, 11], 21, 34, dict(chunk=(8,))),  # default: frame-wide shards
         ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,))),
-        ([5, 5], 3, 40, dict(chunk=(4,))),
-        ([37, 11], 21, 34, dict(chunk=(8,), driver="tensorstore")),
+        ([5, 5], 3, 40, dict(chunk=(4,), max_shard_size=None)),
+        ([37, 11], 21, 34, dict(chunk=(8,), driver="tensorstore",
+                                max_shard_size=None)),
         ([37, 11], 21, 34, dict(chunk=(8,), shard=(16,), driver="tensorstore")),
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="1GB")),
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB")),
@@ -470,3 +472,15 @@ def test_prd_ome_v06(tmp_path):
 def test_zarr_v2_write_unsupported(tmp_path):
     with pytest.raises(ValueError, match="Zarr v2"):
         prd.convert(PRD_INPUT_DIR, out=str(tmp_path / "o.nii.zarr"), zarr_version=2)
+
+
+def test_prd_default_frame_wide_shards(tmp_path):
+    """Without --shard, shards span the frame and as much of z as fits."""
+    _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
+    out = tmp_path / "o.nii.zarr"
+    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(8,))
+    arr = zarr.open_array(str(out / "0"))
+    assert arr.shards == (88, 24, 40)  # whole volume, rounded up to chunks
+    files = [p for p in (out / "0").rglob("*") if p.is_file() and p.name != "zarr.json"]
+    assert len(files) == 1
+
