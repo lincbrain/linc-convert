@@ -52,7 +52,6 @@ import cyclopts
 import numpy as np
 import yaml
 
-from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     calibrate_tile,
     correction_paths,
@@ -68,7 +67,8 @@ from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
     get_crops,
     get_vertical_flip,
 )
-from linc_convert.utils.zarr_config import autoconfig
+
+app = cyclopts.App(name="create_corrections", help_format="markdown")
 
 
 def _create_per_chunk(
@@ -112,13 +112,7 @@ def _create_per_chunk(
     return results
 
 
-create_corrections = cyclopts.App(
-    name="create_corrections", help_format="markdown")
-lsm.command(create_corrections)
-
-
-@create_corrections.default
-@autoconfig
+@app.default
 def create_corrections(
     input_path: str,
     yaml_path: str,
@@ -132,7 +126,7 @@ def create_corrections(
     zy_threshold_multiplier: float = 1.05,
     only_channel: Optional[str] = None,
     force: bool = False,
-) -> Dict[str, Any]:
+) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
     Parameters
@@ -168,13 +162,12 @@ def create_corrections(
     force : bool, default=False
         Recompute channels whose TIFFs already exist.
 
-    Returns
-    -------
-    dict
-        ``{channel: {"noise": path, "scaler": path}}`` for every channel
-        handled; with ``per_chunk`` ``{channel: {chunk_number: {"noise": path,
-        "scaler": path}}}``. Maps that already exist are reported and
-        skipped unless ``force`` is True.
+    Notes
+    -----
+    Nothing is returned: ``linc-convert`` treats a returned value as the exit
+    status, so a dict made the job look failed. Per-channel TIFFs are written
+    to ``{output_dir}/{channel}/``; maps that already exist are reported and
+    skipped unless ``force`` is True.
 
     Raises
     ------
@@ -198,10 +191,11 @@ def create_corrections(
         channels = [only_channel]
 
     if per_chunk:
-        return _create_per_chunk(
+        _create_per_chunk(
             input_path, camera_id, slice_number, scan_parameters, channels,
             reference_tiles, output_dir, background_length,
             zy_threshold_multiplier, force)
+        return
 
     assert reference_tiles is not None
     results: Dict[str, Dict[str, str]] = {}
@@ -215,7 +209,7 @@ def create_corrections(
         else:
             todo.append(ch)
     if not todo:
-        return results
+        return
 
     tile_paths = discover_tile_paths(input_path, camera_id)
     bad = [i for i in reference_tiles if not 1 <= i <= len(tile_paths)]
@@ -252,4 +246,7 @@ def create_corrections(
         print(f"channel {ch}: averaged noise_map mean={noise.mean():.2f} over tiles "
               f"{list(reference_tiles)}\n  wrote {results[ch]['noise']}\n"
               f"  wrote {results[ch]['scaler']}")
-    return results
+
+
+if __name__ == "__main__":
+    app()
