@@ -11,7 +11,10 @@ https://dandiarchive.org/dandiset/001769/draft/files?location=rawdata/HG9_Z1_Y1
 import logging
 import math
 import os
+import platform
 import re
+import sys
+import sysconfig
 from dataclasses import replace
 
 import cyclopts
@@ -104,6 +107,12 @@ def convert(
         if workers is None:
             workers = len(os.sched_getaffinity(0)) if hasattr(
                 os, "sched_getaffinity") else os.cpu_count()
+        gil = getattr(sys, "_is_gil_enabled", lambda: True)()
+        if sysconfig.get_config_var("Py_GIL_DISABLED") and gil:
+            logger.warning("Free-threaded Python, but an extension re-enabled "
+                           "the GIL; compression threads will not scale.")
+        logger.info("Python %s, GIL %s, %d worker thread(s)",
+                    platform.python_version(), "on" if gil else "off", workers)
         logger.info(
             "Stream %d file(s) with shape: "
             "%d total_frames, %d height, %d width.",
