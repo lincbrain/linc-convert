@@ -46,7 +46,10 @@ def _downsample(block: np.ndarray, factors: Sequence[int]) -> np.ndarray:
     out_shape = [s // f for s, f in zip(block.shape, factors)]
     block = block[tuple(slice(0, o * f) for o, f in zip(out_shape, factors))]
     integer = np.issubdtype(dtype, np.integer)
-    acc_dtype = np.int64 if integer else np.float64
+    if integer and np.issubdtype(dtype, np.unsignedinteger) and dtype.itemsize <= 2:
+        acc_dtype = np.uint32  # 8 * 65535 fits
+    else:
+        acc_dtype = np.int64 if integer else np.float64
     acc = None
     count = 0
     for dz in range(factors[0]):
@@ -70,16 +73,25 @@ def _downsample(block: np.ndarray, factors: Sequence[int]) -> np.ndarray:
 
 
 def _downsample_parallel(
-    block: np.ndarray, factors: Sequence[int], pool: Optional[ThreadPoolExecutor]
+    block: np.ndarray,
+    factors: Sequence[int],
+    pool: Optional[ThreadPoolExecutor],
+    band_bytes: int = 2**24,
 ) -> np.ndarray:
-    """`_downsample`, split into y-bands processed by a thread pool."""
-    ny_out = block.shape[1] // factors[1]
-    nbands = 1 if pool is None else min(pool._max_workers, ny_out)
-    if nbands <= 1 or block.nbytes < 2**24:
+    """`_downsample` in y-bands, so temporaries stay ~`band_bytes` each.
+
+    Bands are processed by `pool` if given (numpy releases the GIL).
+    """
+    out_shape = [s // f for s, f in zip(block.shape, factors)]
+    ny_out = out_shape[1]
+    # bytes of input touched per output row
+    row_bytes = block.nbytes // max(block.shape[1], 1) * factors[1]
+    nbands = max(1, min(ny_out, int(np.ceil(row_bytes * ny_out / band_bytes))))
+    if pool is not None:
+        nbands = max(nbands, min(pool._max_workers, ny_out))
+    if nbands <= 1:
         return _downsample(block, factors)
-    out = np.empty(
-        [s // f for s, f in zip(block.shape, factors)], dtype=block.dtype
-    )
+    out = np.empty(out_shape, dtype=block.dtype)
     edges = np.linspace(0, ny_out, nbands + 1).astype(int)
 
     def band(i: int) -> None:
@@ -88,7 +100,11 @@ def _downsample_parallel(
             block[:, o0 * factors[1]: o1 * factors[1]], factors
         )
 
-    list(pool.map(band, range(nbands)))
+    if pool is None:
+        for i in range(nbands):
+            band(i)
+    else:
+        list(pool.map(band, range(nbands)))
     return out
 
 
@@ -97,7 +113,7 @@ def _downsample_parallel(
 # --------------------------------------------------------------------------
 _W_BUFS: list[np.ndarray] = []
 _W_SHMS: list[shared_memory.SharedMemory] = []
-_W_ARR = None
+_W_ARRS: list = []
 
 
 def _attach_shm(name: str) -> shared_memory.SharedMemory:
@@ -116,19 +132,40 @@ def _attach_shm(name: str) -> shared_memory.SharedMemory:
 
 
 def _worker_init(
-    shm_names: list[str], shape: tuple, dtype: str, root: str, path: str
+    buffers: list[tuple[str, tuple]], dtype: str, locations: list[tuple[str, str]]
 ) -> None:
-    global _W_ARR
     import zarr
 
-    _W_SHMS[:] = [_attach_shm(n) for n in shm_names]
-    _W_BUFS[:] = [np.ndarray(shape, dtype, buffer=s.buf) for s in _W_SHMS]
-    _W_ARR = zarr.open_array(zarr.storage.LocalStore(root), path=path, mode="r+")
+    # one shard at a time per process; avoid per-thread malloc arenas
+    zarr.config.set({"threading.max_workers": 1, "async.concurrency": 4})
+
+    _W_SHMS[:] = [_attach_shm(name) for name, _ in buffers]
+    _W_BUFS[:] = [
+        np.ndarray(shape, dtype, buffer=s.buf)
+        for s, (_, shape) in zip(_W_SHMS, buffers)
+    ]
+    _W_ARRS[:] = [
+        zarr.open_array(zarr.storage.LocalStore(root), path=path, mode="r+")
+        for root, path in locations
+    ]
 
 
 def _worker_put(task: tuple) -> None:
-    b, z0, n, y0, y1, x0, x1 = task
-    _W_ARR[z0: z0 + n, y0:y1, x0:x1] = _W_BUFS[b][:n, y0:y1, x0:x1]
+    b, lvl, z0, n, y0, y1, x0, x1 = task
+    _W_ARRS[lvl][z0: z0 + n, y0:y1, x0:x1] = _W_BUFS[b][:n, y0:y1, x0:x1]
+
+
+def _spawn_pool(processes: int, initializer: Callable, initargs: tuple):  # noqa: ANN202
+    """Spawn a worker pool, limiting glibc malloc arenas in the children."""
+    import os
+
+    env = os.environ.get("MALLOC_ARENA_MAX")
+    os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+    try:
+        return mp.get_context("spawn").Pool(processes, initializer, initargs)
+    finally:
+        if env is None:
+            os.environ.pop("MALLOC_ARENA_MAX", None)
 
 
 def _local_zarr_location(arr: ZarrArray) -> Optional[tuple[str, str]]:
@@ -139,6 +176,47 @@ def _local_zarr_location(arr: ZarrArray) -> Optional[tuple[str, str]]:
     if inner is None or root is None or type(store).__name__ != "LocalStore":
         return None
     return str(root), str(inner.path)
+
+
+# per-worker overhead (interpreter + numpy/zarr + one shard being encoded)
+WORKER_OVERHEAD_BYTES = 160 * 2**20
+# main process heap besides the buffers
+MAIN_OVERHEAD_BYTES = 300 * 2**20
+
+
+def estimate_memory(
+    shape: Sequence[int],
+    itemsize: int,
+    unit: Sequence[int],
+    workers: int,
+    levels: int,
+) -> int:
+    """Rough peak memory (bytes) of `StreamingPyramidWriter`.
+
+    `unit` is the (z, y, x) write unit (shard, or chunk if unsharded).
+    Counts two level-0 slabs (read/write ping-pong), one slab per coarser
+    level, and a fixed cost per worker.
+    """
+    slab = unit[0] * shape[1] * shape[2] * itemsize
+    pyramid = sum(slab / 4**k for k in range(1, levels + 1))
+    shard = int(np.prod(unit)) * itemsize
+    per_worker = WORKER_OVERHEAD_BYTES + 2 * shard
+    return int(2 * slab + pyramid + MAIN_OVERHEAD_BYTES + workers * per_worker)
+
+
+def workers_for_memory(
+    max_bytes: int, shape: Sequence[int], itemsize: int, unit: Sequence[int],
+    levels: int, max_workers: int,
+) -> int:
+    """Largest worker count (<= max_workers, >= 1) whose estimate fits."""
+    for w in range(max_workers, 0, -1):
+        if estimate_memory(shape, itemsize, unit, w, levels) <= max_bytes:
+            return w
+    need = estimate_memory(shape, itemsize, unit, 1, levels)
+    raise MemoryError(
+        f"Need ~{need / 2**30:.1f} GiB even with one worker; use a smaller "
+        f"shard/chunk along z (current {unit[0]}) or allow more memory."
+    )
 
 
 class StreamingPyramidWriter:
@@ -182,49 +260,50 @@ class StreamingPyramidWriter:
         self.carry: list[Optional[np.ndarray]] = [None] * self.nlevels
 
         workers = max(1, int(max_workers or 1))
-        location = _local_zarr_location(base)
+        locations = [_local_zarr_location(a) for a in self.arrays]
+        local = all(loc is not None for loc in locations)
         if worker_type is None:
-            worker_type = "process" if (workers > 1 and location) else "thread"
-        if worker_type == "process" and location is None:
+            worker_type = "process" if (workers > 1 and local) else "thread"
+        if worker_type == "process" and not local:
             logger.warning("Process workers need a local zarr-python store; "
                            "falling back to threads.")
             worker_type = "thread"
         self.worker_type = worker_type
-        self._tpool = ThreadPoolExecutor(workers) if workers > 1 else None
         self._ppool = None
         self._shms: list[shared_memory.SharedMemory] = []
-        base_unit_shape = (self.unit[0], *self.shapes[0][1:])
-        if worker_type == "process" and workers > 1:
-            # two buffers for the reader/writer ping-pong + one staging buffer
-            nbytes = int(np.prod(base_unit_shape)) * self.dtype.itemsize
-            self._shms = [
-                shared_memory.SharedMemory(create=True, size=max(nbytes, 1))
-                for _ in range(3)
+        use_procs = worker_type == "process" and workers > 1
+        # threads: write tiles (thread mode) and downsample y-bands (both)
+        self._tpool = ThreadPoolExecutor(workers) if workers > 1 else None
+        # buffers: level 0 gets two (reader/writer ping-pong) + one staging;
+        # each coarser level gets one. Index i of `self._bufs` -> level.
+        shapes = [(self.unit[0], *self.shapes[0][1:])] * 3 + [
+            (u, *s[1:]) for u, s in zip(self.unit[1:], self.shapes[1:])
+        ]
+        self._buf_level = [0, 0, 0] + list(range(1, self.nlevels))
+        if use_procs:
+            for shp in shapes:
+                nbytes = int(np.prod(shp)) * self.dtype.itemsize
+                self._shms.append(
+                    shared_memory.SharedMemory(create=True, size=max(nbytes, 1)))
+            self._bufs = [
+                np.ndarray(shp, self.dtype, buffer=m.buf)
+                for shp, m in zip(shapes, self._shms)
             ]
-            self._base_bufs = [
-                np.ndarray(base_unit_shape, self.dtype, buffer=s.buf)
-                for s in self._shms
-            ]
-            self._ppool = mp.get_context("spawn").Pool(
+            self._ppool = _spawn_pool(
                 workers,
                 _worker_init,
-                ([s.name for s in self._shms], base_unit_shape,
-                 self.dtype.str, *location),
+                ([(m.name, shp) for m, shp in zip(self._shms, shapes)],
+                 self.dtype.str, locations),
             )
         else:
-            self._base_bufs = [
-                np.empty(base_unit_shape, self.dtype) for _ in range(3)
-            ]
-        self.buf = [self._base_bufs[2]] + [
-            np.empty((u, *s[1:]), dtype=self.dtype)
-            for u, s in zip(self.unit[1:], self.shapes[1:])
-        ]
+            self._bufs = [np.empty(shp, self.dtype) for shp in shapes]
+        self._base_bufs = self._bufs[:3]
+        self.buf = [self._bufs[2]] + self._bufs[3:]
         logger.info(
             "Streaming %d levels, z write units %s, %d %s worker(s), "
             "buffers %.1f MB",
             self.nlevels, self.unit, workers, worker_type,
-            (sum(b.nbytes for b in self._base_bufs)
-             + sum(b.nbytes for b in self.buf[1:])) / 2**20,
+            sum(b.nbytes for b in self._bufs) / 2**20,
         )
 
     @property
@@ -256,17 +335,19 @@ class StreamingPyramidWriter:
 
     def _write(self, lvl: int, data: np.ndarray):  # noqa: ANN202
         """Write `data` at the level cursor. May return an async handle."""
-        if lvl == 0 and self._ppool is not None:
+        if self._ppool is not None:
             idx = next(
-                (i for i, b in enumerate(self._base_bufs)
-                 if b.ctypes.data == data.ctypes.data), None)
+                (i for i, b in enumerate(self._bufs)
+                 if self._buf_level[i] == lvl
+                 and b.ctypes.data == data.ctypes.data), None)
             if idx is None:
-                self._base_bufs[2][: data.shape[0]] = data
-                idx = 2
-            z0 = self._advance(0, data.shape[0])
+                staging = 2 if lvl == 0 else self._bufs.index(self.buf[lvl])
+                self._bufs[staging][: data.shape[0]] = data
+                idx = staging
+            z0 = self._advance(lvl, data.shape[0])
             tasks = [
-                (idx, z0, data.shape[0], y0, y1, x0, x1)
-                for y0, y1, x0, x1 in self._tiles(0, *data.shape[1:])
+                (idx, lvl, z0, data.shape[0], y0, y1, x0, x1)
+                for y0, y1, x0, x1 in self._tiles(lvl, *data.shape[1:])
             ]
             return self._ppool.map_async(_worker_put, tasks, chunksize=1)
         arr = self.arrays[lvl]
@@ -333,8 +414,10 @@ class StreamingPyramidWriter:
         """
         if tuple(frames.shape[1:]) != tuple(self.shapes[0][1:]):
             raise ValueError(f"Bad frame shape {frames.shape[1:]}")
-        if self.fill[0] == 0 and frames.shape[0] == self.unit[0]:
-            # aligned full unit: write straight from the caller's buffer
+        last = self.cursor[0] + frames.shape[0] == self.shapes[0][0]
+        if self.fill[0] == 0 and (frames.shape[0] == self.unit[0] or last):
+            # aligned full (or final) unit: write straight from the caller's
+            # buffer; the staging buffer is then never touched
             self._write_and_feed(0, frames)
         else:
             self._push(0, frames)
@@ -360,6 +443,7 @@ class StreamingPyramidWriter:
             self._ppool.close()
             self._ppool.join()
             self._ppool = None
+        self._bufs = []
         self._base_bufs = []
         self.buf = []
         for s in self._shms:

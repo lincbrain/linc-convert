@@ -137,3 +137,20 @@ def test_prd_streaming_matches_legacy(
                 workers=3, worker_type=worker_type, **kw)
     assert_zarr_equal(str(tmp_path / "stream.nii.zarr"),
                       str(tmp_path / "legacy.nii.zarr"))
+
+
+def test_prd_max_memory(tmp_path):
+    from linc_convert.utils.io.zarr.stream_pyramid import workers_for_memory
+
+    shape, unit = (26478, 1200, 1800), (256, 256, 256)
+    assert workers_for_memory(64 * 2**30, shape, 2, unit, 8, 8) == 8
+    assert workers_for_memory(int(3.5 * 2**30), shape, 2, unit, 8, 8) < 8
+    with pytest.raises(MemoryError):
+        workers_for_memory(2**30, shape, 2, unit, 8, 8)
+
+    _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "a.nii.zarr"),
+                chunk=(8,), legacy=True)
+    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "b.nii.zarr"),
+                chunk=(8,), workers=4, max_memory=0.5)
+    assert_zarr_equal(str(tmp_path / "b.nii.zarr"), str(tmp_path / "a.nii.zarr"))

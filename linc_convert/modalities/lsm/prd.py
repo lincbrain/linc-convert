@@ -14,14 +14,18 @@ from typing import Literal
 
 import cyclopts
 import dask.array as da
+import numpy as np
 import tqdm
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.utils.io.prd import PrdSetInterpreter
 from linc_convert.utils.io.zarr import from_config
+from linc_convert.utils.io.zarr.generate_pyramid import default_levels
+from linc_convert.utils.io.zarr.helpers import _compute_zarr_layout
 from linc_convert.utils.io.zarr.stream_pyramid import (
     StreamingPyramidWriter,
     stream_volume,
+    workers_for_memory,
 )
 from linc_convert.utils.nifti_header import build_nifti_header
 from linc_convert.utils.zarr_config import (
@@ -44,6 +48,7 @@ def convert(
     voxel_size: list[float] = (1, 1, 1),
     workers: int | None = None,
     worker_type: Literal["process", "thread"] | None = None,
+    max_memory: float | None = None,
     legacy: bool = False,
     general_config: GeneralConfig | None = None,
     zarr_config: ZarrConfig | None = None,
@@ -65,6 +70,9 @@ def convert(
     worker_type
         "process" (default with the zarr-python driver) or "thread"
         (default with tensorstore, whose encoder is multithreaded).
+    max_memory
+        Memory budget in GiB. The number of workers is reduced until the
+        estimated peak memory fits (useful during acquisition).
     legacy
         Use the previous dask-based implementation (high memory use).
     general_config
@@ -93,6 +101,18 @@ def convert(
             "%d total_frames, %d height, %d width.",
             len(reader.prd_files), *reader.shape,
         )
+        if max_memory:
+            unit = _write_unit(reader.shape, reader.dtype, zarr_config)
+            levels = zarr_config.levels
+            if levels == -1:
+                chunk, _ = _compute_zarr_layout(
+                    reader.shape, reader.dtype, zarr_config)
+                levels = default_levels(reader.shape, chunk[-3:], None)
+            workers = workers_for_memory(
+                int(max_memory * 2**30), reader.shape, reader.dtype.itemsize,
+                unit, levels, workers,
+            )
+            logger.info("Using %d worker(s) to fit %.1f GiB", workers, max_memory)
         writer = StreamingPyramidWriter(
             zgroup, reader.shape, reader.dtype, zarr_config,
             levels=zarr_config.levels, max_workers=workers,
@@ -120,6 +140,12 @@ def convert(
         zgroup.write_nifti_header(header)
 
     logger.info("Conversion complete.")
+
+
+def _write_unit(shape: tuple, dtype: np.dtype, zarr_config: ZarrConfig) -> tuple:
+    """Spatial write unit (shard, else chunk) the output array will use."""
+    chunk, shard = _compute_zarr_layout(shape, dtype, zarr_config)
+    return tuple(int(u) for u in (shard or chunk)[-3:])
 
 
 def _convert_legacy(reader, zgroup, zarr_config) -> None:  # noqa: ANN001
