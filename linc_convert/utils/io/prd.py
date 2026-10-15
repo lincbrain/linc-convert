@@ -25,9 +25,7 @@ import re
 from os import PathLike
 from typing import List
 
-import dask.array as da
 import numpy as np
-from dask import delayed
 
 
 class PrdSetInterpreter:
@@ -132,25 +130,6 @@ class PrdSetInterpreter:
 
         return n_frames
 
-    def _load_prd_file(self, path: str) -> np.ndarray:
-        """Load one .prd file into a (n_frames, height, width) array.
-
-        Seek to each frame's offset and stack them, skipping the inter-frame
-        gaps and any trailing padding.
-        """
-        n_frames = self._frames_in_file(path)
-
-        frames = np.empty((n_frames, self.pixels_per_frame), dtype="<u2")
-        
-        with open(path, "rb") as fh:
-            for i in range(n_frames):
-                fh.seek(self.header_bytes + i * self.stride_bytes)
-                frames[i] = np.fromfile(fh,
-                                        dtype="<u2",
-                                        count=self.pixels_per_frame)
-
-        return frames.reshape(n_frames, self.height, self.width)
-
     def read_frames(
         self, start: int, stop: int, out: np.ndarray | None = None
     ) -> np.ndarray:
@@ -181,28 +160,3 @@ class PrdSetInterpreter:
                         raise IOError(f"Short read in {self.prd_files[f]}")
             i += count
         return out
-
-    def assemble(self) -> da.Array:
-        """
-        Assemble all prd files into a single 3D volume with a lazy Dask array.
-
-        Returns
-        -------
-        A Dask array of shape (frames_total, height, width), where
-        frames_total is the sum of the frame counts across all `.prd` files.
-        """
-        if not self.prd_files:
-            empty = np.zeros((0, self.height, self.width), dtype=self.dtype)
-            return da.from_array(empty)
-
-        delayed_chunks = [
-            da.from_delayed(
-                delayed(self._load_prd_file)(path),
-                shape=(self._frames_in_file(path), self.height, self.width),
-                dtype=self.dtype,
-            )
-            for path in self.prd_files
-        ]
-
-        return da.concatenate(delayed_chunks, axis=0)
-

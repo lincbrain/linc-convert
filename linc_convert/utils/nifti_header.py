@@ -10,6 +10,7 @@ from niizarr._header import bin2nii, get_nibabel_klass
 
 from linc_convert.utils.io.zarr import open_array
 from linc_convert.utils.io.zarr.abc import NiftiHeader
+from linc_convert.utils.io.zarr.ome import multiscales_v05_view
 from linc_convert.utils.orientation import center_affine, orientation_to_affine
 from linc_convert.utils.unit import to_nifti_unit
 from linc_convert.utils.zarr_config import NiftiConfig
@@ -180,7 +181,8 @@ def build_nifti_header(
     dtype = np.dtype(arr.dtype)
 
     # Pull multiscales from OME metadata if present
-    multiscales = zgroup.attrs.get("ome", zgroup.attrs).get("multiscales")
+    # (0.5-shaped view: niizarr does not understand 0.6 coordinateSystems)
+    multiscales = multiscales_v05_view(dict(zgroup.attrs))
 
     # Start from loaded header if available; else default
     loaded_affine = None

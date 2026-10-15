@@ -32,6 +32,7 @@ from linc_convert.utils.io.zarr.generate_pyramid import (
     default_levels,
     next_level_shape,
 )
+from linc_convert.utils.io.zarr.ome import ome_v05_to_v06
 from linc_convert.utils.zarr_config import ZarrConfig
 
 NiftiHeader: TypeAlias = Nifti1Header | Nifti2Header
@@ -247,7 +248,7 @@ class ZarrGroup(ZarrNode):
         levels: Optional[int] = None,
         no_pool: Optional[int] = None,
         multiscales_type: str = "",
-        ome_version: Literal["0.4", "0.5"] = "0.5",
+        ome_version: Literal["0.4", "0.5", "0.6"] = "0.5",
     ) -> None:
         """
         Write OME-compatible metadata into this group.
@@ -277,8 +278,9 @@ class ZarrGroup(ZarrNode):
             when generating pyramid levels.
         multiscales_type: str
             Override the type field in multiscale attribute.
-        ome_version: {"0.4", "0.5"}
-            Version of the OME-Zarr specification to use
+        ome_version: {"0.4", "0.5", "0.6"}
+            Version of the OME-Zarr specification to use. 0.6 (RFC-5
+            coordinate systems) requires Zarr v3.
 
         Returns
         -------
@@ -296,8 +298,22 @@ class ZarrGroup(ZarrNode):
             levels=levels,
             no_pool=no_pool,
             multiscales_type=multiscales_type,
-            ome_version=ome_version,
+            ome_version="0.5" if ome_version == "0.6" else ome_version,
         )
+        if ome_version == "0.6":
+            method = None
+            if not multiscales_type:
+                method = {
+                    "description": "non-overlapping 2x windows along pyramid "
+                    "axes; mean, cast back to the input dtype by truncation; "
+                    "trailing odd voxels trimmed",
+                    "method": "linc_convert",
+                }
+            self.attrs["ome"] = ome_v05_to_v06(
+                dict(self.attrs["ome"]),
+                downsampling_type=multiscales_type or "mean",
+                method=method,
+            )
 
     def write_nifti_header(self, header: NiftiHeader) -> None:
         """Write a NIfTI header to the Zarr group."""

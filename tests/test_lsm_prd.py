@@ -84,51 +84,195 @@ def test_lsm_prd_regen_golden(tmp_path, zarr_version):
     )
     shutil.make_archive(base, "zip", str(output))
 
-def _write_prd_set(path: Path, frames_per_file, height, width, seed=0):
-    """Write a synthetic Kinetix .prd set; return the full (z, y, x) volume."""
+
+# --------------------------------------------------------------------------
+# synthetic inputs and independent oracles
+# --------------------------------------------------------------------------
+HEADER, GAP, PAD = 64, 18, 10
+
+
+def _write_prd_set(path: Path, frames_per_file, height, width, seed=0,
+                   pattern="random"):
+    """Write a synthetic Kinetix .prd set; return the full (z, y, x) volume.
+
+    pattern="edge" mixes full-range noise with all-zero, all-max and
+    constant regions (exercises empty-chunk skipping and extreme values).
+    """
     rng = np.random.default_rng(seed)
-    header, gap, pad = 64, 18, 10
     path.mkdir(parents=True, exist_ok=True)
     (path / "kinetixMetadata.txt").write_text(
-        f"16\n{width}\n{height}\n{header}\n{max(frames_per_file)}\n{gap}\n"
+        f"16\n{width}\n{height}\n{HEADER}\n{max(frames_per_file)}\n{GAP}\n"
     )
     vols = []
     for i, n in enumerate(frames_per_file):
         vol = rng.integers(0, 2**16, (n, height, width), dtype="<u2")
+        if pattern == "edge":
+            vol[:, : height // 2, : width // 2] = 0
+            vol[:, height // 2:, : width // 3] = 65535
+            vol[: n // 2, :, width // 2:] = 1234
         vols.append(vol)
         with open(path / f"ss_stack_{i}.prd", "wb") as fh:
-            fh.write(b"\xab" * header)
+            fh.write(b"\xab" * HEADER)
             for k in range(n):
                 fh.write(vol[k].tobytes())
                 if k < n - 1:
-                    fh.write(b"\xcd" * gap)
-            fh.write(b"\xef" * pad)
+                    fh.write(b"\xcd" * GAP)
+            fh.write(b"\xef" * PAD)
     return np.concatenate(vols)
 
 
+def _raw_frames(path: Path) -> np.ndarray:
+    """Parse a .prd set with numpy only (independent of PrdSetInterpreter)."""
+    meta = [int(x) for x in (path / "kinetixMetadata.txt").read_text().split()]
+    _, width, height, header, _, gap = meta[:6]
+    frame = width * height * 2
+    files = sorted(path.glob("ss_stack_*.prd"),
+                   key=lambda p: int(p.stem.split("_")[-1]))
+    out = []
+    for f in files:
+        buf = f.read_bytes()
+        n = (len(buf) - header + gap) // (frame + gap)
+        for k in range(n):
+            o = header + k * (frame + gap)
+            out.append(np.frombuffer(buf[o:o + frame], "<u2").reshape(height, width))
+    return np.stack(out)
+
+
+def _reference_pyramid(vol: np.ndarray, chunk: int) -> list[np.ndarray]:
+    """Numpy oracle: 2x mean windows, trimmed, truncated; factor 1 on size-1 axes.
+
+    Number of levels follows linc-convert's default: max over axes of
+    ceil(log2(size / chunk)).
+    """
+    import math
+
+    nlev = max(0, max(int(math.ceil(math.log2(s / chunk))) for s in vol.shape))
+    levels = [vol]
+    for _ in range(nlev):
+        prev = levels[-1].astype(np.float64)
+        f = [1 if s == 1 else 2 for s in prev.shape]
+        out = [max(1, s // 2) if s > 1 else 1 for s in prev.shape]
+        prev = prev[tuple(slice(0, o * k) for o, k in zip(out, f))]
+        prev = prev.reshape(out[0], f[0], out[1], f[1], out[2], f[2])
+        levels.append(prev.mean(axis=(1, 3, 5)).astype(vol.dtype))
+    return levels
+
+
+def _assert_pyramid(out: Path, expected: list[np.ndarray]) -> None:
+    g = zarr.open_group(str(out), mode="r")
+    keys = sorted((k for k in g.array_keys() if k.isdigit()), key=int)
+    assert keys == [str(i) for i in range(len(expected))]
+    for k, want in zip(keys, expected):
+        np.testing.assert_array_equal(g[k][:], want, err_msg=f"level {k}")
+
+
+# --------------------------------------------------------------------------
+# reader
+# --------------------------------------------------------------------------
 def test_prd_read_frames(tmp_path):
     vol = _write_prd_set(tmp_path / "in", [7, 7, 3], 5, 6)
+    np.testing.assert_array_equal(_raw_frames(tmp_path / "in"), vol)
     reader = PrdSetInterpreter(str(tmp_path / "in"))
     assert reader.shape == vol.shape
-    np.testing.assert_array_equal(reader.assemble().compute(), vol)
     for a, b in [(0, 17), (2, 9), (6, 8), (13, 17), (16, 30)]:
         np.testing.assert_array_equal(reader.read_frames(a, b), vol[a:b])
 
 
+# --------------------------------------------------------------------------
+# lossless level 0
+# --------------------------------------------------------------------------
+LOSSLESS_CASES = {
+    # name: convert kwargs
+    "v3-blosc-zstd5": dict(chunk=(8,)),
+    "v3-blosc-zstd1": dict(chunk=(8,), compressor_opt={"clevel": 1}),
+    "v3-blosc-zstd9": dict(chunk=(8,), compressor_opt={"clevel": 9}),
+    "v3-blosc-lz4": dict(chunk=(8,), compressor_opt={"cname": "lz4"}),
+    "v3-blosc-noshuffle": dict(chunk=(8,), compressor_opt={"shuffle": "noshuffle"}),
+    "v3-zstd-codec": dict(chunk=(8,), compressor="zlib"),
+    "v3-uncompressed": dict(chunk=(8,), compressor="none"),
+    "v2-blosc": dict(chunk=(8,), zarr_version=2),
+    "v3-shard": dict(chunk=(4,), shard=(8,)),
+    "v3-shard-uneven": dict(chunk=(4,), shard=(8, 12, 16)),
+    "v3-shard-volume": dict(chunk=(4,), max_shard_size="5TB"),
+    "v3-shard-rows": dict(chunk=(4,), max_shard_size="40kB"),
+    "v3-shard-volume-deep": dict(chunk=(4,), max_shard_size="5TB", slab_depth=24),
+    "v3-shard-deep-zstd1": dict(chunk=(4,), shard=(8,), slab_depth=20,
+                                compressor_opt={"clevel": 1}),
+    "v3-shard-1worker": dict(chunk=(4,), max_shard_size="5TB", workers=1),
+    "ts-v3": dict(chunk=(8,), driver="tensorstore"),
+    "ts-v3-shard-deep": dict(chunk=(4,), shard=(8,), slab_depth=20,
+                             driver="tensorstore"),
+    "v3-ome06-shard-volume": dict(chunk=(4,), max_shard_size="5TB",
+                                  ome_version="0.6"),
+}
+
+
+@pytest.mark.parametrize("pattern", ["random", "edge"])
+@pytest.mark.parametrize("case", sorted(LOSSLESS_CASES))
+def test_prd_level0_lossless(tmp_path, case, pattern):
+    """Level 0 decodes bit-for-bit to the .prd frames, for every layout/codec."""
+    kw = dict(LOSSLESS_CASES[case])
+    _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34, pattern=pattern)
+    raw = _raw_frames(tmp_path / "in")
+    out = tmp_path / "out.nii.zarr"
+    kw.setdefault("workers", 3)
+    prd.convert(str(tmp_path / "in"), out=str(out), overwrite=True,
+                verify=True, **kw)
+    assert not list(out.rglob("*.partial"))
+    level0 = zarr.open_array(str(out / "0"), mode="r")
+    assert level0.dtype == np.dtype("uint16") and level0.shape == raw.shape
+    np.testing.assert_array_equal(level0[:], raw)
+    # random sub-blocks (exercise partial shard/chunk reads)
+    rng = np.random.default_rng(1)
+    for _ in range(10):
+        z, y, x = (int(rng.integers(0, s)) for s in raw.shape)
+        sl = (slice(z, z + 9), slice(y, y + 7), slice(x, x + 11))
+        np.testing.assert_array_equal(level0[sl], raw[sl])
+    if kw.get("zarr_version", 3) == 3:
+        ts = pytest.importorskip("tensorstore")
+        t = ts.open({"driver": "zarr3", "kvstore": {
+            "driver": "file", "path": str(out / "0")}}).result()
+        np.testing.assert_array_equal(t.read().result(), raw)
+
+
+def test_prd_level0_lossless_real_subset(tmp_path):
+    """The golden real-data subset round-trips exactly in the large-shard layout."""
+    out = tmp_path / "out.nii.zarr"
+    prd.convert(PRD_INPUT_DIR, out=str(out), chunk=(32,), max_shard_size="5TB",
+                compressor_opt={"clevel": 1}, verify=True)
+    raw = _raw_frames(Path(PRD_INPUT_DIR))
+    np.testing.assert_array_equal(zarr.open_array(str(out / "0"))[:], raw)
+
+
+def test_prd_verify_detects_corruption(tmp_path):
+    _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
+    out = tmp_path / "out.nii.zarr"
+    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,), compressor="none",
+                max_shard_size="5TB")
+    shard = next(p for p in (out / "0").rglob("*") if p.is_file()
+                 and p.name != "zarr.json")
+    buf = bytearray(shard.read_bytes())
+    buf[100] ^= 0xFF  # flip one payload byte (index is at the end)
+    shard.write_bytes(bytes(buf))
+    with pytest.raises(RuntimeError, match="Verification failed"):
+        prd._verify_level0(PrdSetInterpreter(str(tmp_path / "in")),
+                           zarr.open_array(str(out / "0")))
+
+
+# --------------------------------------------------------------------------
+# pyramid
+# --------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "frames,height,width,cfg",
     [
         ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=3)),
         ([37, 37, 11], 21, 34, dict(chunk=(8,), zarr_version=2)),
-        ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,), zarr_version=3)),
-        ([5, 5], 3, 40, dict(chunk=(4,), zarr_version=3)),
-        ([37, 11], 21, 34, dict(chunk=(8,), zarr_version=3, driver="tensorstore")),
+        ([50, 13], 17, 9, dict(chunk=(4,), shard=(16,))),
+        ([5, 5], 3, 40, dict(chunk=(4,))),
+        ([37, 11], 21, 34, dict(chunk=(8,), driver="tensorstore")),
         ([37, 11], 21, 34, dict(chunk=(8,), shard=(16,), driver="tensorstore")),
-        # one shard per level (append sink), odd edges
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="1GB")),
-        # several shard rows along z, frame-wide shards
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB")),
-        # deep slabs: batches spanning several chunks and shard rows
         ([37, 37, 11], 21, 34, dict(chunk=(4,), max_shard_size="40kB",
                                     slab_depth=24)),
         ([37, 37, 11], 21, 34, dict(chunk=(4,), shard=(8,), slab_depth=20)),
@@ -136,41 +280,31 @@ def test_prd_read_frames(tmp_path):
                                     driver="tensorstore")),
     ],
 )
-def test_prd_streaming_matches_legacy(tmp_path, frames, height, width, cfg):
-    _write_prd_set(tmp_path / "in", frames, height, width)
-    legacy_cfg = dict(cfg, overwrite=True)
-    max_shard = legacy_cfg.pop("max_shard_size", None)
-    depth = legacy_cfg.pop("slab_depth", None)
-    stream_cfg = dict(legacy_cfg, max_shard_size=max_shard, slab_depth=depth)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "stream.nii.zarr"),
-                workers=3, **stream_cfg)
-    if max_shard:
-        # legacy does not stream shards: give it the same layout explicitly
-        shards = zarr.open_array(str(tmp_path / "stream.nii.zarr" / "0")).shards
-        legacy_cfg["shard"] = tuple(shards)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "legacy.nii.zarr"),
-                legacy=True, **legacy_cfg)
-    assert_zarr_equal(str(tmp_path / "stream.nii.zarr"),
-                      str(tmp_path / "legacy.nii.zarr"))
+def test_prd_pyramid_matches_oracles(tmp_path, frames, height, width, cfg):
+    """All levels match a numpy oracle and the library's generate_pyramid."""
+    from linc_convert.utils.io.zarr import from_config
+    from linc_convert.utils.zarr_config import ZarrConfig
 
+    vol = _write_prd_set(tmp_path / "in", frames, height, width)
+    out = tmp_path / "stream.nii.zarr"
+    prd.convert(str(tmp_path / "in"), out=str(out), workers=3, overwrite=True, **cfg)
+    _assert_pyramid(out, _reference_pyramid(vol, cfg["chunk"][0]))
 
-def test_prd_append_shards_readable(tmp_path):
-    """Append-written shards decode identically with zarr-python and tensorstore."""
-    vol = _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
-    out = tmp_path / "out.nii.zarr"
-    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,), shard=(8, 12, 16),
-                workers=2)
-    assert not list(out.rglob("*.partial"))
-    arr = zarr.open_array(str(out / "0"))
-    np.testing.assert_array_equal(arr[:], vol)
-    np.testing.assert_array_equal(arr[5:23, 3:19, 7:33], vol[5:23, 3:19, 7:33])
-    try:
-        import tensorstore as ts
-    except ImportError:
-        return
-    t = ts.open({"driver": "zarr3", "kvstore": {"driver": "file",
-                 "path": str(out / "0")}}).result()
-    np.testing.assert_array_equal(t.read().result(), vol)
+    # generic (dask) pyramid code, same layout, as a second oracle
+    zcfg = {k: v for k, v in cfg.items() if k in ("chunk", "shard", "zarr_version")}
+    shards = zarr.open_array(str(out / "0")).shards
+    if shards:
+        zcfg["shard"] = tuple(shards)
+    zc = ZarrConfig(overwrite=True, **zcfg)
+    g = from_config(str(tmp_path / "generic.zarr"), zc)
+    g.create_array("0", shape=vol.shape, zarr_config=zc, dtype=vol.dtype)[:] = vol
+    g.generate_pyramid()
+    a = zarr.open_group(str(out), mode="r")
+    b = zarr.open_group(str(tmp_path / "generic.zarr"), mode="r")
+    levels = sorted((k for k in b.array_keys() if k.isdigit()), key=int)
+    assert sorted((k for k in a.array_keys() if k.isdigit()), key=int) == levels
+    for k in levels:
+        np.testing.assert_array_equal(a[k][:], b[k][:], err_msg=f"level {k}")
 
 
 def test_prd_append_matches_api_sink(tmp_path):
@@ -197,6 +331,27 @@ def test_prd_append_matches_api_sink(tmp_path):
         np.testing.assert_array_equal(a[k][:], b[k][:])
 
 
+def test_prd_output_independent_of_threads_and_depth(tmp_path):
+    """Compressed bytes do not depend on worker count or slab depth."""
+    import hashlib
+
+    _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
+    digests = set()
+    for i, (w, d) in enumerate([(1, None), (4, None), (3, 12), (8, 36)]):
+        out = tmp_path / f"o{i}.nii.zarr"
+        prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,),
+                    max_shard_size="5TB", workers=w, slab_depth=d)
+        h = hashlib.sha256()
+        for f in sorted(p for p in out.rglob("*") if p.is_file()):
+            h.update(f.relative_to(out).as_posix().encode())
+            h.update(f.read_bytes())
+        digests.add(h.hexdigest())
+    assert len(digests) == 1
+
+
+# --------------------------------------------------------------------------
+# memory budget
+# --------------------------------------------------------------------------
 def test_prd_max_memory(tmp_path):
     from linc_convert.utils.io.zarr.stream_pyramid import workers_for_memory
 
@@ -205,15 +360,85 @@ def test_prd_max_memory(tmp_path):
     assert 1 <= workers_for_memory(int(5.5 * 2**30), shape, 2, 256, unit, 8, 8) < 8
     with pytest.raises(MemoryError):
         workers_for_memory(2**30, shape, 2, 256, unit, 8, 8)
-    # append sink: 32-slice slabs fit comfortably
     assert workers_for_memory(2**30, shape, 2, 32, (32, 32, 32), 8, 8) == 8
 
-    _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "a.nii.zarr"),
-                chunk=(8,), legacy=True)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "b.nii.zarr"),
-                chunk=(8,), workers=4, max_memory=0.5)
+    vol = _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
     prd.convert(str(tmp_path / "in"), out=str(tmp_path / "c.nii.zarr"),
                 chunk=(8,), workers=4, max_memory=0.5, max_shard_size="5TB")
-    assert_zarr_equal(str(tmp_path / "c.nii.zarr"), str(tmp_path / "a.nii.zarr"))
-    assert_zarr_equal(str(tmp_path / "b.nii.zarr"), str(tmp_path / "a.nii.zarr"))
+    _assert_pyramid(tmp_path / "c.nii.zarr", _reference_pyramid(vol, 8))
+
+
+# --------------------------------------------------------------------------
+# OME-Zarr 0.6
+# --------------------------------------------------------------------------
+def test_ome_v05_to_v06_folds_and_roundtrips():
+    from linc_convert.utils.io.zarr.ome import ome_v05_to_v06, ome_v06_to_v05_view
+
+    v05 = {"version": "0.5", "multiscales": [{
+        "name": "x", "type": "t",
+        "axes": [{"name": a, "type": "space", "unit": "micrometer"} for a in "zyx"],
+        "datasets": [
+            {"path": "0", "coordinateTransformations": [
+                {"type": "scale", "scale": [1, 1, 1]},
+                {"type": "translation", "translation": [0, 0, 0]}]},
+            {"path": "1", "coordinateTransformations": [
+                {"type": "scale", "scale": [2, 2, 2]},
+                {"type": "translation", "translation": [0.5, 0.5, 0.5]}]},
+        ],
+        "coordinateTransformations": [{"type": "scale", "scale": [3, 1, 1]}],
+    }]}
+    v06 = ome_v05_to_v06(v05)
+    ms = v06["multiscales"][0]
+    assert v06["version"] == "0.6" and "axes" not in ms
+    assert ms["coordinateSystems"][0]["name"] == "intrinsic"
+    d0, d1 = (d["coordinateTransformations"][0] for d in ms["datasets"])
+    assert d0 == {"type": "scale", "scale": [3.0, 1.0, 1.0],
+                  "input": {"path": "0"}, "output": {"name": "intrinsic"}}
+    assert d1["type"] == "sequence"
+    assert d1["transformations"][0]["scale"] == [6.0, 2.0, 2.0]
+    assert d1["transformations"][1]["translation"] == [1.5, 0.5, 0.5]
+    back = ome_v06_to_v05_view(v06)["multiscales"][0]
+    assert back["axes"] == v05["multiscales"][0]["axes"]
+
+
+def test_prd_ome_v06(tmp_path):
+    """0.6 output validates, maps voxels like 0.5, and reads back as NIfTI."""
+    import niizarr
+
+    from linc_convert.utils.io.zarr.ome import ome_v06_to_v05_view
+
+    omz = pytest.importorskip("ome_zarr_models.v06.image")
+    vol = _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
+    outs = {}
+    for v in ("0.5", "0.6"):
+        outs[v] = tmp_path / f"o{v}.nii.zarr"
+        prd.convert(str(tmp_path / "in"), out=str(outs[v]), chunk=(8,),
+                    max_shard_size="5TB", voxel_size=[0.75, 0.75, 2.0],
+                    ome_version=v)
+    g5 = zarr.open_group(str(outs["0.5"]), mode="r")
+    g6 = zarr.open_group(str(outs["0.6"]), mode="r")
+    ome6 = dict(g6.attrs)["ome"]
+    assert ome6["version"] == "0.6"
+    omz.ImageAttrs.model_validate(ome6)
+    # same voxel->physical mapping as the 0.5 output, level by level
+    view = ome_v06_to_v05_view(ome6)["multiscales"][0]
+    ms5 = dict(g5.attrs)["ome"]["multiscales"][0]
+    top = ms5.get("coordinateTransformations", [{"scale": [1, 1, 1]}])[0]["scale"]
+    for d5, d6 in zip(ms5["datasets"], view["datasets"]):
+        t5 = {t["type"]: t for t in d5["coordinateTransformations"]}
+        t6 = {t["type"]: t for t in d6["coordinateTransformations"]}
+        np.testing.assert_allclose(
+            t6["scale"]["scale"],
+            np.multiply(top, t5["scale"]["scale"]))
+        np.testing.assert_allclose(
+            t6.get("translation", {}).get("translation", [0, 0, 0]),
+            np.multiply(top, t5.get("translation", {}).get("translation", [0, 0, 0])))
+    # identical NIfTI header bytes
+    assert bytes(g5["nifti"][:]) == bytes(g6["nifti"][:])
+    nii = niizarr.zarr2nii(str(outs["0.5"]))
+    np.testing.assert_array_equal(np.asarray(nii.dataobj), vol.transpose(2, 1, 0))
+    # Known limitation: niizarr (<= 1.0.0rc8) reads multiscales[0]["axes"],
+    # which 0.6 replaces by coordinateSystems. Update this when nifti-zarr-py
+    # supports RFC-5 (neuroscales/nifti-zarr-py#31).
+    with pytest.raises(KeyError, match="axes"):
+        niizarr.zarr2nii(str(outs["0.6"]))

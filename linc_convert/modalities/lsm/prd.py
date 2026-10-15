@@ -18,7 +18,6 @@ import sysconfig
 from dataclasses import replace
 
 import cyclopts
-import dask.array as da
 import numpy as np
 import tqdm
 
@@ -55,7 +54,7 @@ def convert(
     max_memory: float | None = None,
     max_shard_size: str | None = None,
     slab_depth: int | None = None,
-    legacy: bool = False,
+    verify: bool = False,
     general_config: GeneralConfig | None = None,
     zarr_config: ZarrConfig | None = None,
     nii_config: NiftiConfig | None = None,
@@ -85,8 +84,9 @@ def convert(
         inner chunk, or to the shard for non-streamed layouts). Deeper slabs
         use more memory and keep more threads busy. Default: one chunk (or
         shard) along z.
-    legacy
-        Use the previous dask-based implementation (high memory use).
+    verify
+        After writing, re-read level 0 and check that it is bit-identical
+        to the .prd frames (costs one extra read + decode of level 0).
     general_config
         General configuration
     zarr_config
@@ -99,7 +99,7 @@ def convert(
     # Set default output path if not provided
     general_config.set_default_name(os.path.basename(inp))
 
-    if max_shard_size and not legacy:
+    if max_shard_size:
         zarr_config = replace(zarr_config, shard=_shard_for_size(
             reader.shape, reader.dtype, zarr_config, _parse_size(max_shard_size)))
         logger.info("Shard shape %s", zarr_config.shard)
@@ -107,46 +107,46 @@ def convert(
     zgroup = from_config(general_config.out, zarr_config)
     logger.info(general_config.out)
 
-    if legacy:
-        _convert_legacy(reader, zgroup, zarr_config)
-    else:
-        if workers is None:
-            workers = len(os.sched_getaffinity(0)) if hasattr(
-                os, "sched_getaffinity") else os.cpu_count()
-        gil = getattr(sys, "_is_gil_enabled", lambda: True)()
-        if sysconfig.get_config_var("Py_GIL_DISABLED") and gil:
-            logger.warning("Free-threaded Python, but an extension re-enabled "
-                           "the GIL; compression threads will not scale.")
-        logger.info("Python %s, GIL %s, %d worker thread(s)",
-                    platform.python_version(), "on" if gil else "off", workers)
-        logger.info(
-            "Stream %d file(s) with shape: "
-            "%d total_frames, %d height, %d width.",
-            len(reader.prd_files), *reader.shape,
+    if workers is None:
+        workers = len(os.sched_getaffinity(0)) if hasattr(
+            os, "sched_getaffinity") else os.cpu_count()
+    gil = getattr(sys, "_is_gil_enabled", lambda: True)()
+    if sysconfig.get_config_var("Py_GIL_DISABLED") and gil:
+        logger.warning("Free-threaded Python, but an extension re-enabled "
+                       "the GIL; compression threads will not scale.")
+    logger.info("Python %s, GIL %s, %d worker thread(s)",
+                platform.python_version(), "on" if gil else "off", workers)
+    logger.info(
+        "Stream %d file(s) with shape: "
+        "%d total_frames, %d height, %d width.",
+        len(reader.prd_files), *reader.shape,
+    )
+    if max_memory:
+        chunk, shard = _compute_zarr_layout(
+            reader.shape, reader.dtype, zarr_config)
+        levels = zarr_config.levels
+        if levels == -1:
+            levels = default_levels(reader.shape, chunk[-3:], None)
+        appendable = (shard is not None and zarr_config.zarr_version == 3
+                      and zarr_config.driver == "zarr-python")
+        native = chunk[-3] if appendable else (shard or chunk)[-3]
+        unit_z = -(-(slab_depth or native) // native) * native
+        tile = chunk[-3:] if appendable else (shard or chunk)[-3:]
+        workers = workers_for_memory(
+            int(max_memory * 2**30), reader.shape, reader.dtype.itemsize,
+            unit_z, tile, levels, workers,
         )
-        if max_memory:
-            chunk, shard = _compute_zarr_layout(
-                reader.shape, reader.dtype, zarr_config)
-            levels = zarr_config.levels
-            if levels == -1:
-                levels = default_levels(reader.shape, chunk[-3:], None)
-            appendable = (shard is not None and zarr_config.zarr_version == 3
-                          and zarr_config.driver == "zarr-python")
-            native = chunk[-3] if appendable else (shard or chunk)[-3]
-            unit_z = -(-(slab_depth or native) // native) * native
-            tile = chunk[-3:] if appendable else (shard or chunk)[-3:]
-            workers = workers_for_memory(
-                int(max_memory * 2**30), reader.shape, reader.dtype.itemsize,
-                unit_z, tile, levels, workers,
-            )
-            logger.info("Using %d worker(s) to fit %.1f GiB", workers, max_memory)
-        writer = StreamingPyramidWriter(
-            zgroup, reader.shape, reader.dtype, zarr_config,
-            levels=zarr_config.levels, max_workers=workers,
-            slab_depth=slab_depth,
-        )
-        with tqdm.tqdm(total=reader.shape[0], unit="frame") as pbar:
-            stream_volume(writer, reader.read_frames, pbar.update)
+        logger.info("Using %d worker(s) to fit %.1f GiB", workers, max_memory)
+    writer = StreamingPyramidWriter(
+        zgroup, reader.shape, reader.dtype, zarr_config,
+        levels=zarr_config.levels, max_workers=workers,
+        slab_depth=slab_depth,
+    )
+    with tqdm.tqdm(total=reader.shape[0], unit="frame") as pbar:
+        stream_volume(writer, reader.read_frames, pbar.update)
+
+    if verify:
+        _verify_level0(reader, zgroup["0"])
 
     voxel_size = list(map(float, reversed(voxel_size)))
 
@@ -200,25 +200,18 @@ def _shard_for_size(
     return (sz, ny, nx)
 
 
-def _convert_legacy(reader, zgroup, zarr_config) -> None:  # noqa: ANN001
-    """Previous implementation: dask store of level 0, then generate_pyramid."""
-    volume = reader.assemble()
-
-    array = zgroup.create_array(
-        "0", shape=volume.shape, zarr_config=zarr_config, dtype=reader.dtype
-    )
-
-    if array.shards:
-        volume = da.rechunk(volume, array.shards)
-    else:
-        volume = da.rechunk(volume, array.chunks)
-
-    logger.info(
-        "Write level 0 for %d file(s) with shape: "
-        "%d total_frames, %d height, %d width.",
-        len(reader.prd_files),
-        *volume.shape,
-    )
-    da.store(volume, array, compute=True)
-
-    zgroup.generate_pyramid(levels=zarr_config.levels)
+def _verify_level0(reader: PrdSetInterpreter, arr) -> None:  # noqa: ANN001
+    """Check that level 0 decodes to exactly the .prd frames."""
+    step = int((arr.shards or arr.chunks)[0])
+    step = max(step, int(arr.chunks[0]))
+    buf = np.empty((step, *reader.shape[1:]), reader.dtype)
+    for z0 in range(0, reader.shape[0], step):
+        z1 = min(z0 + step, reader.shape[0])
+        want = reader.read_frames(z0, z1, buf)
+        got = np.asarray(arr[z0:z1])
+        if not np.array_equal(got, want):
+            bad = int(np.count_nonzero(got != want))
+            raise RuntimeError(
+                f"Verification failed: {bad} voxel(s) differ in slices "
+                f"[{z0}, {z1}) of level 0.")
+    logger.info("Verified: level 0 is bit-identical to the .prd frames.")
