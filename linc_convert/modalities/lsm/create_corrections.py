@@ -39,6 +39,8 @@ reference tiles. Output per channel ``ch``, in ``{output_dir}/{ch}/``
 ``reference_tiles`` are 1-based positions in the camera's tile list (1 is the
 first chunk, ``chunk-0001``): the
 ``*acq-camera-NN*.ome.zarr`` folders of ``input_path`` in sorted order.
+With ``auto_reference_tiles`` they are picked from the tissue-rich middle of
+the slice instead (see ``stitching_utils.tile_selection``).
 
 Needs: cyclopts, dask, numpy, tifffile, zarr, pyyaml, and the ``stitching_utils``
 folder next to this file.
@@ -46,7 +48,7 @@ folder next to this file.
 
 import os
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cyclopts
 import numpy as np
@@ -63,11 +65,18 @@ from linc_convert.modalities.lsm.stitching_utils.io import (
     discover_tile_paths,
     open_tile_array,
     write_tiff,
+    write_yaml,
 )
 from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
+    Crop,
     get_channel_names,
     get_crops,
     get_vertical_flip,
+)
+from linc_convert.modalities.lsm.stitching_utils.tile_selection import (
+    available_layer,
+    choose_reference_tiles,
+    tissue_row_fraction,
 )
 from linc_convert.utils.zarr_config import autoconfig
 
@@ -76,6 +85,71 @@ def _level_settings(background_length: int, layer: int) -> Tuple[int, int]:
     """Background length and x stride scaled from full resolution to ``layer``."""
     scale = 2 ** layer
     return max(1, background_length // scale), max(1, X_STRIDE // scale)
+
+
+def _auto_reference_tiles(
+    tile_paths: Sequence[str], crops: Dict[str, Crop], channels: List[str],
+    vertical_flip: bool, background_length: int, zy_threshold_multiplier: float,
+    scan_layer: int, count: int, min_tissue: float, edge_margin: int,
+    report_path: str,
+) -> List[int]:
+    """Pick reference tiles from the tissue-rich middle; see ``create_corrections``.
+
+    Parameters
+    ----------
+    tile_paths : sequence of str
+        The camera's chunk folders in acquisition order.
+    crops : dict of str to tuple
+        Stitching crop of every channel of the camera.
+    channels : list of str
+        Channels that need maps; a tile must have tissue in all of them.
+    vertical_flip : bool
+        Whether the camera's volumes are flipped along z.
+    background_length : int
+        Trailing x columns (full-resolution pixels) used for the noise floor.
+    zy_threshold_multiplier : float
+        Signal threshold multiplier, the same one used for the calibration.
+    scan_layer : int
+        Pyramid level to scan (a coarse one is enough and fast; the highest
+        level that exists, up to this one, is used).
+    count : int
+        Number of tiles to pick.
+    min_tissue : float
+        Minimum fraction of a tile's rows in tissue for it to be eligible.
+    edge_margin : int
+        Eligible tiles skipped at each end of the tissue run.
+    report_path : str
+        YAML file that records the tissue fraction of every tile and the pick.
+
+    Returns
+    -------
+    list of int
+        Chosen 1-based tile numbers.
+    """
+    layer = available_layer(tile_paths[0], scan_layer)
+    bg_len, x_stride = _level_settings(background_length, layer)
+    print(
+        f"[auto tiles] scanning {len(tile_paths)} tiles at pyramid level {layer}")
+    fractions: Dict[int, float] = {}
+    for number, path in enumerate(tile_paths, start=1):
+        tile = open_tile_array(path, layer, chunks=(128, 128, 128))
+        fractions[number] = min(
+            tissue_row_fraction(crop_and_flip(tile, crops[ch], vertical_flip, layer),
+                                bg_len, zy_threshold_multiplier, x_stride)
+            for ch in channels)
+        print(
+            f"  tile {number}: {fractions[number]:.0%} of rows in tissue", flush=True)
+    chosen = choose_reference_tiles(fractions, count, min_tissue, edge_margin)
+    if len(chosen) < count:
+        print(
+            f"  WARNING: only {len(chosen)} eligible tile(s) (wanted {count})")
+    print(f"[auto tiles] reference tiles: {chosen}")
+    os.makedirs(os.path.dirname(report_path) or ".", exist_ok=True)
+    write_yaml(report_path, {
+        "reference_tiles": chosen, "scan_layer": layer, "min_tissue": min_tissue,
+        "edge_margin": edge_margin, "zy_threshold_multiplier": zy_threshold_multiplier,
+        "tissue_fraction": {int(k): round(v, 3) for k, v in fractions.items()}})
+    return chosen
 
 
 def _create_per_chunk(
@@ -135,6 +209,11 @@ def create_corrections(
     slice_number: int,
     *,
     reference_tiles: Optional[List[int]] = None,
+    auto_reference_tiles: bool = False,
+    n_reference_tiles: int = 8,
+    min_tissue_fraction: float = 0.9,
+    edge_margin: int = 3,
+    auto_scan_layer: int = 3,
     output_dir: str,
     per_chunk: bool = False,
     background_length: int = 5000,
@@ -157,8 +236,29 @@ def create_corrections(
         Physical slice number (selects the crop definitions).
     reference_tiles : list of int, optional
         1-based positions (1 = first chunk) of the tiles to calibrate from.
-        Required unless ``per_chunk`` is set. With ``per_chunk`` it limits
-        which chunks get their own maps (default: all chunks of the camera).
+        Required unless ``auto_reference_tiles`` or ``per_chunk`` is set. With
+        ``per_chunk`` it limits which chunks get their own maps (default: all
+        chunks of the camera).
+    auto_reference_tiles : bool, default=False
+        Pick the reference tiles automatically instead: every tile is scanned
+        (at the coarse ``auto_scan_layer``) for the fraction of its rows that
+        cross tissue in all channels being processed; tiles below
+        ``min_tissue_fraction`` and the ``edge_margin`` outermost eligible tiles
+        are dropped, and ``n_reference_tiles`` are taken evenly spread over the
+        rest. The tissue fractions and the pick are written to
+        ``{output_dir}/reference_tiles_camera{camera_id}.yaml``. Not allowed
+        together with ``reference_tiles`` or ``per_chunk``.
+    n_reference_tiles : int, default=8
+        Tiles to pick with ``auto_reference_tiles`` (4-8 explain the stripes of a
+        camera; more adds nothing).
+    min_tissue_fraction : float, default=0.9
+        Fraction of a tile's rows that must cross tissue for it to be eligible.
+    edge_margin : int, default=3
+        Eligible tiles skipped at each end of the tissue run (slice edges are
+        partly tissue and have unusually strong stripes).
+    auto_scan_layer : int, default=3
+        Pyramid level scanned for the tile selection (the highest level that
+        exists, up to this one). Independent of ``layer``.
     output_dir : str
         TIFFs are written to ``{output_dir}/{channel}/``.
     per_chunk : bool, default=False
@@ -196,13 +296,20 @@ def create_corrections(
     ------
     ValueError
         If ``camera_id`` is not 1 or 2, ``reference_tiles`` is empty or out
-        of range, or ``only_channel`` is not a channel of the camera.
+        of range, ``reference_tiles`` and ``auto_reference_tiles`` are both
+        given (or ``auto_reference_tiles`` is combined with ``per_chunk``), no
+        tile has enough tissue for the automatic pick, or ``only_channel`` is
+        not a channel of the camera.
     """
     if camera_id not in (1, 2):
         raise ValueError(f"camera_id must be 1 or 2, got {camera_id}")
-    if not per_chunk and not reference_tiles:
+    if auto_reference_tiles and (reference_tiles or per_chunk):
+        raise ValueError("auto_reference_tiles cannot be combined with "
+                         "reference_tiles or per_chunk")
+    if not per_chunk and not reference_tiles and not auto_reference_tiles:
         raise ValueError(
-            "reference_tiles must contain at least one tile index")
+            "reference_tiles must contain at least one tile index "
+            "(or set auto_reference_tiles)")
 
     with open(yaml_path) as f:
         scan_parameters = yaml.safe_load(f)
@@ -220,7 +327,6 @@ def create_corrections(
             zy_threshold_multiplier, force, layer)
         return
 
-    assert reference_tiles is not None
     results: Dict[str, Dict[str, str]] = {}
     todo: List[str] = []
     for ch in channels:
@@ -235,13 +341,20 @@ def create_corrections(
         return
 
     tile_paths = discover_tile_paths(input_path, camera_id)
-    bad = [i for i in reference_tiles if not 1 <= i <= len(tile_paths)]
+    bad = [i for i in (reference_tiles or []) if not 1 <= i <= len(tile_paths)]
     if bad:
         raise ValueError(f"reference_tiles {bad} out of range: camera {camera_id} has "
                          f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
 
     crops = get_crops(scan_parameters, camera_id, slice_number)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
+    if auto_reference_tiles:
+        reference_tiles = _auto_reference_tiles(
+            tile_paths, crops, todo, vertical_flip, background_length,
+            zy_threshold_multiplier, auto_scan_layer, n_reference_tiles,
+            min_tissue_fraction, edge_margin,
+            os.path.join(output_dir, f"reference_tiles_camera{camera_id}.yaml"))
+    assert reference_tiles is not None
 
     bg_len, x_stride = _level_settings(background_length, layer)
     noises: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
