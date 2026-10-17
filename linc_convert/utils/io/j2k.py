@@ -1,15 +1,20 @@
 """Utilities for JPEG2000 files."""
 
+from __future__ import annotations
+
 # stdlib
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 # externals
 import numpy as np
-from glymur import Jp2k
 
 # internals
 from linc_convert.utils.math import ceildiv
+
+if TYPE_CHECKING:
+    from glymur import Jp2k
 
 
 def get_pixelsize(j2k: Jp2k) -> tuple[float, float]:

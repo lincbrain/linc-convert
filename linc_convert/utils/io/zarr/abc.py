@@ -1,6 +1,7 @@
 """Abstract base classes for ZarrIO interfaces."""
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from numbers import Number
 from os import PathLike
@@ -247,7 +248,7 @@ class ZarrGroup(ZarrNode):
         levels: Optional[int] = None,
         no_pool: Optional[int] = None,
         multiscales_type: str = "",
-        ome_version: Literal["0.4", "0.5"] = "0.5",
+        ome_version: Literal["0.5", "0.6"] = "0.6",
     ) -> None:
         """
         Write OME-compatible metadata into this group.
@@ -277,28 +278,44 @@ class ZarrGroup(ZarrNode):
             when generating pyramid levels.
         multiscales_type: str
             Override the type field in multiscale attribute.
-        ome_version: {"0.4", "0.5"}
-            Version of the OME-Zarr specification to use
+        ome_version: {"0.5", "0.6"}
+            Version of the OME-Zarr specification to use. Writing 0.5 will
+            be deprecated in a future release.
 
         Returns
         -------
         None.
         """
-        niizarr.write_ome_metadata(
-            self,
-            space_scale=space_scale,
-            time_scale=time_scale,
-            space_unit=space_unit,
-            time_unit=time_unit,
-            axes=axes,
-            name=name,
-            pyramid_aligns=pyramid_aligns,
-            levels=levels,
-            no_pool=no_pool,
+        kwargs = dict(
+            space_scale=space_scale, time_scale=time_scale,
+            space_unit=space_unit, time_unit=time_unit, axes=axes, name=name,
+            pyramid_aligns=pyramid_aligns, levels=levels, no_pool=no_pool,
             multiscales_type=multiscales_type,
-            ome_version=ome_version,
         )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)  # warned below
+            niizarr.write_ome_metadata(self, ome_version=ome_version, **kwargs)
+        if ome_version == "0.5":
+            warnings.warn(
+                "Writing OME-Zarr 0.5 will be deprecated in a future release; "
+                "use ome_version='0.6'.", FutureWarning, stacklevel=2)
+            return
+        ome = dict(self.attrs["ome"])
+        for ms in ome["multiscales"]:
+            ms["type"] = multiscales_type or "mean"
+            if not multiscales_type:
+                ms["metadata"] = {
+                    "description": "non-overlapping 2x windows along pyramid "
+                    "axes; mean, cast back to the input dtype by truncation; "
+                    "trailing odd voxels trimmed",
+                    "method": "linc_convert",
+                }
+        self.attrs["ome"] = ome
 
     def write_nifti_header(self, header: NiftiHeader) -> None:
-        """Write a NIfTI header to the Zarr group."""
+        """Write a NIfTI header to the Zarr group.
+
+        With OME-Zarr 0.6, niizarr also describes the qform/sform spaces as
+        the coordinate systems "nifti:qform" / "nifti:sform".
+        """
         niizarr.write_nifti_header(self, header)

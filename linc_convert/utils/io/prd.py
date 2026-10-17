@@ -15,23 +15,86 @@ next to the `.prd` file(s):
     8272    # header bytes
     2661    # expected frames per full file
     6912    # gap bytes (between frames, not after last frame)
+
+These are PVCAM PRD files. The header starts with a 48-byte PRD header
+(format version, bit depth, frame count, sensor region), and a 24-byte
+record of per-frame metadata (frame number, readout time, exposure time,
+begin/end-of-frame times) sits `header_bytes - 4096` bytes before each
+frame. The remaining non-pixel bytes (camera metadata blocks, fill) are not
+interpreted, but `PrdCapture` keeps them so the files can be rebuilt.
 """
 
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import re
+import struct
+from concurrent.futures import Future, ThreadPoolExecutor
 from os import PathLike
-from typing import List
+from typing import List, Optional
 
-import dask.array as da
 import numpy as np
-from dask import delayed
+
+PRD_FRAME_FIELDS = (
+    "frame_number", "readout_time", "exposure_time", "bof_time", "eof_time",
+    "roi_count",
+)
+
+
+def parse_prd_header(header: bytes) -> dict | None:
+    """Decode the PVCAM PRD file header (None if the signature is absent)."""
+    if header[:4] != b"PRD\0":
+        return None
+    (version, bit_depth, frame_count, s1, s2, sbin, p1, p2, pbin,
+     metadata_size, exposure_resolution) = struct.unpack_from("<HHI6HII", header, 4)
+    return dict(
+        version=version, bit_depth=bit_depth, frame_count=frame_count,
+        region=dict(s1=s1, s2=s2, sbin=sbin, p1=p1, p2=p2, pbin=pbin),
+        metadata_size=metadata_size, exposure_resolution=exposure_resolution,
+    )
+
+
+def sha256_file(path: str) -> str:
+    """SHA-256 of a file."""
+    with open(path, "rb") as fh:
+        return hashlib.file_digest(fh, "sha256").hexdigest()
+
+
+class PrdCapture:
+    """Keep what is needed to rebuild `.prd` files byte for byte.
+
+    `PrdSetInterpreter.read_frames` feeds it the non-pixel bytes of each
+    file, in order, during a sequential read. With `checksum`, the SHA-256
+    of each whole file is computed by `hash_threads` threads that read the
+    files independently: SHA-256 is sequential within a file (~2 GB/s per
+    core), so several files are hashed at once.
+    """
+
+    def __init__(
+        self, prd_files: list[str], checksum: bool = True, hash_threads: int = 4
+    ) -> None:
+        self.nonpixel: list[list[bytes]] = [[] for _ in prd_files]
+        self.sha256: list[Optional[str]] = [None] * len(prd_files)
+        self._pool = ThreadPoolExecutor(hash_threads) if checksum else None
+        self._digests: list[Future] = (
+            [self._pool.submit(sha256_file, p) for p in prd_files] if checksum else [])
+
+    def feed(self, f: int, data: bytes) -> None:
+        """Append the next non-pixel bytes of file `f`."""
+        self.nonpixel[f].append(data)
+
+    def finish(self) -> None:
+        """Wait for the file digests."""
+        if self._pool is not None:
+            self.sha256 = [fut.result() for fut in self._digests]
+            self._pool.shutdown()
+            self._pool = None
 
 
 class PrdSetInterpreter:
-    """Assemble prd files into a single 3D volume with a Dask array."""
+    """Read a directory of `.prd` files as one (frames, height, width) volume."""
 
     def __init__(
         self, prd_set_path: str | PathLike[str]
@@ -53,6 +116,19 @@ class PrdSetInterpreter:
         self.pixels_per_frame = self.width * self.height
         self.bytes_per_frame = self.pixels_per_frame * self.bytes_per_pixel
         self.stride_bytes = self.bytes_per_frame + self.gap_bytes
+
+        self.frames_per_file = [self._frames_in_file(f) for f in self.prd_files]
+        self.capture: Optional[PrdCapture] = None
+        self._next_frame = 0  # sequential reads feed `capture`
+        # first global frame index of each file (plus total at the end)
+        self.file_offsets = np.concatenate(
+            [[0], np.cumsum(self.frames_per_file)]
+        ).astype(int)
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        """Shape of the assembled volume: (frames_total, height, width)."""
+        return (int(self.file_offsets[-1]), self.height, self.width)
 
     @staticmethod
     def read_kinetix_metadata(path: str) -> dict:
@@ -121,46 +197,55 @@ class PrdSetInterpreter:
 
         return n_frames
 
-    def _load_prd_file(self, path: str) -> np.ndarray:
-        """Load one .prd file into a (n_frames, height, width) array.
+    def read_frames(
+        self, start: int, stop: int, out: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Read global frames `[start, stop)` into a (n, height, width) array.
 
-        Seek to each frame's offset and stack them, skipping the inter-frame
-        gaps and any trailing padding.
+        Frames may span several `.prd` files. Only the requested frames are
+        read from disk, so memory use is bounded by the size of `out`.
         """
-        n_frames = self._frames_in_file(path)
+        stop = min(stop, self.shape[0])
+        n = stop - start
+        if out is None:
+            out = np.empty((n, self.height, self.width), dtype=self.dtype)
+        else:
+            out = out[:n]
+        flat = out.reshape(n, -1)
+        capture = self.capture if start == self._next_frame else None
+        first = int(np.searchsorted(self.file_offsets, start, side="right")) - 1
+        i = 0
+        for f in range(first, len(self.prd_files)):
+            if i >= n:
+                break
+            local = start + i - int(self.file_offsets[f])
+            count = min(self.frames_per_file[f] - local, n - i)
+            with open(self.prd_files[f], "rb", buffering=0) as fh:
+                if capture and local == 0:
+                    capture.feed(f, fh.read(self.header_bytes))
+                for k in range(count):
+                    fh.seek(self.header_bytes + (local + k) * self.stride_bytes)
+                    view = memoryview(flat[i + k]).cast("B")
+                    if fh.readinto(view) != self.bytes_per_frame:
+                        raise IOError(f"Short read in {self.prd_files[f]}")
+                    if capture:
+                        last = local + k == self.frames_per_file[f] - 1
+                        # gap after the frame, or the trailing bytes of the file
+                        capture.feed(f, fh.read() if last else fh.read(self.gap_bytes))
+            i += count
+        self._next_frame = stop
+        return out
 
-        frames = np.empty((n_frames, self.pixels_per_frame), dtype="<u2")
-        
-        with open(path, "rb") as fh:
-            for i in range(n_frames):
-                fh.seek(self.header_bytes + i * self.stride_bytes)
-                frames[i] = np.fromfile(fh,
-                                        dtype="<u2",
-                                        count=self.pixels_per_frame)
-
-        return frames.reshape(n_frames, self.height, self.width)
-
-    def assemble(self) -> da.Array:
-        """
-        Assemble all prd files into a single 3D volume with a lazy Dask array.
-
-        Returns
-        -------
-        A Dask array of shape (frames_total, height, width), where
-        frames_total is the sum of the frame counts across all `.prd` files.
-        """
-        if not self.prd_files:
-            empty = np.zeros((0, self.height, self.width), dtype=self.dtype)
-            return da.from_array(empty)
-
-        delayed_chunks = [
-            da.from_delayed(
-                delayed(self._load_prd_file)(path),
-                shape=(self._frames_in_file(path), self.height, self.width),
-                dtype=self.dtype,
-            )
-            for path in self.prd_files
-        ]
-
-        return da.concatenate(delayed_chunks, axis=0)
+    def frame_metadata(self, capture: PrdCapture) -> dict[str, np.ndarray]:
+        """Per-frame PRD records (`PRD_FRAME_FIELDS`) from captured bytes."""
+        off = self.header_bytes - 4096  # record sits this far before a frame
+        if off < 24 or self.gap_bytes < off:
+            return {}  # not the PVCAM layout
+        rows = []
+        for f, parts in enumerate(capture.nonpixel):
+            # parts: header, then one gap (or the trailing bytes) per frame
+            before = [parts[0]] + parts[1:self.frames_per_file[f]]
+            rows += [struct.unpack_from("<6I", p, len(p) - off) for p in before]
+        table = np.asarray(rows, dtype="<u4").reshape(-1, len(PRD_FRAME_FIELDS))
+        return {name: table[:, i] for i, name in enumerate(PRD_FRAME_FIELDS)}
 

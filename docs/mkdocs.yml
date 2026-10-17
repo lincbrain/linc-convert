@@ -69,6 +69,7 @@ nav:
   - Basic Usage Guide: basic-usage.md
   - PS-OCT Single Volume Demo: "notebooks/psoct_single_volume_demo.ipynb"
   - PS-OCT Stitching: psoct_stitching.md
+  - Kinetix PRD (LSM) Conversion: lsm_prd.md
   - API: api/
   - Contribute: contribute.md
   - About: about.md

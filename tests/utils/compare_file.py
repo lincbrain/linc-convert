@@ -118,8 +118,10 @@ def assert_zarr_equal(
     -------
     None
     """
-    zarr1 = zarr.open(store1, mode="r")
-    zarr2 = zarr.open(store2, mode="r")
+    def _open(store):  # noqa: ANN001, ANN202
+        return store if isinstance(store, zarr.Group) else zarr.open(store, mode="r")
+
+    zarr1, zarr2 = _open(store1), _open(store2)
     diffs = []
 
     if dict(zarr1.attrs) != dict(zarr2.attrs):

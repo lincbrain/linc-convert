@@ -9,9 +9,11 @@ import numpy as np
 import wkw
 import zarr
 
-# internals
 from linc_convert.modalities.wk.cli import wk
 from linc_convert.utils.io.zarr import from_config
+
+# internals
+from linc_convert.utils.io.zarr.ome import multiscales_v05_view, ome_v05_to_v06
 from linc_convert.utils.math import ceildiv
 from linc_convert.utils.zarr_config import (
     GeneralConfig,
@@ -171,17 +173,11 @@ def convert(
 
     # Write OME-Zarr multiscale metadata
     print("Write metadata")
-    src_attrs = dict(omz_data.attrs)
-    multiscales = (
-        src_attrs["ome"]["multiscales"]
-        if "ome" in src_attrs
-        else src_attrs["multiscales"]
-    )
-
-    if zarr_config.ome_version == "0.5":
-        omz.attrs["ome"] = {"version": "0.5", "multiscales": multiscales}
+    multiscales = multiscales_v05_view(dict(omz_data.attrs))
+    if zarr_config.ome_version == "0.6":
+        omz.attrs["ome"] = ome_v05_to_v06({"multiscales": multiscales})
     else:
-        omz.attrs["multiscales"] = multiscales
+        omz.attrs["ome"] = {"version": "0.5", "multiscales": multiscales}
 
 
 def get_mask_name(level: int) -> str:

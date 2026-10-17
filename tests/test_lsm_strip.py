@@ -20,13 +20,11 @@ def test_lsm_strip_convert(tmp_path, spool_dat, zarr_version):
     strip_dir = _get_first_strip_dir(spool_dat)
 
     output = tmp_path / "strip.nii.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     strip.convert(
         inp=str(strip_dir),
         info_file=None,
         out=str(output),
         zarr_version=zarr_version,
-        ome_version=ome_version,
     )
 
     expected_zarr = f"data/lsm_strip_zarr{zarr_version}.nii.zarr.zip"
@@ -41,13 +39,11 @@ def test_lsm_strip_regen_golden(tmp_path, spool_dat, zarr_version):
     strip_dir = _get_first_strip_dir(spool_dat)
 
     output = tmp_path / "strip_output.nii.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     strip.convert(
         inp=str(strip_dir),
         info_file=None,
         out=str(output),
         zarr_version=zarr_version,
-        ome_version=ome_version,
     )
 
     expected_zarr = f"data/lsm_strip_zarr{zarr_version}.nii.zarr.zip"
