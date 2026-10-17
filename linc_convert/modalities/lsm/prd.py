@@ -18,6 +18,7 @@ import re
 import sys
 import sysconfig
 from dataclasses import replace
+from typing import Annotated
 
 import cyclopts
 import numpy as np
@@ -54,7 +55,9 @@ lsm.command(prd)
 def convert(
     inp: str,
     *,
-    voxel_size: list[float] | None = None,
+    voxel_size: Annotated[
+        list[float] | None, cyclopts.Parameter(consume_multiple=True)
+    ] = None,
     workers: int | None = None,
     max_memory: float | None = None,
     max_shard_size: str | None = "40GB",

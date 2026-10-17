@@ -548,3 +548,17 @@ def test_prd_voxel_size_from_info_mat(tmp_path):
     np.testing.assert_allclose(scale, [0.515, 0.2175, 0.2927])
     sidecars = dict(zarr.open_group(str(out / "prd")).attrs)["sidecars"]
     assert "scan_info.mat" in sidecars and "scan/kinetixMetadata.txt" in sidecars
+
+
+def test_prd_cli_voxel_size(tmp_path):
+    """`--voxel-size X Y Z` takes three values on the command line."""
+    from linc_convert.cli import main
+
+    _write_prd_set(tmp_path / "scan", [9], 5, 6)
+    out = tmp_path / "o.nii.zarr"
+    main(["lsm", "prd", str(tmp_path / "scan"), "--out", str(out),
+          "--voxel-size", "0.3", "0.2", "0.5"])
+    ome = dict(zarr.open_group(str(out)).attrs)["ome"]["multiscales"][0]
+    scale = ome["datasets"][0]["coordinateTransformations"][0]["scale"]
+    np.testing.assert_allclose(scale, [0.5, 0.2, 0.3])
+
