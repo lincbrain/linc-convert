@@ -63,6 +63,7 @@ def convert(
     max_shard_size: str | None = "40GB",
     slab_depth: int | None = None,
     verify: bool = False,
+    checksum: bool = True,
     general_config: GeneralConfig | None = None,
     zarr_config: ZarrConfig | None = None,
     nii_config: NiftiConfig | None = None,
@@ -102,6 +103,10 @@ def convert(
     verify
         After writing, re-read level 0 and check that it is bit-identical
         to the .prd frames (costs one extra read + decode of level 0).
+    checksum
+        Record the SHA-256 of each `.prd` file (verified by `export`).
+        Hashing runs on extra threads and may hold up to ~4 GB of data
+        waiting to be hashed; `--no-checksum` skips it.
     general_config
         General configuration
     zarr_config
@@ -110,7 +115,7 @@ def convert(
         NIfTI header related configuration
     """
     reader = PrdSetInterpreter(inp)
-    reader.capture = PrdCapture(len(reader.prd_files))
+    reader.capture = PrdCapture(len(reader.prd_files), checksum=checksum)
     info_path = _find_info_mat(inp)
     info = _read_info_mat(info_path) if info_path else None
     if voxel_size is None:

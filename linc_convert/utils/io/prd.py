@@ -60,29 +60,41 @@ class PrdCapture:
     """Keep what is needed to rebuild `.prd` files byte for byte.
 
     `PrdSetInterpreter.read_frames` feeds it every byte of each file, in
-    order, during a sequential read: the non-pixel bytes are kept, and each
-    file is hashed (SHA-256) on its own thread, so consecutive files are
-    hashed in parallel with reading.
+    order, during a sequential read: the non-pixel bytes are kept and, with
+    `checksum`, each file is hashed (SHA-256) on its own thread. SHA-256 is
+    sequential within a file (~1.3-1.8 GB/s per core), so up to
+    `max_queued_bytes` may wait, letting consecutive files hash in parallel.
     """
 
-    def __init__(self, n_files: int) -> None:
+    def __init__(
+        self, n_files: int, checksum: bool = True, max_queued_bytes: int = 4 << 30
+    ) -> None:
         self.nonpixel: list[list[bytes]] = [[] for _ in range(n_files)]
         self.sha256: list[Optional[str]] = [None] * n_files
-        self._hash = [hashlib.sha256() for _ in range(n_files)]
+        self._hash = [hashlib.sha256() for _ in range(n_files)] if checksum else None
         self._lane: dict[int, ThreadPoolExecutor] = {}
-        self._queued: list[Future] = []
+        self._queued: list[tuple[Future, int]] = []
+        self._queued_bytes = 0
+        self._max_queued_bytes = max_queued_bytes
 
     def feed(self, f: int, data: bytes, pixels: bool) -> None:
         """Append the next bytes of file `f`."""
         if not pixels:
             self.nonpixel[f].append(data)
+        if self._hash is None:
+            return
         lane = self._lane.setdefault(f, ThreadPoolExecutor(1))
-        self._queued.append(lane.submit(self._hash[f].update, data))
-        while len(self._queued) > 256:  # bound the bytes waiting to be hashed
-            self._queued.pop(0).result()
+        self._queued.append((lane.submit(self._hash[f].update, data), len(data)))
+        self._queued_bytes += len(data)
+        while self._queued_bytes > self._max_queued_bytes:
+            fut, size = self._queued.pop(0)
+            fut.result()
+            self._queued_bytes -= size
 
     def close_file(self, f: int) -> None:
         """All bytes of file `f` have been fed."""
+        if self._hash is None:
+            return
         self._lane.pop(f).shutdown()
         self.sha256[f] = self._hash[f].hexdigest()
 
@@ -90,9 +102,10 @@ class PrdCapture:
         """Wait for pending hashes."""
         for f in list(self._lane):
             self.close_file(f)
-        for fut in self._queued:
+        for fut, _ in self._queued:
             fut.result()
         self._queued.clear()
+        self._queued_bytes = 0
 
 
 class PrdSetInterpreter:

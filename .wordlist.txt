@@ -69,3 +69,6 @@ PVCAM
 sidecar
 ImageJ
 fs
+JSON
+kB
+SHA
