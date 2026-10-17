@@ -363,7 +363,7 @@ def test_prd_max_memory(tmp_path):
     # smaller frames (another acquisition resolution) afford deeper slabs
     assert plan_for_memory(2 * gib, (70500, 400, 1000), 2, 32, chunk, 8) == (8, 256)
     # whole-shard writes need a 256-deep slab; workers are cut first
-    assert plan_for_memory(4 * gib, shape, 2, 256, shard, 8)[0] < 8
+    assert plan_for_memory(int(5.2 * gib), shape, 2, 256, shard, 8)[0] < 8
     with pytest.raises(MemoryError):
         plan_for_memory(gib, shape, 2, 256, shard, 8)
 

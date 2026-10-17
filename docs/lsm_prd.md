@@ -126,13 +126,17 @@ Chunk 32, whole-volume shard, zstd 1, 1200×1800 frames:
 These full-volume runs were I/O-bound: 3.12 and 3.14t were equal, using
 about 3.5 of 8 cores, while writing about 330 MB/s of compressed output to
 the node-local disk. Writing to RAM instead (13 GB subset, 16 threads)
-shows the compute ceiling:
+shows the compute ceiling (Python 3.14t, 128-slice slabs):
 
-| Python | zstd 1, depth 32 | zstd 1, depth 128 | zstd 5, depth 128 |
+| chunk | zstd | 16 threads | 32 threads |
 |---|---|---|---|
-| 3.12 | 708 MB/s | 741 MB/s | 588 MB/s |
-| 3.14 (GIL) | 705 MB/s | 611 MB/s | 566 MB/s |
-| 3.14t (free-threaded) | 1076 MB/s | **1307 MB/s** | 656 MB/s |
+| 64 | 1 | 2219 MB/s | 2266 MB/s |
+| 64 | 5 | 1167 MB/s | 1490 MB/s |
+| 128 | 1 | 1730 MB/s | 2156 MB/s |
+| 128 | 5 | 1214 MB/s | 1438 MB/s |
+
+On the same 13 GB subset with the GIL (3.12 / 3.14), throughput levels off
+around 700–750 MB/s.
 
 With small chunks, per-chunk Python work holds the GIL. The free-threaded
 3.14t build removes that limit, and deeper slabs then help, because each
@@ -169,12 +173,11 @@ frame size, not its length. For 1200×1800 frames:
 3. **Disk.** It must sustain reading R plus writing about R / 3 (the
    compression ratio is ~3). On the test node the local disk (~350 MB/s
    writes) was the limit; a workstation NVMe SSD normally is not.
-4. **CPU.** On free-threaded Python 3.14t, budget about 80 MB/s per thread
-   for zstd 1 (1307 MB/s with 16 threads and `--slab-depth 128`), so
-   `--workers ≈ R / 80`, leaving the remaining cores to the acquisition
+4. **CPU.** On free-threaded Python 3.14t with zstd 1, 16 threads reach
+   about 2.2 GB/s (chunk 64, `--slab-depth 128`); zstd 5 needs about 32
+   threads for 1.4–1.5 GB/s. Leave the remaining cores to the acquisition
    software. With the GIL (3.12 / 3.14) throughput levels off around
-   700–750 MB/s however many cores are used. zstd 5 is CPU-bound at
-   roughly 650 MB/s with 16 threads.
+   700–750 MB/s however many cores are used.
 5. **Memory.** `--max-memory 4` is plenty for chunk 32, and lets the
    planner pick deeper slabs (up to 256 slices), which helps on 3.14t when
    compute-bound. When I/O-bound, extra memory does not help.

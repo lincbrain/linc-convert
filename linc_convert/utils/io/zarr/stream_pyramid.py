@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Iterator, Optional, Sequence
 
 import numpy as np
@@ -227,12 +228,15 @@ def _inner_encoder(arr: ZarrArray) -> Optional[Callable[[np.ndarray], bytes]]:
 class ShardAppendSink:
     """Stream inner chunks of one level into append-only shard files.
 
-    Each `write` takes a slab of whole inner chunks along z (a batch of
-    `unit_z` slices). Chunks are compressed by the shared thread pool, one
-    task per (chunk plane, chunk row); offsets are assigned in order on the
-    calling thread, and the bytes are appended by a dedicated I/O thread so
-    the next batch is compressed while this one is written. At most
-    `inflight` batches of compressed bytes are queued.
+    Each `write` takes a slab of whole inner chunks along z. Its chunks are
+    split into ~4 groups per thread and compressed by the shared pool while
+    the caller moves on; the previous slab is then committed: offsets are
+    assigned in chunk order (so output bytes do not depend on scheduling)
+    and the bytes are appended by a dedicated I/O thread. At most `inflight`
+    batches of compressed bytes wait for the disk.
+
+    The caller must not modify a slab until the next `write` (or `close`)
+    returns.
     """
 
     def __init__(
@@ -256,6 +260,7 @@ class ShardAppendSink:
         # shards open in the current shard row along z: (sy, sx) -> state
         self._open: dict[tuple[int, int], dict] = {}
         self._shard_z: Optional[int] = None
+        self._queued: deque = deque()  # (z0, n, encode futures), in order
         self._io = ThreadPoolExecutor(1)
         self._inflight: list[list] = []
         self._max_inflight = max(1, inflight)
@@ -300,11 +305,29 @@ class ShardAppendSink:
             for fut in self._inflight.pop(0):
                 fut.result()  # re-raises I/O errors
 
+    def _encode_group(
+        self, data: np.ndarray, coords: list[tuple[int, int, int]]
+    ) -> list[tuple[int, int, int, bytes]]:
+        cz, cy, cx = full = self.chunk
+        out = []
+        for dz, y0, x0 in coords:
+            block = data[dz:dz + cz, y0:y0 + cy, x0:x0 + cx]
+            if block.shape != full:  # edge chunk: pad with the fill value
+                padded = np.full(full, self.fill, dtype=self.dtype)
+                padded[: block.shape[0], : block.shape[1], : block.shape[2]] = block
+                block = padded
+            if self.fill == 0 and not block.any():
+                continue  # like zarr-python's write_empty_chunks=False
+            if self.fill != 0 and np.all(block == self.fill):
+                continue
+            out.append((dz, y0, x0, self.encode(block)))
+        return out
+
     # ---------------------------------------------------------------- API
     def write(
         self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
     ) -> None:
-        """Compress the inner chunks of slab `data` (at `z0`) and append them."""
+        """Queue slab `data` (at `z0`) for compression; commit earlier slabs."""
         cz = self.chunk[0]
         if z0 % cz:
             raise RuntimeError("Appends must be aligned on inner chunks")
@@ -312,56 +335,48 @@ class ShardAppendSink:
         while i < n:  # split at shard boundaries along z
             zs = z0 + i
             k = min(n - i, (zs // self.shard[0] + 1) * self.shard[0] - zs)
-            self._write_shard_rows(zs, data[i:i + k], pool)
+            self._submit(zs, data[i:i + k], pool)
             i += k
+        while len(self._queued) > 1:
+            self._commit()
 
-    def _write_shard_rows(
+    def _submit(
         self, z0: int, data: np.ndarray, pool: Optional[ThreadPoolExecutor]
     ) -> None:
         cz, cy, cx = self.chunk
-        n = data.shape[0]
+        ny, nx = self.shape[1:]
+        coords = [(dz, y0, x0) for dz in range(0, data.shape[0], cz)
+                  for y0 in range(0, ny, cy) for x0 in range(0, nx, cx)]
+        workers = pool._max_workers if pool is not None else 1
+        size = -(-len(coords) // (4 * workers))
+        groups = [coords[i:i + size] for i in range(0, len(coords), size)]
+        if pool is None:
+            futs = [_resolved(self._encode_group(data, g)) for g in groups]
+        else:
+            futs = [pool.submit(self._encode_group, data, g) for g in groups]
+        self._queued.append((z0, data.shape[0], futs))
+
+    def _commit(self) -> None:
+        z0, n, futs = self._queued.popleft()
+        cz, cy, cx = self.chunk
         sz = z0 // self.shard[0]
         if self._shard_z is not None and sz != self._shard_z:
             self._finalize()
         self._shard_z = sz
-        ny, nx = self.shape[1:]
-        full = (cz, cy, cx)
-
-        def enc_row(task: tuple[int, int]) -> list[tuple[int, bytes]]:
-            # one task per row of inner chunks keeps per-task overhead small
-            dz, y0 = task
-            row = data[dz:dz + cz, y0:y0 + cy]
-            out = []
-            for x0 in range(0, nx, cx):
-                block = row[:, :, x0:x0 + cx]
-                if block.shape != full:  # edge chunk: pad with the fill value
-                    padded = np.full(full, self.fill, dtype=self.dtype)
-                    padded[: block.shape[0], : block.shape[1], : block.shape[2]] = block
-                    block = padded
-                if self.fill == 0 and not block.any():
-                    continue  # like zarr-python's write_empty_chunks=False
-                if self.fill != 0 and np.all(block == self.fill):
-                    continue
-                out.append((x0, self.encode(block)))
-            return out
-
-        tasks = [(dz, y0) for dz in range(0, n, cz) for y0 in range(0, ny, cy)]
-        encoded = pool.map(enc_row, tasks) if pool is not None else map(enc_row, tasks)
         pending: dict[tuple[int, int], list[bytes]] = {}
-        for (dz, y0), row in zip(tasks, encoded):
-            iz = ((z0 + dz) % self.shard[0]) // cz
-            sy, iy = y0 // self.shard[1], (y0 % self.shard[1]) // cy
-            for x0, buf in row:
+        for fut in futs:
+            for dz, y0, x0, buf in fut.result():
+                iz = ((z0 + dz) % self.shard[0]) // cz
+                sy, iy = y0 // self.shard[1], (y0 % self.shard[1]) // cy
                 sx, ix = x0 // self.shard[2], (x0 % self.shard[2]) // cx
                 st = self._shard_state(sz, sy, sx)
                 st["index"][iz, iy, ix] = (st["offset"], len(buf))
                 st["offset"] += len(buf)
                 pending.setdefault((sy, sx), []).append(buf)
-        futs = [
+        self._inflight.append([
             self._io.submit(self._append, self._open[key], b"".join(bufs))
             for key, bufs in pending.items()
-        ]
-        self._inflight.append(futs)
+        ])
         self._throttle(self._max_inflight)
         # shard row complete?
         if z0 + n >= min((sz + 1) * self.shard[0], self.shape[0]):
@@ -375,14 +390,26 @@ class ShardAppendSink:
         self._shard_z = None
 
     def close(self) -> None:
-        """Finalize open shards and wait for all writes."""
+        """Commit queued slabs, finalize open shards and wait for all writes."""
+        while self._queued:
+            self._commit()
         self._finalize()
         self._throttle(0)
         self._io.shutdown()
 
     def abort(self) -> None:
         """Stop the I/O thread without publishing incomplete shards."""
+        for _, _, futs in self._queued:
+            for fut in futs:
+                fut.cancel()
+        self._queued.clear()
         self._io.shutdown(wait=True, cancel_futures=True)
+
+
+def _resolved(value: object) -> Future:
+    fut: Future = Future()
+    fut.set_result(value)
+    return fut
 
 
 def make_sink(  # noqa: ANN201
@@ -406,10 +433,8 @@ def make_sink(  # noqa: ANN201
 # --------------------------------------------------------------------------
 # writer
 # --------------------------------------------------------------------------
-# Calibrated on full 1200x1800 uint16 stripes (slab = slab_depth x frame
-# bytes): unconstrained peak RSS with 8 threads was 1.15, 2.1, 3.5 and 6.8 GB
-# for slabs of 32, 128, 256 and 512 slices; under a memory limit it shrinks
-# (a 1 GB limit worked at depth 32 with 8 threads).
+# Calibrated on 1200x1800 uint16 frames (slab = slab_depth x frame bytes):
+# with 16-32 threads and 128-slice slabs, peak RSS was 3.0-3.9 GB.
 BASE_BYTES = 512 * 2**20
 THREAD_BYTES = 25 * 2**20
 
@@ -425,7 +450,8 @@ def estimate_memory(
     """
     slab = slab_depth * shape[1] * shape[2] * itemsize
     per_thread = THREAD_BYTES + 3 * int(np.prod(tile)) * itemsize
-    return int(BASE_BYTES + 3 * slab + workers * per_thread)
+    # 3 rotating input slabs + compressed bytes in flight + pyramid buffers
+    return int(BASE_BYTES + 4 * slab + workers * per_thread)
 
 
 def plan_for_memory(
@@ -497,11 +523,15 @@ class StreamingPyramidWriter:
         self.carry: list[Optional[np.ndarray]] = [None] * self.nlevels
         workers = max(1, int(max_workers or 1))
         self._pool = ThreadPoolExecutor(workers) if workers > 1 else None
-        # two buffers for the reader/writer ping-pong; one staging buffer per
-        # level for partial units
+        # downsampling gets its own threads so it does not queue behind the
+        # compression of the previous slab
+        self._ds_pool = (ThreadPoolExecutor(max(2, workers // 4))
+                         if workers > 1 else None)
+        # three rotating input buffers: one being read, one being compressed,
+        # one being committed; one staging buffer per level for partial units
         self._base_bufs = [
             np.empty((self.unit[0], *self.shapes[0][1:]), self.dtype)
-            for _ in range(2)
+            for _ in range(3)
         ]
         self.buf = [
             np.empty((u, *s[1:]), dtype=self.dtype)
@@ -521,7 +551,11 @@ class StreamingPyramidWriter:
         return len(self.arrays)
 
     def base_buffers(self) -> list[np.ndarray]:
-        """Two reusable (unit_z, Y, X) buffers for feeding `write_frames`."""
+        """Three (unit_z, Y, X) buffers to feed `write_frames` in rotation.
+
+        A buffer passed to `write_frames` is still being compressed when the
+        call returns; it may be refilled once the following call returns.
+        """
         return self._base_bufs
 
     # ------------------------------------------------------------------ write
@@ -530,7 +564,11 @@ class StreamingPyramidWriter:
         if z0 + data.shape[0] > self.shapes[lvl][0]:
             raise RuntimeError(
                 f"Level {lvl} overflow: {z0 + data.shape[0]} > {self.shapes[lvl][0]}")
-        self.sinks[lvl].write(z0, data, self._pool)
+        sink = self.sinks[lvl]
+        if isinstance(sink, ShardAppendSink) and not any(
+                np.shares_memory(data, b) for b in self._base_bufs):
+            data = data.copy()  # staging buffers are reused right away
+        sink.write(z0, data, self._pool)
         self.cursor[lvl] = z0 + data.shape[0]
 
     def _write_and_feed(self, lvl: int, data: np.ndarray) -> None:
@@ -569,20 +607,23 @@ class StreamingPyramidWriter:
         if usable:
             self._push(
                 lvl,
-                _downsample_parallel(frames[:usable], self.factors[lvl], self._pool),
+                _downsample_parallel(frames[:usable], self.factors[lvl],
+                                     self._ds_pool),
             )
 
     # ------------------------------------------------------------------ API
     def write_frames(self, frames: np.ndarray) -> None:
         """Push the next frames (n, Y, X) of the base level, in z order.
 
-        Returns once `frames` may be reused by the caller.
+        Frames from `base_buffers` are compressed in the background (see
+        there); any other array is copied and may be reused right away.
         """
         if tuple(frames.shape[1:]) != tuple(self.shapes[0][1:]):
             raise ValueError(f"Bad frame shape {frames.shape[1:]}")
         last = self.cursor[0] + frames.shape[0] == self.shapes[0][0]
         if self.fill[0] == 0 and (frames.shape[0] == self.unit[0] or last):
             # aligned full (or final) unit: write straight from the caller
+            # (_write copies it unless it is one of the base buffers)
             self._write_and_feed(0, frames)
         else:
             self._push(0, frames)
@@ -605,9 +646,10 @@ class StreamingPyramidWriter:
         """Release the thread pools."""
         for sink in getattr(self, "sinks", []):
             sink.abort()
-        if self._pool is not None:
-            self._pool.shutdown()
-            self._pool = None
+        for pool in (self._pool, self._ds_pool):
+            if pool is not None:
+                pool.shutdown()
+        self._pool = self._ds_pool = None
 
 
 def stream_volume(
@@ -617,8 +659,9 @@ def stream_volume(
 ) -> None:
     """Drive `writer` from a `read(start, stop, out)` frame source.
 
-    Reads one base write unit at a time, prefetching the next unit in a
-    background thread while the current one is compressed and written.
+    Reads one base write unit at a time into rotating buffers, prefetching
+    the next unit in a background thread while earlier ones are compressed
+    and written.
     """
     nz = writer.shapes[0][0]
     unit = writer.unit[0]
@@ -637,7 +680,7 @@ def stream_volume(
             while fut is not None:
                 data = fut.result()
                 nxt = next(it, None)
-                fut = io.submit(read, *nxt, bufs[(k + 1) % 2]) if nxt else None
+                fut = io.submit(read, *nxt, bufs[(k + 1) % 3]) if nxt else None
                 writer.write_frames(data)
                 if progress:
                     progress(data.shape[0])
