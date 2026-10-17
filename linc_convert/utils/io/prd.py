@@ -56,56 +56,41 @@ def parse_prd_header(header: bytes) -> dict | None:
     )
 
 
+def sha256_file(path: str) -> str:
+    """SHA-256 of a file."""
+    with open(path, "rb") as fh:
+        return hashlib.file_digest(fh, "sha256").hexdigest()
+
+
 class PrdCapture:
     """Keep what is needed to rebuild `.prd` files byte for byte.
 
-    `PrdSetInterpreter.read_frames` feeds it every byte of each file, in
-    order, during a sequential read: the non-pixel bytes are kept and, with
-    `checksum`, each file is hashed (SHA-256) on its own thread. SHA-256 is
-    sequential within a file (~1.3-1.8 GB/s per core), so up to
-    `max_queued_bytes` may wait, letting consecutive files hash in parallel.
+    `PrdSetInterpreter.read_frames` feeds it the non-pixel bytes of each
+    file, in order, during a sequential read. With `checksum`, the SHA-256
+    of each whole file is computed by `hash_threads` threads that read the
+    files independently: SHA-256 is sequential within a file (~2 GB/s per
+    core), so several files are hashed at once.
     """
 
     def __init__(
-        self, n_files: int, checksum: bool = True, max_queued_bytes: int = 4 << 30
+        self, prd_files: list[str], checksum: bool = True, hash_threads: int = 4
     ) -> None:
-        self.nonpixel: list[list[bytes]] = [[] for _ in range(n_files)]
-        self.sha256: list[Optional[str]] = [None] * n_files
-        self._hash = [hashlib.sha256() for _ in range(n_files)] if checksum else None
-        self._lane: dict[int, ThreadPoolExecutor] = {}
-        self._queued: list[tuple[Future, int]] = []
-        self._queued_bytes = 0
-        self._max_queued_bytes = max_queued_bytes
+        self.nonpixel: list[list[bytes]] = [[] for _ in prd_files]
+        self.sha256: list[Optional[str]] = [None] * len(prd_files)
+        self._pool = ThreadPoolExecutor(hash_threads) if checksum else None
+        self._digests: list[Future] = (
+            [self._pool.submit(sha256_file, p) for p in prd_files] if checksum else [])
 
-    def feed(self, f: int, data: bytes, pixels: bool) -> None:
-        """Append the next bytes of file `f`."""
-        if not pixels:
-            self.nonpixel[f].append(data)
-        if self._hash is None:
-            return
-        lane = self._lane.setdefault(f, ThreadPoolExecutor(1))
-        self._queued.append((lane.submit(self._hash[f].update, data), len(data)))
-        self._queued_bytes += len(data)
-        while self._queued_bytes > self._max_queued_bytes:
-            fut, size = self._queued.pop(0)
-            fut.result()
-            self._queued_bytes -= size
-
-    def close_file(self, f: int) -> None:
-        """All bytes of file `f` have been fed."""
-        if self._hash is None:
-            return
-        self._lane.pop(f).shutdown()
-        self.sha256[f] = self._hash[f].hexdigest()
+    def feed(self, f: int, data: bytes) -> None:
+        """Append the next non-pixel bytes of file `f`."""
+        self.nonpixel[f].append(data)
 
     def finish(self) -> None:
-        """Wait for pending hashes."""
-        for f in list(self._lane):
-            self.close_file(f)
-        for fut, _ in self._queued:
-            fut.result()
-        self._queued.clear()
-        self._queued_bytes = 0
+        """Wait for the file digests."""
+        if self._pool is not None:
+            self.sha256 = [fut.result() for fut in self._digests]
+            self._pool.shutdown()
+            self._pool = None
 
 
 class PrdSetInterpreter:
@@ -237,20 +222,16 @@ class PrdSetInterpreter:
             count = min(self.frames_per_file[f] - local, n - i)
             with open(self.prd_files[f], "rb", buffering=0) as fh:
                 if capture and local == 0:
-                    capture.feed(f, fh.read(self.header_bytes), pixels=False)
+                    capture.feed(f, fh.read(self.header_bytes))
                 for k in range(count):
                     fh.seek(self.header_bytes + (local + k) * self.stride_bytes)
                     view = memoryview(flat[i + k]).cast("B")
                     if fh.readinto(view) != self.bytes_per_frame:
                         raise IOError(f"Short read in {self.prd_files[f]}")
                     if capture:
-                        capture.feed(f, bytes(view), pixels=True)
                         last = local + k == self.frames_per_file[f] - 1
                         # gap after the frame, or the trailing bytes of the file
-                        capture.feed(f, fh.read() if last else fh.read(self.gap_bytes),
-                                     pixels=False)
-                        if last:
-                            capture.close_file(f)
+                        capture.feed(f, fh.read() if last else fh.read(self.gap_bytes))
             i += count
         self._next_frame = stop
         return out

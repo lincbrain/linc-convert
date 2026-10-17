@@ -136,8 +136,10 @@ shows the compute ceiling (Python 3.14t, 128-slice slabs):
 | 128 | 1 | 1730 MB/s | 2156 MB/s |
 | 128 | 5 | 1214 MB/s | 1438 MB/s |
 
-On the same 13 GB subset with the GIL (3.12 / 3.14), throughput levels off
-around 700–750 MB/s.
+On the full 114 GB stripe in RAM (32 threads, chunk 64, zstd 1) the
+conversion runs at 3.15 GB/s, or 3.68 GB/s with `--no-checksum`. On the
+13 GB subset with the GIL (3.12 / 3.14), throughput levels off around
+700–750 MB/s.
 
 With small chunks, per-chunk Python work holds the GIL. The free-threaded
 3.14t build removes that limit, and deeper slabs then help, because each
@@ -175,8 +177,9 @@ frame size, not its length. For 1200×1800 frames:
    compression ratio is ~3). On the test node the local disk (~350 MB/s
    writes) was the limit; a workstation NVMe SSD normally is not.
 4. **CPU.** On free-threaded Python 3.14t with zstd 1, 16 threads reach
-   about 2.2 GB/s (chunk 64, `--slab-depth 128`); zstd 5 needs about 32
-   threads for 1.4–1.5 GB/s. Leave the remaining cores to the acquisition
+   about 2.2 GB/s and 32 threads about 3 GB/s (chunk 64,
+   `--slab-depth 128`); zstd 5 needs about 32 threads for 1.4–1.5 GB/s.
+   Recording SHA-256 checksums costs ~15% (`--no-checksum` skips it). Leave the remaining cores to the acquisition
    software. With the GIL (3.12 / 3.14) throughput levels off around
    700–750 MB/s however many cores are used.
 5. **Memory.** `--max-memory 4` is plenty for chunk 32, and lets the
@@ -205,7 +208,9 @@ Besides the pixels, the output has a `prd/` group with:
   ~14 kB per 2 GB file once compressed.
 
 `linc-convert lsm prd export OUT.nii.zarr DEST` writes `DEST/<scan>/` and the
-info file back, byte for byte, and checks each file's SHA-256.
+info file back, byte for byte, and checks each file's SHA-256. The checksums
+are computed during conversion by 4 threads that read each `.prd` file
+independently (usually from the page cache); `--no-checksum` skips this.
 
 ## Guarantees and checks
 
