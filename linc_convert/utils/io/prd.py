@@ -15,21 +15,88 @@ next to the `.prd` file(s):
     8272    # header bytes
     2661    # expected frames per full file
     6912    # gap bytes (between frames, not after last frame)
+
+These are PVCAM PRD files. The header starts with a 48-byte PRD header
+(format version, bit depth, frame count, sensor region), and a 24-byte
+record of per-frame metadata (frame number, readout time, exposure time,
+begin/end-of-frame times) sits `header_bytes - 4096` bytes before each
+frame. The remaining non-pixel bytes (camera metadata blocks, fill) are not
+interpreted, but `PrdCapture` keeps them so the files can be rebuilt.
 """
 
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import re
+import struct
+from concurrent.futures import Future, ThreadPoolExecutor
 from os import PathLike
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
+PRD_FRAME_FIELDS = (
+    "frame_number", "readout_time", "exposure_time", "bof_time", "eof_time",
+    "roi_count",
+)
+
+
+def parse_prd_header(header: bytes) -> dict | None:
+    """Decode the PVCAM PRD file header (None if the signature is absent)."""
+    if header[:4] != b"PRD\0":
+        return None
+    (version, bit_depth, frame_count, s1, s2, sbin, p1, p2, pbin,
+     metadata_size, exposure_resolution) = struct.unpack_from("<HHI6HII", header, 4)
+    return dict(
+        version=version, bit_depth=bit_depth, frame_count=frame_count,
+        region=dict(s1=s1, s2=s2, sbin=sbin, p1=p1, p2=p2, pbin=pbin),
+        metadata_size=metadata_size, exposure_resolution=exposure_resolution,
+    )
+
+
+class PrdCapture:
+    """Keep what is needed to rebuild `.prd` files byte for byte.
+
+    `PrdSetInterpreter.read_frames` feeds it every byte of each file, in
+    order, during a sequential read: the non-pixel bytes are kept, and each
+    file is hashed (SHA-256) on its own thread, so consecutive files are
+    hashed in parallel with reading.
+    """
+
+    def __init__(self, n_files: int) -> None:
+        self.nonpixel: list[list[bytes]] = [[] for _ in range(n_files)]
+        self.sha256: list[Optional[str]] = [None] * n_files
+        self._hash = [hashlib.sha256() for _ in range(n_files)]
+        self._lane: dict[int, ThreadPoolExecutor] = {}
+        self._queued: list[Future] = []
+
+    def feed(self, f: int, data: bytes, pixels: bool) -> None:
+        """Append the next bytes of file `f`."""
+        if not pixels:
+            self.nonpixel[f].append(data)
+        lane = self._lane.setdefault(f, ThreadPoolExecutor(1))
+        self._queued.append(lane.submit(self._hash[f].update, data))
+        while len(self._queued) > 256:  # bound the bytes waiting to be hashed
+            self._queued.pop(0).result()
+
+    def close_file(self, f: int) -> None:
+        """All bytes of file `f` have been fed."""
+        self._lane.pop(f).shutdown()
+        self.sha256[f] = self._hash[f].hexdigest()
+
+    def finish(self) -> None:
+        """Wait for pending hashes."""
+        for f in list(self._lane):
+            self.close_file(f)
+        for fut in self._queued:
+            fut.result()
+        self._queued.clear()
+
 
 class PrdSetInterpreter:
-    """Assemble prd files into a single 3D volume with a Dask array."""
+    """Read a directory of `.prd` files as one (frames, height, width) volume."""
 
     def __init__(
         self, prd_set_path: str | PathLike[str]
@@ -53,6 +120,8 @@ class PrdSetInterpreter:
         self.stride_bytes = self.bytes_per_frame + self.gap_bytes
 
         self.frames_per_file = [self._frames_in_file(f) for f in self.prd_files]
+        self.capture: Optional[PrdCapture] = None
+        self._next_frame = 0  # sequential reads feed `capture`
         # first global frame index of each file (plus total at the end)
         self.file_offsets = np.concatenate(
             [[0], np.cumsum(self.frames_per_file)]
@@ -145,6 +214,7 @@ class PrdSetInterpreter:
         else:
             out = out[:n]
         flat = out.reshape(n, -1)
+        capture = self.capture if start == self._next_frame else None
         first = int(np.searchsorted(self.file_offsets, start, side="right")) - 1
         i = 0
         for f in range(first, len(self.prd_files)):
@@ -153,10 +223,35 @@ class PrdSetInterpreter:
             local = start + i - int(self.file_offsets[f])
             count = min(self.frames_per_file[f] - local, n - i)
             with open(self.prd_files[f], "rb", buffering=0) as fh:
+                if capture and local == 0:
+                    capture.feed(f, fh.read(self.header_bytes), pixels=False)
                 for k in range(count):
                     fh.seek(self.header_bytes + (local + k) * self.stride_bytes)
                     view = memoryview(flat[i + k]).cast("B")
                     if fh.readinto(view) != self.bytes_per_frame:
                         raise IOError(f"Short read in {self.prd_files[f]}")
+                    if capture:
+                        capture.feed(f, bytes(view), pixels=True)
+                        last = local + k == self.frames_per_file[f] - 1
+                        # gap after the frame, or the trailing bytes of the file
+                        capture.feed(f, fh.read() if last else fh.read(self.gap_bytes),
+                                     pixels=False)
+                        if last:
+                            capture.close_file(f)
             i += count
+        self._next_frame = stop
         return out
+
+    def frame_metadata(self, capture: PrdCapture) -> dict[str, np.ndarray]:
+        """Per-frame PRD records (`PRD_FRAME_FIELDS`) from captured bytes."""
+        off = self.header_bytes - 4096  # record sits this far before a frame
+        if off < 24 or self.gap_bytes < off:
+            return {}  # not the PVCAM layout
+        rows = []
+        for f, parts in enumerate(capture.nonpixel):
+            # parts: header, then one gap (or the trailing bytes) per frame
+            before = [parts[0]] + parts[1:self.frames_per_file[f]]
+            rows += [struct.unpack_from("<6I", p, len(p) - off) for p in before]
+        table = np.asarray(rows, dtype="<u4").reshape(-1, len(PRD_FRAME_FIELDS))
+        return {name: table[:, i] for i, name in enumerate(PRD_FRAME_FIELDS)}
+

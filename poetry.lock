@@ -4233,7 +4233,7 @@ remote = ["fsspec (>=2023.10.0)", "obstore (>=0.5.1)"]
 [extras]
 all = ["dask-image", "glymur", "h5py", "scipy", "tensorstore", "tifffile", "wkw"]
 df = ["glymur"]
-lsm = ["crc32c", "dask-image", "tifffile"]
+lsm = ["crc32c", "dask-image", "scipy", "tifffile"]
 psoct = ["h5py", "scipy"]
 ts = ["tensorstore"]
 wk = ["wkw"]
@@ -4241,4 +4241,4 @@ wk = ["wkw"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "4d6bb1d7afc694625e6c11eb22ec44cf8472332e085f85b0fb194e86026da4a4"
+content-hash = "48144c833b31371120d1ab08aab0466a4fa0cbc4f5fc3f9565f4fdeb2b31e49c"

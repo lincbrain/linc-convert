@@ -65,3 +65,7 @@ uint
 voxels
 XY
 zstd
+PVCAM
+sidecar
+ImageJ
+fs

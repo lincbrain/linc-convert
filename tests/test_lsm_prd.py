@@ -14,6 +14,12 @@ from linc_convert.utils.io.prd import PrdSetInterpreter
 PRD_INPUT_DIR = "data/lsm_prd"
 
 
+def _convert(*args, **kwargs):
+    """`prd.convert` with a unit voxel size (test scans have no info file)."""
+    kwargs.setdefault("voxel_size", [1, 1, 1])
+    return prd.convert(*args, **kwargs)
+
+
 def build_prd_subset(dest: Path) -> None:
     """Fetch a small subset of a Kinetix .prd assets to build the golden test input.
 
@@ -65,7 +71,7 @@ def build_prd_subset(dest: Path) -> None:
 def test_lsm_prd(tmp_path, zarr_version):
     expected_zarr = f"data/lsm_prd_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "prd.nii.zarr"
-    prd.convert(
+    _convert(
         PRD_INPUT_DIR,
         out=str(output),
         zarr_version=zarr_version,
@@ -78,7 +84,7 @@ def test_lsm_prd_regen_golden(tmp_path, zarr_version):
     build_prd_subset(PRD_INPUT_DIR)
     base = f"data/lsm_prd_zarr{zarr_version}.nii.zarr"
     output = tmp_path / "prd.nii.zarr"
-    prd.convert(
+    _convert(
         PRD_INPUT_DIR,
         out=str(output),
         zarr_version=zarr_version,
@@ -216,7 +222,7 @@ def test_prd_level0_lossless(tmp_path, case, pattern):
     raw = _raw_frames(tmp_path / "in")
     out = tmp_path / "out.nii.zarr"
     kw.setdefault("workers", 3)
-    prd.convert(str(tmp_path / "in"), out=str(out), overwrite=True,
+    _convert(str(tmp_path / "in"), out=str(out), overwrite=True,
                 verify=True, **kw)
     assert not list(out.rglob("*.partial"))
     level0 = zarr.open_array(str(out / "0"), mode="r")
@@ -237,7 +243,7 @@ def test_prd_level0_lossless(tmp_path, case, pattern):
 def test_prd_level0_lossless_real_subset(tmp_path):
     """The golden real-data subset round-trips exactly in the large-shard layout."""
     out = tmp_path / "out.nii.zarr"
-    prd.convert(PRD_INPUT_DIR, out=str(out), chunk=(32,), max_shard_size="5TB",
+    _convert(PRD_INPUT_DIR, out=str(out), chunk=(32,), max_shard_size="5TB",
                 compressor_opt={"clevel": 1}, verify=True)
     raw = _raw_frames(Path(PRD_INPUT_DIR))
     np.testing.assert_array_equal(zarr.open_array(str(out / "0"))[:], raw)
@@ -246,7 +252,7 @@ def test_prd_level0_lossless_real_subset(tmp_path):
 def test_prd_verify_detects_corruption(tmp_path):
     _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
     out = tmp_path / "out.nii.zarr"
-    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,), compressor="none",
+    _convert(str(tmp_path / "in"), out=str(out), chunk=(4,), compressor="none",
                 max_shard_size="5TB")
     shard = next(p for p in (out / "0").rglob("*") if p.is_file()
                  and p.name != "zarr.json")
@@ -287,7 +293,7 @@ def test_prd_pyramid_matches_oracles(tmp_path, frames, height, width, cfg):
 
     vol = _write_prd_set(tmp_path / "in", frames, height, width)
     out = tmp_path / "stream.nii.zarr"
-    prd.convert(str(tmp_path / "in"), out=str(out), workers=3, overwrite=True, **cfg)
+    _convert(str(tmp_path / "in"), out=str(out), workers=3, overwrite=True, **cfg)
     _assert_pyramid(out, _reference_pyramid(vol, cfg["chunk"][0]))
 
     # generic (dask) pyramid code, same layout, as a second oracle
@@ -339,7 +345,7 @@ def test_prd_output_independent_of_threads_and_depth(tmp_path):
     digests = set()
     for i, (w, d) in enumerate([(1, None), (4, None), (3, 12), (8, 36)]):
         out = tmp_path / f"o{i}.nii.zarr"
-        prd.convert(str(tmp_path / "in"), out=str(out), chunk=(4,),
+        _convert(str(tmp_path / "in"), out=str(out), chunk=(4,),
                     max_shard_size="5TB", workers=w, slab_depth=d)
         h = hashlib.sha256()
         for f in sorted(p for p in out.rglob("*") if p.is_file()):
@@ -368,7 +374,7 @@ def test_prd_max_memory(tmp_path):
         plan_for_memory(gib, shape, 2, 256, shard, 8)
 
     vol = _write_prd_set(tmp_path / "in", [37, 11], 21, 34)
-    prd.convert(str(tmp_path / "in"), out=str(tmp_path / "c.nii.zarr"),
+    _convert(str(tmp_path / "in"), out=str(tmp_path / "c.nii.zarr"),
                 chunk=(8,), workers=4, max_memory=1, max_shard_size="5TB")
     _assert_pyramid(tmp_path / "c.nii.zarr", _reference_pyramid(vol, 8))
 
@@ -419,7 +425,7 @@ def test_prd_ome_v06(tmp_path):
         outs[v] = tmp_path / f"o{v}.nii.zarr"
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            prd.convert(str(tmp_path / "in"), out=str(outs[v]), chunk=(8,),
+            _convert(str(tmp_path / "in"), out=str(outs[v]), chunk=(8,),
                         max_shard_size="5TB", voxel_size=[0.75, 0.75, 2.0],
                         ome_version=v)
         future = [w for w in caught if issubclass(w.category, FutureWarning)]
@@ -470,16 +476,75 @@ def test_prd_ome_v06(tmp_path):
 
 def test_zarr_v2_write_unsupported(tmp_path):
     with pytest.raises(ValueError, match="Zarr v2"):
-        prd.convert(PRD_INPUT_DIR, out=str(tmp_path / "o.nii.zarr"), zarr_version=2)
+        _convert(PRD_INPUT_DIR, out=str(tmp_path / "o.nii.zarr"), zarr_version=2)
 
 
 def test_prd_default_frame_wide_shards(tmp_path):
     """Without --shard, shards span the frame and as much of z as fits."""
     _write_prd_set(tmp_path / "in", [37, 37, 11], 21, 34)
     out = tmp_path / "o.nii.zarr"
-    prd.convert(str(tmp_path / "in"), out=str(out), chunk=(8,))
+    _convert(str(tmp_path / "in"), out=str(out), chunk=(8,))
     arr = zarr.open_array(str(out / "0"))
     assert arr.shards == (88, 24, 40)  # whole volume, rounded up to chunks
     files = [p for p in (out / "0").rglob("*") if p.is_file() and p.name != "zarr.json"]
     assert len(files) == 1
 
+
+
+# --------------------------------------------------------------------------
+# metadata and byte-exact export
+# --------------------------------------------------------------------------
+def _sha256_dir(path: Path) -> dict[str, str]:
+    import hashlib
+
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(path.iterdir()) if p.is_file()}
+
+
+@pytest.mark.parametrize("real", [False, True])
+def test_prd_export_rebuilds_identical_files(tmp_path, real):
+    """`lsm prd export` writes back the original files, byte for byte."""
+    if real:
+        src = tmp_path / "lsm_prd"
+        shutil.copytree(PRD_INPUT_DIR, src)
+    else:
+        src = tmp_path / "scan"
+        _write_prd_set(src, [37, 37, 11], 21, 34)
+    out = tmp_path / "o.nii.zarr"
+    _convert(str(src), out=str(out), chunk=(8,))
+    prd.export(str(out), str(tmp_path / "rebuilt"))
+    assert _sha256_dir(tmp_path / "rebuilt" / src.name) == _sha256_dir(src)
+    meta = dict(zarr.open_group(str(out / "prd")).attrs)
+    assert [f["sha256"] for f in meta["files"]] == [
+        _sha256_dir(src)[f["name"]] for f in meta["files"]]
+    if real:  # PVCAM header and per-frame records are decoded
+        assert meta["header"]["frame_count"] > 0
+        numbers = zarr.open_array(str(out / "prd" / "frame_number"))[:].astype(int)
+        start = 0
+        for f in meta["files"]:  # consecutive within each file
+            file_numbers = numbers[start:start + f["frames"]]
+            assert np.array_equal(np.diff(file_numbers), np.ones(f["frames"] - 1))
+            start += f["frames"]
+
+
+def test_prd_voxel_size_required(tmp_path):
+    _write_prd_set(tmp_path / "scan", [5], 3, 4)
+    with pytest.raises(ValueError, match="Voxel size unknown"):
+        prd.convert(str(tmp_path / "scan"), out=str(tmp_path / "o.nii.zarr"))
+
+
+def test_prd_voxel_size_from_info_mat(tmp_path):
+    """Calibration from <scan>_info.mat sets the physical voxel size."""
+    from scipy.io import savemat
+
+    _write_prd_set(tmp_path / "scan", [37, 11], 21, 34)
+    cal = {"x_umPerPix": 0.515, "y_umPerPix": 0.2927, "z_umPerPix": 0.2175}
+    savemat(str(tmp_path / "scan_info.mat"), {"info": {"GUIcalFactors": cal}})
+    out = tmp_path / "o.nii.zarr"
+    prd.convert(str(tmp_path / "scan"), out=str(out), chunk=(8,))
+    ome = dict(zarr.open_group(str(out)).attrs)["ome"]["multiscales"][0]
+    scale = ome["datasets"][0]["coordinateTransformations"][0]["scale"]
+    # zarr (z, y, x) = (frames: stage x, camera rows: lab z, camera columns: lab y)
+    np.testing.assert_allclose(scale, [0.515, 0.2175, 0.2927])
+    sidecars = dict(zarr.open_group(str(out / "prd")).attrs)["sidecars"]
+    assert "scan_info.mat" in sidecars and "scan/kinetixMetadata.txt" in sidecars

@@ -39,6 +39,7 @@ whole files and computed the pyramid with dask (validated on the 114 GB
 | `--max-memory GiB` | none | Memory budget: fewer workers first, then deeper slabs if the budget allows. |
 | `--ome-version` | 0.6 | OME-Zarr 0.6 (coordinate systems, with the NIfTI qform/sform as `nifti:qform` / `nifti:sform`). Writing 0.5 will be deprecated. |
 | `--verify` | off | Re-read level 0 and check it is bit-identical to the `.prd` frames. |
+| `--voxel-size X Y Z` | from `<scan>_info.mat` | Camera columns, camera rows, frames (µm). Taken from the scan's info file (`GUIcalFactors`); an error is raised if neither is available. |
 
 Only Zarr v3 is written. Zarr v2 inputs can still be read by the other converters.
 
@@ -184,6 +185,27 @@ frame size, not its length. For 1200×1800 frames:
 6. **Limiting the converter.** Cap it with `--workers` and
    `--max-memory`, and with the OS: `nice`, `taskset`, or a cgroup/Job
    Object limit on Windows.
+
+## Metadata and rebuilding the `.prd` files
+
+Axes: zarr `z` = frames (stage step, lab x), `y` = camera rows (lab z,
+section depth), `x` = camera columns (lab y). The flat face of the section is
+the lab x–y plane (zarr z–x).
+
+Besides the pixels, the output has a `prd/` group with:
+
+- a manifest: file names, frames, sizes and SHA-256 of every `.prd` file;
+- the decoded PVCAM header (format version, bit depth, sensor region and
+  binning) and per-frame arrays `frame_number`, `readout_time`,
+  `exposure_time`, `bof_time`, `eof_time` (µs) and `roi_count`;
+- the sidecar files verbatim (`kinetixMetadata.txt`, the ImageJ note,
+  `<scan>_info.mat`), and `info.mat` decoded to JSON (laser powers, stage
+  range, frame rate, calibration, notes);
+- the non-pixel bytes of every file (headers, gaps, trailing bytes),
+  ~14 kB per 2 GB file once compressed.
+
+`linc-convert lsm prd export OUT.nii.zarr DEST` writes `DEST/<scan>/` and the
+info file back, byte for byte, and checks each file's SHA-256.
 
 ## Guarantees and checks
 

@@ -49,7 +49,7 @@ crc32c = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile", "dask-image", "crc32c"]
+lsm = ["tifffile", "dask-image", "crc32c", "scipy"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 ts = ["tensorstore"]
