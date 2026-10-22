@@ -212,6 +212,67 @@ info file back, byte for byte, and checks each file's SHA-256. The checksums
 are computed during conversion by 4 threads that read each `.prd` file
 independently (usually from the page cache); `--no-checksum` skips this.
 
+## Batch transfer, conversion and upload to DANDI
+
+`scripts/prd_to_dandi.py` processes every scan directory (a directory with
+`ss_stack_*.prd` files) under a root, one after another:
+
+1. **transfer**: `rsync` the scan and its sibling files (every file named
+   `<scan>_*`, e.g. `<scan>_info.mat`, `<scan>_stim_data.bin`) to a local
+   staging disk. The root can be a mounted share or `host:/path` (over ssh).
+   `--no-stage` converts directly from a mounted share instead.
+2. **convert**: `linc-convert lsm prd` into the local Dandiset directory, at
+   `rawdata/<path relative to the root>.nii.zarr`. The sibling files are
+   copied next to it unchanged.
+3. **upload**: `dandi upload` of the zarr and the sibling files.
+4. **verify**: the server's zarr checksum (and each sibling file's checksum)
+   matches the local copy.
+5. **delete**, only with `--delete`: the staged raw copy and the local
+   zarr and sibling files. The source scans are never deleted.
+
+```bash
+dandi download --download dandiset.yaml https://dandiarchive.org/dandiset/<ID>
+export DANDI_API_KEY=...
+python scripts/prd_to_dandi.py --source /mnt/nas/lsm --dandiset <ID> \
+    --staging /data/stage --voxel-size 0.65 0.65 2.0 \
+    --workers 8 --max-memory 8 --cpus 0-7 --delete --dry-run
+```
+
+Drop `--dry-run` to run it. The dry run lists every scan with its size, voxel
+size, sibling files, target path, the exact `rsync` and `linc-convert`
+commands, and what `--delete` would remove. It also checks free space on the
+staging disk. Use `--limit 1` or `--include REGEX` for a first real run, and
+`--no-upload` to stop after conversion.
+
+- **Resuming.** Each step is recorded in
+  `<dandiset>/.prd2dandi/state/<scan>.json`, with one log per scan in
+  `.prd2dandi/logs/`. Rerunning the same command skips finished steps and
+  scans. A failed scan is reported and the next one starts. Running out of
+  disk space stops the run.
+- **Parallel runs.** A scan is locked while it is processed, so several
+  copies of the command (sharing the Dandiset directory) can run at once.
+- **Voxel size.** `--voxel-size X Y Z` (µm; camera columns, camera rows,
+  frames) overrides `<scan>_info.mat` for every scan. For per-scan values,
+  or to choose the Dandiset paths, pass `--manifest scans.tsv`:
+
+  ```
+  scan	voxel_size	dandi_path
+  SampleA/run1	0.65 0.65 2.0	rawdata/sub-A/sub-A_sample-1_run-1
+  SampleB/run1	0.40 0.40 1.5
+  ```
+
+  Only the scans listed are processed. Empty cells fall back to
+  `--voxel-size` / `<scan>_info.mat` and to `rawdata/<scan>.nii.zarr`.
+  A scan with neither a voxel size nor an info file fails before it is
+  copied.
+- **CPU limits.** The converter runs under `nice -n 10` (`--nice`), pinned
+  to `--cpus` with `taskset` if given. Under Slurm, `--cpus` must be CPUs
+  that the job is allowed to use; leave it out and rely on `--workers`.
+  `--bwlimit` caps the rsync bandwidth.
+- **Space.** A scan needs about 1.6× its raw size on the staging disk while
+  it is processed. Without `--delete`, the zarrs stay in the Dandiset
+  directory.
+
 ## Guarantees and checks
 
 - **Lossless level 0.** Tests compare decoded level 0 bit-for-bit against
