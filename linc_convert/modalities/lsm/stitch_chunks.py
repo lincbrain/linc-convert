@@ -48,6 +48,13 @@ raw chunks (each level halves every axis) for fast test runs. Use the same
 ``register_chunks``; the registration YAML stays in full-resolution pixels and
 is scaled here.
 
+Region (optional): ``min_y``/``max_y`` and ``min_x``/``max_x`` restrict the output
+to a window of the mosaic (full-resolution pixels of the mosaic frame, half-open
+``[min, max)``, scaled to ``layer``). Only that window is written, so the output
+array is smaller, chunks outside the y range are not read, and the result equals
+the same slice of the full mosaic. x is the x of the sheared mosaic. z is never
+cropped.
+
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
 written, ``{general_config.out}/{channel}.stitch_checkpoint.json`` is updated.
 Running again with the same inputs reopens the output, skips the finished
@@ -206,6 +213,24 @@ def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
     return arr.rechunk(chunks)
 
 
+def _clip_range(bounds: Tuple[Optional[int], Optional[int]], size: int,
+                axis: str) -> Tuple[int, int]:
+    """Clip optional ``(lo, hi)`` bounds to ``[0, size)``.
+
+    Raises
+    ------
+    ValueError
+        If nothing of the axis is left.
+    """
+    lo = 0 if bounds[0] is None else int(bounds[0])
+    hi = size if bounds[1] is None else int(bounds[1])
+    lo, hi = max(lo, 0), min(hi, size)
+    if hi <= lo:
+        raise ValueError(f"the {axis} range {tuple(bounds)} leaves nothing of the "
+                         f"mosaic ({axis} size {size} at this layer)")
+    return lo, hi
+
+
 def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: bool,
             per_chunk_registration: bool,
             layer: int = 0) -> Tuple[List[int], List[int], float]:
@@ -311,6 +336,8 @@ def stitch_channel(
     positions_z: List[int], corrections_dir: str, out_dir: str,
     voxel_size: List[float], zarr_config: ZarrConfig,
     per_chunk_corrections: bool = False, layer: int = 0,
+    y_range: Tuple[Optional[int], Optional[int]] = (None, None),
+    x_range: Tuple[Optional[int], Optional[int]] = (None, None),
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -349,6 +376,10 @@ def stitch_channel(
         Pyramid level of the raw chunks to stitch (0 = full resolution). The
         crop is scaled to it; ``positions_y``/``positions_z``, the corrections
         and ``voxel_size`` must already be for this level.
+    y_range, x_range : tuple of int or None
+        ``(lo, hi)`` window of the mosaic to write, in pixels of ``layer``
+        (``hi`` exclusive; None leaves that side open). Values are clipped to
+        the mosaic. Only the window is written; the output array has its size.
 
     Notes
     -----
@@ -360,8 +391,9 @@ def stitch_channel(
     ------
     ValueError
         If the position lists do not match the tiles, ``shear_x`` is negative,
-        chunk positions do not increase, chunk shapes differ, or the overlap
-        from the previous and next chunk exceed the chunk height together.
+        chunk positions do not increase, chunk shapes differ, the overlap
+        from the previous and next chunk exceed the chunk height together, or a
+        requested y or x range leaves nothing of the mosaic.
     """
     n = len(tile_paths)
     if not (len(positions_y) == len(positions_z) == n):
@@ -405,15 +437,21 @@ def stitch_channel(
               "the gap is left empty")
 
     z_origin = [int(z) - int(min(positions_z)) for z in positions_z]
-    fullshape = (z_out + max(z_origin), positions_y[-1] + sy, x_out)
-    print(
-        f"channel {channel}: {n} chunks, chunk (Z,Y,X)={raw_shape}, mosaic {fullshape}")
+    mosaic = (z_out + max(z_origin), positions_y[-1] + sy, x_out)
+    y0, y1 = _clip_range(y_range, mosaic[1], "y")
+    x0, x1 = _clip_range(x_range, mosaic[2], "x")
+    fullshape = (mosaic[0], y1 - y0, x1 - x0)
+    windowed = fullshape != mosaic
+    print(f"channel {channel}: {n} chunks, chunk (Z,Y,X)={raw_shape}, mosaic {mosaic}"
+          + (f"; writing y {y0}:{y1}, x {x0}:{x1} -> {fullshape}" if windowed else ""))
 
     signature = {"tiles": [os.path.basename(p) for p in tile_paths],
                  "positions_y": [int(y) for y in positions_y],
                  "z_origin": z_origin, "shape": list(fullshape),
                  "shear": [float(shear_x), float(shear_z)],
                  "per_chunk_corrections": bool(per_chunk_corrections)}
+    if windowed:
+        signature["window"] = [y0, y1, x0, x1]
     ckpt = _checkpoint_path(out_dir)
     state = _read_checkpoint(ckpt, signature)
     if state is not None and not os.path.isdir(out_dir):
@@ -474,28 +512,31 @@ def stitch_channel(
 
         noise, scaler, cur_weights = chunk_maps(index)
         cur = corrected_tile(raw, noise, scaler, shear_x, shear_z)
+        grid = array.shards or array.chunks
         if overlap_prev > 0:
-            assert prev is not None and prev_weights is not None
-            blended = blend_overlap(prev, cur, prev_weights, cur_weights,
-                                    z_origin[index - 1],
-                                    zstart, fullshape[0], overlap_prev)
-            blended = _aligned_rechunk(blended, (0, ystart, 0),
-                                       array.shards or array.chunks)
-            _store(blended, target,
-                   (slice(0, fullshape[0]),
-                    slice(ystart, ystart + overlap_prev), slice(0, x_out)),
-                   f"chunk {index + 1}/{n}: blended overlap ({overlap_prev} rows)")
+            r0, r1 = max(ystart, y0), min(ystart + overlap_prev, y1)
+            if r1 > r0:
+                assert prev is not None and prev_weights is not None
+                blended = blend_overlap(prev, cur, prev_weights, cur_weights,
+                                        z_origin[index - 1],
+                                        zstart, mosaic[0], overlap_prev)
+                blended = blended[:, r0 - ystart:r1 - ystart, x0:x1]
+                blended = _aligned_rechunk(blended, (0, r0 - y0, 0), grid)
+                _store(blended, target,
+                       (slice(0, mosaic[0]), slice(r0 - y0, r1 - y0),
+                        slice(0, x1 - x0)),
+                       f"chunk {index + 1}/{n}: blended overlap ({r1 - r0} rows)")
         first_row, last_row = overlap_prev, sy - overlap_next
-        if last_row > first_row:
-            write_vals = cur[:, first_row:last_row]
-            write_vals = _aligned_rechunk(
-                write_vals, (zstart, ystart + first_row, 0),
-                array.shards or array.chunks)
+        r0, r1 = max(ystart + first_row, y0), min(ystart + last_row, y1)
+        if r1 > r0:
+            write_vals = cur[:, r0 - ystart:r1 - ystart, x0:x1]
+            write_vals = _aligned_rechunk(write_vals, (zstart, r0 - y0, 0), grid)
             _store(write_vals, target,
-                   (slice(zstart, zstart + z_out),
-                    slice(ystart + first_row, ystart + last_row),
-                    slice(0, x_out)),
-                   f"chunk {index + 1}/{n}: own rows ({last_row - first_row})")
+                   (slice(zstart, zstart + z_out), slice(r0 - y0, r1 - y0),
+                    slice(0, x1 - x0)),
+                   f"chunk {index + 1}/{n}: own rows ({r1 - r0})")
+        elif windowed:
+            print("  outside the requested y range; nothing to write", flush=True)
         prev, prev_weights = cur, cur_weights
         _write_checkpoint(ckpt, signature, index)
 
@@ -531,6 +572,10 @@ def stitch_chunks(
     per_chunk_corrections: bool = False,
     restart: bool = False,
     layer: int = 0,
+    min_x: Optional[int] = None,
+    max_x: Optional[int] = None,
+    min_y: Optional[int] = None,
+    max_y: Optional[int] = None,
     general_config: Optional[GeneralConfig] = None,
     zarr_config: Optional[ZarrConfig] = None,
 ) -> None:
@@ -590,6 +635,16 @@ def stitch_chunks(
         (``* 2**layer``) and the crops. ``corrections_dir`` must come from
         ``create_corrections`` with the same ``layer``, and ``out`` should be
         a different folder from the full-resolution output.
+    min_x, max_x, min_y, max_y : int, optional
+        Write only this window of the mosaic: pixels ``min <= index < max`` in
+        full-resolution units of the mosaic frame (the same units as the
+        register_chunks offsets; divided by ``2**layer`` for a lower ``layer``).
+        Leave a bound out to keep that side open. y is the stitching axis; x is
+        the x of the sheared mosaic. The output array is only as large as the
+        window, chunks that lie outside the y range are not read, and the data
+        equal the same slice of the full mosaic. The output's origin is not
+        recorded in the metadata, and a different window starts a new stitch
+        (checkpoints include the window). z is not cropped.
     general_config : GeneralConfig
         Output configuration; ``out`` is the output folder.
     zarr_config : ZarrConfig
@@ -599,13 +654,26 @@ def stitch_chunks(
     ------
     ValueError
         If ``general_config.out`` is not set, no chunks are found, or the
-        chunks and the register_chunks result disagree.
+        chunks and the register_chunks result disagree, a bound is negative,
+        ``min`` is not below ``max``, or the window leaves nothing of the mosaic.
     FileNotFoundError
         If a listed chunk or a correction file is missing.
     """
     if general_config is None or not getattr(general_config, "out", None):
         raise ValueError("general_config.out (the output folder) is required")
     voxel_size = [float(v) * 2 ** layer for v in reversed(voxel_size)]
+    for name, lo, hi in (("x", min_x, max_x), ("y", min_y, max_y)):
+        if (lo is not None and lo < 0) or (hi is not None and hi < 0):
+            raise ValueError(f"min_{name} and max_{name} must be >= 0")
+        if lo is not None and hi is not None and hi <= lo:
+            raise ValueError(f"max_{name} ({hi}) must be greater than min_{name} "
+                             f"({lo})")
+
+    def at_layer(value: Optional[int]) -> Optional[int]:
+        return None if value is None else int(round(value / 2 ** layer))
+
+    y_range = (at_layer(min_y), at_layer(max_y))
+    x_range = (at_layer(min_x), at_layer(max_x))
 
     with open(yaml_path) as f:
         scan_parameters = yaml.safe_load(f)
@@ -638,6 +706,7 @@ def stitch_chunks(
             stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
                            shear_z, positions_y, positions_z, corrections_dir,
                            os.path.join(general_config.out, channel),
-                           voxel_size, zarr_config, per_chunk_corrections, layer)
+                           voxel_size, zarr_config, per_chunk_corrections, layer,
+                           y_range, x_range)
     finally:
         client.close()

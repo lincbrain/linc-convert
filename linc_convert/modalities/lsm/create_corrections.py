@@ -36,6 +36,11 @@ reference tiles. Output per channel ``ch``, in ``{output_dir}/{ch}/``
 * ``{ch}_alt_zy_scaler.tiff`` -- zy-correction map, applied as
   ``(vol - noise).clip(0) * scaler``
 
+With ``fit_offset`` the background that is subtracted becomes ``noise - offset``
+with one offset shared by all rows, and the multipliers are fitted together with
+it (see ``stitching_utils.offset_fit``); the noise TIFF then holds
+``noise - offset``, so ``stitch_chunks`` and ``register_chunks`` need no change.
+
 ``reference_tiles`` are 1-based positions in the camera's tile list (1 is the
 first chunk, ``chunk-0001``): the
 ``*acq-camera-NN*.ome.zarr`` folders of ``input_path`` in sorted order.
@@ -55,6 +60,7 @@ import numpy as np
 import yaml
 
 from linc_convert.modalities.lsm.cli import lsm
+from linc_convert.modalities.lsm.stitching_utils import offset_fit
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     X_STRIDE,
     calibrate_tile,
@@ -152,6 +158,98 @@ def _auto_reference_tiles(
     return chosen
 
 
+def _offset_corrections(
+    tile_paths: Sequence[str], reference_tiles: Sequence[int],
+    crops: Dict[str, Crop], channels: List[str], vertical_flip: bool, layer: int,
+    background_length: int, zy_threshold_multiplier: float,
+    settings: "offset_fit.OffsetSettings", report_path: str,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Fit the shared offset and the multipliers; see ``create_corrections``.
+
+    Parameters
+    ----------
+    tile_paths : sequence of str
+        The camera's chunk folders in acquisition order.
+    reference_tiles : sequence of int
+        1-based reference tile numbers.
+    crops : dict of str to tuple
+        Stitching crop of every channel of the camera.
+    channels : list of str
+        Channels to process.
+    vertical_flip : bool
+        Whether the camera's volumes are flipped along z.
+    layer : int
+        Pyramid level of the raw chunks.
+    background_length : int
+        Trailing x columns (at this level) used for the row background.
+    zy_threshold_multiplier : float
+        Signal threshold multiplier.
+    settings : OffsetSettings
+        Offset fit settings.
+    report_path : str
+        YAML file that records the fit.
+
+    Returns
+    -------
+    dict of str to tuple
+        Per channel ``(noise_map, scaler_map)``; the noise map already has the
+        offset taken out (``background - offset``).
+    """
+    samples: Dict[str, List[offset_fit.TileSample]] = {ch: [] for ch in channels}
+    for ref_index in reference_tiles:
+        path = tile_paths[ref_index - 1]
+        print(f"[offset fit] tile {ref_index}: {os.path.basename(path)}", flush=True)
+        tile = open_tile_array(path, layer, chunks=(128, 128, 128))
+        for ch in channels:
+            vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
+            sample = offset_fit.sample_tile(
+                vol, background_length, zy_threshold_multiplier, settings)
+            samples[ch].append(sample)
+            print(f"  channel {ch}: tissue in {sample.tissue_fraction:.0%} of the "
+                  "columns", flush=True)
+
+    reach, gap = settings.at_layer(layer)
+    maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    report: Dict[str, Any] = {}
+    for ch in channels:
+        fit = offset_fit.fit_offset(
+            samples[ch], reach, gap, settings.iterations,
+            min_levels=settings.min_levels,
+            max_offset_fraction=settings.max_offset_fraction,
+            min_significance=settings.min_significance)
+        noise = np.median(np.stack([s.noise_map for s in samples[ch]]), axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            multiplier = np.nanmedian(np.stack(fit.multipliers), axis=0)
+        maps[ch] = (noise - fit.offset, offset_fit.multiplier_to_scaler(multiplier))
+        significant = fit.offset != 0.0 or not np.isfinite(fit.estimate)
+        print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
+              f"{fit.standard_error:.2f} (standard error); applied offset "
+              f"{fit.offset:+.2f}"
+              + ("" if significant else " (estimate not significant, so 0)"))
+        report[ch] = {
+            "offset_applied": float(fit.offset),
+            "offset_estimate": float(fit.estimate),
+            "standard_error": float(fit.standard_error),
+            "tile_estimates": {int(t): float(o) for t, o in
+                               zip(reference_tiles, fit.tile_offsets)},
+            "rows_with_multiplier_per_tile": {
+                int(t): round(u / max(n, 1), 3) for t, u, n in
+                zip(reference_tiles, fit.rows_used, fit.rows_total)}}
+    os.makedirs(os.path.dirname(report_path) or ".", exist_ok=True)
+    write_yaml(report_path, {
+        "convention": "noise TIFF = background - offset; corrected = "
+                      "(value - noise TIFF).clip(0) * scaler; a positive offset "
+                      "subtracts less",
+        "reference_tiles": [int(t) for t in reference_tiles], "layer": layer,
+        "zy_threshold_multiplier": zy_threshold_multiplier,
+        "settings": {"n_levels": settings.n_levels, "reach": settings.reach,
+                     "gap": settings.gap, "iterations": settings.iterations,
+                     "min_significance": settings.min_significance},
+        "channels": report})
+    return maps
+
+
 def _create_per_chunk(
     input_path: str, camera_id: int, slice_number: int, scan_parameters: dict,
     channels: List[str], chunk_numbers: Optional[List[int]], output_dir: str,
@@ -221,6 +319,11 @@ def create_corrections(
     only_channel: Optional[str] = None,
     force: bool = False,
     layer: int = 0,
+    fit_offset: bool = False,
+    offset_levels: int = 12,
+    offset_reach: int = 64,
+    offset_gap: int = 8,
+    offset_min_significance: float = 2.0,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
@@ -284,6 +387,33 @@ def create_corrections(
         smaller in z and y; ``background_length`` and the x sampling are
         scaled to the level. Use the same ``layer`` (and a separate
         ``output_dir``) with ``stitch_chunks``.
+    fit_offset : bool, default=False
+        Also fit one background offset shared by all rows of a channel (needs at
+        least 3 reference tiles, 8 recommended; not with ``per_chunk``). The
+        subtracted background becomes ``noise - offset`` and the noise TIFF holds
+        that, so a positive offset subtracts less and a negative one more. Every
+        row is summarised by ``offset_levels`` brightness levels (quantiles over
+        x); the offset and the multipliers are then found by least squares
+        against the neighbouring rows' corrected levels, and the offset is told
+        apart from anatomy by the stripes repeating across tiles. It is only
+        applied if it is significantly non-zero (``offset_min_significance``
+        standard errors, delete-one-tile jackknife); otherwise 0 is used, and the
+        multipliers are still the ones fitted here. The estimate, its standard
+        error and the per-tile estimates are written to
+        ``{output_dir}/offset_fit_camera{camera_id}.yaml``. All tiles of a channel
+        are held in memory as ``offset_levels`` x Z x Y floats each.
+    offset_levels : int, default=12
+        Brightness levels (quantiles over x) per row.
+    offset_reach : int, default=64
+        Half-width in z and y (full-resolution pixels) of the neighbourhood that
+        gives each row its reference. Wider is less noisy but follows slow
+        anatomy less; narrow references make the offset biased.
+    offset_gap : int, default=8
+        Half-width (full-resolution pixels) of the band of rows and columns
+        around a row that is left out of its reference; at least a stripe width.
+    offset_min_significance : float, default=2.0
+        Standard errors the offset must differ from 0 to be applied (0 applies
+        any estimate that has one).
 
     Notes
     -----
@@ -306,6 +436,10 @@ def create_corrections(
     if auto_reference_tiles and (reference_tiles or per_chunk):
         raise ValueError("auto_reference_tiles cannot be combined with "
                          "reference_tiles or per_chunk")
+    if fit_offset and per_chunk:
+        raise ValueError("fit_offset needs several reference tiles (stripes are "
+                         "told from anatomy by repeating across tiles) and "
+                         "cannot be combined with per_chunk")
     if not per_chunk and not reference_tiles and not auto_reference_tiles:
         raise ValueError(
             "reference_tiles must contain at least one tile index "
@@ -357,6 +491,27 @@ def create_corrections(
     assert reference_tiles is not None
 
     bg_len, x_stride = _level_settings(background_length, layer)
+    if fit_offset:
+        if len(reference_tiles) < 2:
+            raise ValueError("fit_offset needs at least 2 reference tiles "
+                             f"(3 or more for a standard error), got "
+                             f"{len(reference_tiles)}")
+        if len(reference_tiles) < 3:
+            print("WARNING: with fewer than 3 reference tiles the offset has no "
+                  "standard error and is not applied")
+        settings = offset_fit.OffsetSettings(
+            n_levels=offset_levels, reach=offset_reach, gap=offset_gap,
+            min_significance=offset_min_significance)
+        maps = _offset_corrections(
+            tile_paths, reference_tiles, crops, todo, vertical_flip, layer, bg_len,
+            zy_threshold_multiplier, settings,
+            os.path.join(output_dir, f"offset_fit_camera{camera_id}.yaml"))
+        for ch in todo:
+            write_tiff(results[ch]["noise"], maps[ch][0])
+            write_tiff(results[ch]["scaler"], maps[ch][1])
+            print(f"channel {ch}: wrote {results[ch]['noise']}\n"
+                  f"  wrote {results[ch]['scaler']}")
+        return
     noises: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     scalers: Dict[str, List[np.ndarray]] = {ch: [] for ch in todo}
     for ref_index in reference_tiles:
