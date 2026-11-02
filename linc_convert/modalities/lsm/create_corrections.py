@@ -393,9 +393,11 @@ def create_corrections(
         subtracted background becomes ``noise - offset`` and the noise TIFF holds
         that, so a positive offset subtracts less and a negative one more. Every
         row is summarised by ``offset_levels`` brightness levels (quantiles over
-        x); the offset and the multipliers are then found by least squares
-        against the neighbouring rows' corrected levels, and the offset is told
-        apart from anatomy by the stripes repeating across tiles. It is only
+        x). The offset is found from stripes pooled with a median over z (and
+        over y) and compared with their neighbours, and is told apart from
+        anatomy by the stripes repeating across tiles; the per-(z, y)
+        multipliers are then fitted against the neighbouring rows' corrected
+        levels (very bright rows are capped first). It is only
         applied if it is significantly non-zero (``offset_min_significance``
         standard errors, delete-one-tile jackknife); otherwise 0 is used, and the
         multipliers are still the ones fitted here. The estimate, its standard

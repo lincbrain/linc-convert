@@ -26,30 +26,40 @@ values (a threshold on the row's own values would favour rows with a high gain).
 
 Offset
 ------
-A reference curve ``r`` for a row is the mean of the curves of the rows around
-it (``|dz|, |dy| <= reach``) leaving out its own row and column band
-(``|dz| <= gap`` or ``|dy| <= gap``), so a stripe in y or in z never reaches its
-own reference. If the tissue sits on a constant baseline, ``value = gain * T -
-offset``, a row and its reference obey ``value = gamma * r + c`` with
-``c = offset * (gamma - 1)``: a row whose gain is 5% above its neighbours sits
-``0.05 * offset`` above the diagonal. The offset is therefore the slope of
-``c`` against ``gamma - 1``.
+If the tissue sits on a constant baseline, ``value = gain * T - offset``. A row
+(or a pooled stripe, see below) compared with its reference curve ``r`` then obeys
+``value = gamma * r + c`` with ``c = offset * (gamma - 1)``: a stripe whose gain
+is 5% above its neighbours sits ``0.05 * offset`` above the diagonal. The offset
+is the slope of ``c`` against ``gamma - 1``.
 
-``gamma`` and ``c`` of one row are noisy and anatomy also moves them (a row with
-brighter tissue has a larger ``gamma``, and the shape change shifts ``c`` too),
-which would bias a plain regression. Stripes are the same in every tile and
-anatomy is not, so ``gamma - 1`` is *instrumented* with the median ``gamma`` of
-the other tiles (a two-stage / instrumental-variable fit): the offset is
-``sum(c * (z - 1)) / sum((gamma - 1) * (z - 1))`` over rows and tiles, with ``z``
-the other tiles' consensus. This needs at least two tiles (three for a standard
-error, which is a delete-one-tile jackknife). The reference of this step is built
-from the raw curves; rebuilding it from the corrected curves would make the
-offset a free direction (any offset reproduces itself).
+Pooling along the stripes. One (z, y) row crosses only a thin line of tissue, so
+anatomy moves its ``gamma`` far more than a stripe does. A y stripe is the same
+at every z, so the curves are pooled with a *median over z* for each y (and over
+y for each z, for z stripes). That leaves one precise curve per y and one per z,
+and the median ignores very bright rows. The reference of a stripe is the median
+of the pooled curves of the stripes around it (``|d| <= reach``) leaving out its
+own band (``|d| <= gap``), so a stripe never reaches its own reference. Only
+rows that carry tissue take part in the pooling, chosen by the whole row's
+average over the other axis, never by the value of the stripe itself. This
+assumes the stripes are separable (a y part times a z part); the per-(z, y)
+multipliers below do not.
+
+``gamma`` and ``c`` still contain anatomy, which would bias a plain regression.
+Stripes are the same in every tile and anatomy is not, so ``gamma - 1`` is
+*instrumented* with the median ``gamma`` of the other tiles: the offset is
+``sum(c * (z - 1)) / sum((gamma - 1) * (z - 1))`` over stripes of both axes and
+all tiles, with ``z`` the other tiles' consensus. This needs at least two tiles
+(three for a standard error, which is a delete-one-tile jackknife). The
+reference of this step is built from the raw curves; rebuilding it from the
+corrected curves would make the offset a free direction (any offset reproduces
+itself).
 
 Multipliers
 -----------
 With the offset fixed, the reference is rebuilt from the corrected curves
-(``(value + offset).clip(0) * multiplier``) a few times; each row's
+(``(value + offset).clip(0) * multiplier``, averaged over the ring around each
+row) a few times. Very bright rows are first capped at twice their block's upper
+quartile (``sample_tile``), so they cannot pull the average. Each row's
 ``multiplier = 1 / gamma`` follows from the regression through the origin of
 ``value + offset`` on the reference, normalised to median 1 per tile.
 
@@ -76,6 +86,8 @@ HUBER_K = 1.345          # Huber tuning constant (in robust standard deviations)
 MIN_RING_FRACTION = 0.3  # share of the reference ring that must hold data
 LEVEL_RANGE = (0.25, 0.95)   # span of the levels inside the tissue distribution
 BLOCK_ELEMENTS = 2 * 10 ** 7  # values read at a time while measuring the curves
+CAP_BLOCK = 32           # block size (cells) for capping very bright rows
+CAP_FACTOR = 2.0         # rows are capped at this times their block's 75th percentile
 
 
 @dataclass
@@ -238,7 +250,35 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
         block = np.asarray(columns[z0:z1].compute(), dtype=np.float32)
         block -= noise_map[z0:z1, :, None]
         signal[:, z0:z1] = np.quantile(block, levels, axis=2)
+    for k in range(settings.n_levels):
+        signal[k] = _cap_bright(signal[k], min_ref)
     return TileSample(noise_map, signal, levels, fraction, float(min_ref))
+
+
+def _cap_bright(values: np.ndarray, floor: float) -> np.ndarray:
+    """Cap very bright cells at ``CAP_FACTOR`` times their block's upper quartile.
+
+    Stripes are a few percent, so only rare very bright rows are affected.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        2-D array (z, y).
+    floor : float
+        Smallest cap (so that dark blocks are left alone).
+    """
+    n_z, n_y = values.shape
+    pad_z, pad_y = (-n_z) % CAP_BLOCK, (-n_y) % CAP_BLOCK
+    padded = np.pad(values.astype(np.float32), ((0, pad_z), (0, pad_y)),
+                    constant_values=np.nan)
+    blocks = padded.reshape(padded.shape[0] // CAP_BLOCK, CAP_BLOCK,
+                            padded.shape[1] // CAP_BLOCK, CAP_BLOCK)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        upper = np.nanpercentile(blocks, 75, axis=(1, 3), keepdims=True)
+    cap = np.maximum(CAP_FACTOR * np.nan_to_num(upper, nan=np.inf), 2 * floor)
+    capped = np.minimum(blocks, cap).reshape(padded.shape)
+    return capped[:n_z, :n_y].astype(values.dtype)
 
 
 def cross_excluded_mean(values: np.ndarray, reach: int, gap: int) -> np.ndarray:
@@ -282,14 +322,6 @@ def cross_excluded_mean(values: np.ndarray, reach: int, gap: int) -> np.ndarray:
     return np.where(count >= MIN_RING_FRACTION * full, mean, np.nan)
 
 
-def _raw_reference(sample: TileSample, reach: int, gap: int) -> np.ndarray:
-    """Reference curves from the uncorrected curves, shape (levels, Z, Y)."""
-    ref = np.empty(sample.signal.shape, dtype=np.float32)
-    for k in range(ref.shape[0]):
-        ref[k] = cross_excluded_mean(sample.signal[k].astype(np.float64), reach, gap)
-    return ref
-
-
 def _sums(signal: np.ndarray, ref: np.ndarray, ok: np.ndarray,
           weight: np.ndarray) -> np.ndarray:
     """Per-row weighted sums ``n, sum d, sum d^2, sum r, sum r^2, sum r*d``."""
@@ -329,10 +361,65 @@ def _huber_weights(signal: np.ndarray, ref: np.ndarray, ok: np.ndarray,
     return w
 
 
+def _pooled_curves(sample: TileSample, along_z: bool) -> np.ndarray:
+    """Median brightness curve of every stripe, shape (levels, stripes).
+
+    ``along_z=True`` pools over z and returns one curve per y (y stripes);
+    ``along_z=False`` pools over y and returns one curve per z. Only rows that
+    carry tissue are pooled: the lowest level, taken over the other axis, must
+    reach ``min_ref``.
+    """
+    signal = sample.signal
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if along_z:
+            keep = np.nan_to_num(np.nanmedian(signal[0], axis=1), nan=-1.0) \
+                >= sample.min_ref
+            if not keep.any():
+                return np.full((signal.shape[0], signal.shape[2]), np.nan)
+            return np.nanmedian(signal[:, keep, :], axis=1)
+        keep = np.nan_to_num(np.nanmedian(signal[0], axis=0), nan=-1.0) \
+            >= sample.min_ref
+        if not keep.any():
+            return np.full((signal.shape[0], signal.shape[1]), np.nan)
+        return np.nanmedian(signal[:, :, keep], axis=2)
+
+
+def _ring_median(curves: np.ndarray, reach: int, gap: int) -> np.ndarray:
+    """Median of the curves of the stripes ``gap < |d| <= reach`` away."""
+    n_levels, n = curves.shape
+    padded = np.full((n_levels, n + 2 * reach), np.nan)
+    padded[:, reach:reach + n] = curves
+    offsets = [d for d in range(-reach, reach + 1) if abs(d) > gap]
+    stack = np.stack([padded[:, reach + d:reach + d + n] for d in offsets])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        ref = np.nanmedian(stack, axis=0)
+    count = np.isfinite(stack).sum(axis=0)
+    return np.where(count >= MIN_RING_FRACTION * len(offsets), ref, np.nan)
+
+
+def _stripe_lines(sample: TileSample, along_z: bool, reach: int, gap: int,
+                  min_levels: int) -> Tuple[np.ndarray, np.ndarray]:
+    """``gamma`` and ``c`` of every pooled stripe (NaN if unusable)."""
+    curves = _pooled_curves(sample, along_z)
+    ref = _ring_median(curves, reach, gap)
+    ok = np.isfinite(ref) & (ref >= sample.min_ref) & np.isfinite(curves)
+    sig3, ref3, ok3 = curves[:, :, None], ref[:, :, None], ok[:, :, None]
+    weights = np.ones(sig3.shape)
+    for _ in range(3):            # fit the lines, then reweight with the residuals
+        gamma, c = _line_fits(sig3, ref3, ok3, weights, min_levels)
+        weights = np.stack([
+            _huber_weights(sig3[k], ref3[k], ok3[k], gamma * ref3[k] + c,
+                           sample.min_ref) for k in range(sig3.shape[0])])
+    gamma, c = _line_fits(sig3, ref3, ok3, weights, min_levels)
+    return gamma[:, 0], c[:, 0]
+
+
 def estimate_offset(samples: List[TileSample], reach: int, gap: int,
                     min_levels: int, max_offset_fraction: float
                     ) -> Tuple[float, float, List[float]]:
-    """Estimate the shared offset from the raw curves (see the module docstring).
+    """Estimate the shared offset from pooled stripes (see the module docstring).
 
     Parameters
     ----------
@@ -341,7 +428,7 @@ def estimate_offset(samples: List[TileSample], reach: int, gap: int,
     reach, gap : int
         Reference neighbourhood in pixels of the tiles' level.
     min_levels : int
-        Weighted number of valid levels a row needs.
+        Weighted number of valid levels a stripe needs.
     max_offset_fraction : float
         Limit on ``|offset|`` as a fraction of the typical signal.
 
@@ -350,7 +437,7 @@ def estimate_offset(samples: List[TileSample], reach: int, gap: int,
     estimate : float
         Shared offset (0 if the stripes carry no usable information).
     standard_error : float
-        From the spread of the per-tile estimates.
+        Delete-one-tile jackknife (NaN with fewer than 3 tiles).
     tile_offsets : list of float
         Estimate of each tile with the others as instrument.
 
@@ -364,50 +451,33 @@ def estimate_offset(samples: List[TileSample], reach: int, gap: int,
         raise ValueError("estimating the offset needs at least two reference "
                          "tiles (stripes are told from anatomy by repeating "
                          "across tiles)")
-    refs = [_raw_reference(s, reach, gap) for s in samples]
-    oks = [np.isfinite(r) & (r >= s.min_ref) & np.isfinite(s.signal)
-           for s, r in zip(samples, refs)]
-    weights = [np.ones(s.signal.shape) for s in samples]
-    for _ in range(3):            # fit the lines, then reweight with the residuals
-        gammas, cs = [], []
-        for s, r, ok, w in zip(samples, refs, oks, weights):
-            g, c = _line_fits(s.signal, r, ok, w, min_levels)
-            gammas.append(g)
-            cs.append(c)
-        weights = [np.stack([_huber_weights(
-            s.signal[k], r[k], ok[k], g * r[k] + c, s.min_ref)
-            for k in range(r.shape[0])])
-            for s, r, ok, g, c in zip(samples, refs, oks, gammas, cs)]
-    gammas, cs = [], []
-    for s, r, ok, w in zip(samples, refs, oks, weights):
-        g, c = _line_fits(s.signal, r, ok, w, min_levels)
-        gammas.append(g)
-        cs.append(c)
-
-    # rows near the border have a lopsided reference, the same in every tile, which
-    # would pass for a stripe
-    n_z, n_y = gammas[0].shape
-    interior = np.zeros((n_z, n_y), dtype=bool)
-    interior[reach:max(n_z - reach, reach), reach:max(n_y - reach, reach)] = True
+    lines = {(t, ax): _stripe_lines(s, ax, reach, gap, min_levels)
+             for t, s in enumerate(samples) for ax in (True, False)}
     with_data = [s.signal[np.isfinite(s.signal)] for s in samples]
     with_data = [v for v in with_data if v.size]
     if not with_data:
         return 0.0, float("nan"), [float("nan")] * n_tiles
-    typical = float(np.median(with_data[0]))
-    limit = max(max_offset_fraction * abs(typical), 1.0)
+    limit = max(max_offset_fraction * abs(float(np.median(with_data[0]))), 1.0)
+
+    def interior(n: int) -> np.ndarray:
+        """Stripes with a full reference on both sides."""
+        idx = np.arange(n)
+        return (idx >= reach) & (idx < n - reach)
 
     def pooled(members: List[int]) -> Tuple[float, List[float]]:
         """IV estimate over ``members`` (tile indices) and each member's own."""
-        stack = np.stack([gammas[t] for t in members])
-        nums, dens = [], []
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            for i, t in enumerate(members):
-                z = np.nanmedian(np.delete(stack, i, axis=0), axis=0)
-                use = (np.isfinite(gammas[t]) & np.isfinite(z)
-                       & np.isfinite(cs[t]) & interior)
-                nums.append(float(np.sum((cs[t] * (z - 1.0))[use])))
-                dens.append(float(np.sum(((gammas[t] - 1.0) * (z - 1.0))[use])))
+        nums, dens = [0.0] * len(members), [0.0] * len(members)
+        for ax in (True, False):
+            stack = np.stack([lines[(t, ax)][0] for t in members])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                for i, t in enumerate(members):
+                    gamma, c = lines[(t, ax)]
+                    z = np.nanmedian(np.delete(stack, i, axis=0), axis=0)
+                    use = (np.isfinite(gamma) & np.isfinite(z) & np.isfinite(c)
+                           & interior(gamma.size))
+                    nums[i] += float(np.sum((c * (z - 1.0))[use]))
+                    dens[i] += float(np.sum(((gamma - 1.0) * (z - 1.0))[use]))
         total = sum(dens)
         value = float(np.clip(sum(nums) / total, -limit, limit)) if total > 0 \
             else float("nan")
