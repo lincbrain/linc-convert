@@ -333,9 +333,13 @@ def main() -> None:
     p.add_argument("--ridge", type=float, default=0.05, help="pull of phi towards 0")
     p.add_argument("--fit_offset", action="store_true",
                    help="also fit one static offset for the channel (noise map - delta)")
+    p.add_argument("--min_pair_tissue", type=float, default=0.3,
+                   help="a chunk pair is used only if at least this share of its overlap "
+                        "blocks is tissue; pairs at the edge of the sample (mostly "
+                        "background) otherwise pull the fit")
     p.add_argument("--levels", type=float, nargs="+", default=[20, 35, 50, 65, 80],
                    help="tissue percentiles compared when the offset is fitted")
-    p.add_argument("--offset_range", type=float, default=0.5,
+    p.add_argument("--offset_range", type=float, default=1.0,
                    help="search delta within +- this share of the raw tissue level "
                         "above background (20th percentile)")
     p.add_argument("--min_blocks", type=int, default=50,
@@ -471,15 +475,23 @@ def main() -> None:
             res = pair_quantiles(ca, cb, args.block, args.levels, tissue)
         else:
             res = pair_log_ratios(ca, cb, args.block, tissue)
+        share = float(tissue.mean())
+        why = ""
+        if res is None:
+            why = "  -> no tissue, skipped"
+        elif share < args.min_pair_tissue:
+            why = f"  -> below --min_pair_tissue {args.min_pair_tissue:g}, skipped"
+            res = None
         print(f"  pair {i + 1}-{i + 2} ({n}/{len(selected)}): tissue "
-              f"{100 * tissue.mean():4.1f}% of blocks"
-              f"{'  -> no tissue, skipped' if res is None else ''}", flush=True)
+              f"{100 * share:4.1f}% of blocks{why}", flush=True)
         if res is not None:
             data.append(res)
             used.append(i)
     if len(used) < max(args.min_pairs, 2):
-        raise SystemExit(f"only {len(used)} pairs have tissue; need at least "
-                         f"{max(args.min_pairs, 2)}")
+        raise SystemExit(f"only {len(used)} pairs have enough tissue; need at least "
+                         f"{max(args.min_pairs, 2)} (see --min_pair_tissue)")
+    print(f"\n{len(used)} of {len(selected)} pairs used (pairs {used[0] + 1}-{used[0] + 2} "
+          f"... {used[-1] + 1}-{used[-1] + 2})")
     z_lo = a_z.start
     levels = np.asarray(args.levels, dtype=float)
     s_a, s_b = scaler[a_z, a_rows], scaler[b_z, b_rows]
