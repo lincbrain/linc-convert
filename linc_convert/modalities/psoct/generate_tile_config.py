@@ -118,7 +118,7 @@ def _format_filepath(naming_format: str, tile_number: int) -> str:
 
 
 def _create_tile_entry(
-    tile_number: int, x: float, y: float, naming_format: str
+    tile_number: int, x: float, y: float, filepath: str
 ) -> dict:
     """
     Create a tile dictionary entry.
@@ -131,8 +131,8 @@ def _create_tile_entry(
         X coordinate
     y : float
         Y coordinate
-    naming_format : str
-        Format string for tile filenames
+    filepath : str
+        Filepath for this tile
 
     Returns
     -------
@@ -140,7 +140,7 @@ def _create_tile_entry(
         Tile dictionary entry
     """
     return {
-        "filepath": _format_filepath(naming_format, tile_number),
+        "filepath": filepath,
         "tile_number": tile_number,
         "x": float(x),
         "y": float(y),
@@ -156,6 +156,8 @@ def _generate_row_by_row(
     overlap_y: float,
     order: str,
     naming_format: str,
+    files: Optional[List[str]] = None,
+    start_tile_number: int = 1,
 ) -> List[dict]:
     """
     Generate tiles in row-by-row pattern.
@@ -178,6 +180,10 @@ def _generate_row_by_row(
         Order direction (right-down, left-down, right-up, left-up)
     naming_format : str
         Format string for tile filenames
+    files : list of str, optional
+        Explicit filepaths to use, in traversal order, instead of naming_format
+    start_tile_number : int
+        Tile number assigned to the first tile
 
     Returns
     -------
@@ -185,7 +191,7 @@ def _generate_row_by_row(
         List of tile dictionaries
     """
     tiles = []
-    tile_number = 1
+    tile_number = start_tile_number
 
     spacing_x = _calculate_spacing(tile_size_x, overlap_x)
     spacing_y = _calculate_spacing(tile_size_y, overlap_y)
@@ -210,7 +216,12 @@ def _generate_row_by_row(
         y = row_idx * spacing_y
         for col_idx in col_range:
             x = col_idx * spacing_x
-            tiles.append(_create_tile_entry(tile_number, x, y, naming_format))
+            filepath = (
+                files[len(tiles)]
+                if files is not None
+                else _format_filepath(naming_format, tile_number)
+            )
+            tiles.append(_create_tile_entry(tile_number, x, y, filepath))
             tile_number += 1
 
     return tiles
@@ -225,6 +236,8 @@ def _generate_column_by_column(
     overlap_y: float,
     order: str,
     naming_format: str,
+    files: Optional[List[str]] = None,
+    start_tile_number: int = 1,
 ) -> List[dict]:
     """
     Generate tiles in column-by-column pattern.
@@ -247,6 +260,10 @@ def _generate_column_by_column(
         Order direction (down-right, down-left, up-right, up-left)
     naming_format : str
         Format string for tile filenames
+    files : list of str, optional
+        Explicit filepaths to use, in traversal order, instead of naming_format
+    start_tile_number : int
+        Tile number assigned to the first tile
 
     Returns
     -------
@@ -254,7 +271,7 @@ def _generate_column_by_column(
         List of tile dictionaries
     """
     tiles = []
-    tile_number = 1
+    tile_number = start_tile_number
 
     spacing_x = _calculate_spacing(tile_size_x, overlap_x)
     spacing_y = _calculate_spacing(tile_size_y, overlap_y)
@@ -279,7 +296,12 @@ def _generate_column_by_column(
         x = col_idx * spacing_x
         for row_idx in row_range:
             y = row_idx * spacing_y
-            tiles.append(_create_tile_entry(tile_number, x, y, naming_format))
+            filepath = (
+                files[len(tiles)]
+                if files is not None
+                else _format_filepath(naming_format, tile_number)
+            )
+            tiles.append(_create_tile_entry(tile_number, x, y, filepath))
             tile_number += 1
 
     return tiles
@@ -294,6 +316,8 @@ def _generate_snake_by_rows(
     overlap_y: float,
     order: str,
     naming_format: str,
+    files: Optional[List[str]] = None,
+    start_tile_number: int = 1,
 ) -> List[dict]:
     """
     Generate tiles in snake-by-rows pattern.
@@ -316,6 +340,10 @@ def _generate_snake_by_rows(
         Order direction (right-down, left-down, right-up, left-up)
     naming_format : str
         Format string for tile filenames
+    files : list of str, optional
+        Explicit filepaths to use, in traversal order, instead of naming_format
+    start_tile_number : int
+        Tile number assigned to the first tile
 
     Returns
     -------
@@ -323,7 +351,7 @@ def _generate_snake_by_rows(
         List of tile dictionaries
     """
     tiles = []
-    tile_number = 1
+    tile_number = start_tile_number
 
     spacing_x = _calculate_spacing(tile_size_x, overlap_x)
     spacing_y = _calculate_spacing(tile_size_y, overlap_y)
@@ -354,7 +382,12 @@ def _generate_snake_by_rows(
 
         for col_idx in col_range:
             x = col_idx * spacing_x
-            tiles.append(_create_tile_entry(tile_number, x, y, naming_format))
+            filepath = (
+                files[len(tiles)]
+                if files is not None
+                else _format_filepath(naming_format, tile_number)
+            )
+            tiles.append(_create_tile_entry(tile_number, x, y, filepath))
             tile_number += 1
 
     return tiles
@@ -369,6 +402,8 @@ def _generate_snake_by_columns(
     overlap_y: float,
     order: str,
     naming_format: str,
+    files: Optional[List[str]] = None,
+    start_tile_number: int = 1,
 ) -> List[dict]:
     """
     Generate tiles in snake-by-columns pattern.
@@ -391,6 +426,10 @@ def _generate_snake_by_columns(
         Order direction (down-right, down-left, up-right, up-left)
     naming_format : str
         Format string for tile filenames
+    files : list of str, optional
+        Explicit filepaths to use, in traversal order, instead of naming_format
+    start_tile_number : int
+        Tile number assigned to the first tile
 
     Returns
     -------
@@ -398,7 +437,7 @@ def _generate_snake_by_columns(
         List of tile dictionaries
     """
     tiles = []
-    tile_number = 1
+    tile_number = start_tile_number
 
     spacing_x = _calculate_spacing(tile_size_x, overlap_x)
     spacing_y = _calculate_spacing(tile_size_y, overlap_y)
@@ -429,7 +468,12 @@ def _generate_snake_by_columns(
 
         for row_idx in row_range:
             y = row_idx * spacing_y
-            tiles.append(_create_tile_entry(tile_number, x, y, naming_format))
+            filepath = (
+                files[len(tiles)]
+                if files is not None
+                else _format_filepath(naming_format, tile_number)
+            )
+            tiles.append(_create_tile_entry(tile_number, x, y, filepath))
             tile_number += 1
 
     return tiles
@@ -444,6 +488,8 @@ def generate_tile_config(
     tile_size: Optional[int] = None,
     base_dir: str = "./",
     naming_format: str = "mosaic_001_tile_{tile_number:04d}_aip.nii",
+    files: Annotated[Optional[List[str]], Parameter(name=["--files"])] = None,
+    start_tile_number: int = 1,
     out: Annotated[str, Parameter(name=["--output", "-o"])] = "tile_config.yaml",
     grid_type: str = "snake-by-columns",
     order: str = None,
@@ -474,7 +520,19 @@ def generate_tile_config(
     naming_format : str
         Format string for tile filenames. Use {tile_number} or {tile_number:04d}
         for tile number substitution (default: mosaic_001_tile_{
-        tile_number:04d}_aip.nii)
+        tile_number:04d}_aip.nii). Ignored if `files` is provided.
+    files : list of str, optional
+        Explicit list of tile filenames/paths to stitch, in the same traversal
+        order that `grid_type`/`order` would otherwise generate (i.e. the first
+        entry is the first tile visited by that pattern). When provided, this
+        overrides `naming_format`, and must contain exactly `columns * rows`
+        entries.
+    start_tile_number : int
+        Tile number assigned to the first tile, and used for every other tile's
+        numbering and (when `files` is not given) its `naming_format`
+        substitution. Set this when tile numbering in the filenames doesn't
+        start at 1 (default: 1). For example, if the first tile file is
+        `..._0100_...`, set `start_tile_number=100`.
     out : str
         Output YAML file path (default: tile_config.yaml)
     grid_type : str
@@ -521,6 +579,14 @@ def generate_tile_config(
     Generate with custom tile size and overlap:
     ```bash
     linc-convert psoct generate_tile_config --tile-size 512 --overlap-percentage 0.1
+    ```
+
+    Generate from an explicit file list whose numbering starts at 100:
+    ```bash
+    linc-convert psoct generate_tile_config --columns 3 --rows 2 \
+        --files tile_0100.nii tile_0101.nii tile_0102.nii tile_0103.nii \
+        tile_0104.nii tile_0105.nii \
+        --start-tile-number 100
     ```
     """
     # Handle --tile-size as a convenience option that sets both x and y
@@ -577,6 +643,13 @@ def generate_tile_config(
             f"overlap_percentage must be between 0.0 and 1.0, got {overlap_y}"
         )
 
+    # Validate files
+    if files is not None and len(files) != columns * rows:
+        raise ValueError(
+            f"files must contain exactly columns * rows = {columns * rows} entries, "
+            f"got {len(files)}"
+        )
+
     # Generate tiles based on grid type
     overlap = overlap_percentage
     generator_map = {
@@ -586,7 +659,8 @@ def generate_tile_config(
         "snake-by-columns": _generate_snake_by_columns,
     }
     tiles = generator_map[grid_type](
-        columns, rows, tile_size_x, tile_size_y, overlap_x, overlap_y, order, naming_format
+        columns, rows, tile_size_x, tile_size_y, overlap_x, overlap_y, order,
+        naming_format, files=files, start_tile_number=start_tile_number,
     )
 
     # Build metadata
