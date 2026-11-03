@@ -309,7 +309,10 @@ def main() -> None:
                for v in VARIANTS}
         b3 = (args.block,) * 3
         # one mask for both copies: tissue is judged on the later chunk's overlap rows
-        mask = block_tissue(vb, noise[b_z, b_rows], sig_b, *b3)
+        # against the chunk's own background level per row (median of its trailing
+        # columns), not the map: a refined map carries a static offset, and measured
+        # against it background would look like tissue
+        mask = block_tissue(vb, np.median(tail_b, axis=2), sig_b, *b3)
         if mask.mean() < MIN_TISSUE_SHARE:
             mask = np.zeros_like(mask)
             print(f"{i + 1:>2}-{i + 2:<2}  (no tissue in the overlap: skipped)")
