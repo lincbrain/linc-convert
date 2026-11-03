@@ -16,7 +16,8 @@ Strategies
   (``P2`` = 30/70, ``P3`` = 25/50/75, ``P5`` = 20..60, ``P5b`` = 25..75); ``auto``
   fits and (if significant) applies the offset, ``zero`` forces offset 0 and only
   fits the multipliers.
-* ``...n4`` -- the same with only 4 reference tiles.
+* ``P5b_*_n{N}`` -- the same with N reference tiles (4, 12, 16, 24 if available;
+  the main strategies use 8, evenly spread over the reference tiles).
 * ``sweep_off{o}`` -- multipliers fitted at fixed offsets across the search range;
   this shows which offset is best by the held-out score, independent of the
   estimator.
@@ -107,27 +108,43 @@ class Strategy:
     sweep_fraction: Optional[float] = None   # offset as fraction of the search limit
 
 
-def build_strategies(n_ref: int, quick: bool) -> List[Strategy]:
-    """The strategies to compare."""
-    out: List[Strategy] = [Strategy("old_median_t1.1", "old", 1.1)]
+MAIN_REFERENCE_TILES = 8       # reference tiles of the main strategies
+
+
+def spread(items: Sequence[int], count: int) -> List[int]:
+    """``count`` items evenly spread over ``items`` (all of them if fewer)."""
+    items = list(items)
+    if count >= len(items):
+        return items
+    return [items[i] for i in np.unique(np.round(
+        np.linspace(0, len(items) - 1, count)).astype(int))]
+
+
+def build_strategies(n_available: int, quick: bool) -> List[Strategy]:
+    """The strategies to compare; ``n_available`` reference tiles exist."""
+    main = min(MAIN_REFERENCE_TILES, n_available)
+    out: List[Strategy] = [Strategy("old_median_t1.1", "old", 1.1, n_ref=main)]
     if not quick:
-        out.append(Strategy("old_median_t1.05", "old", 1.05))
+        out.append(Strategy("old_median_t1.05", "old", 1.05, n_ref=main))
     level_keys = ["P2", "P5"] if quick else ["P2", "P3", "P5", "P5b"]
     for key in level_keys:
-        out.append(Strategy(f"{key}_zero_t1.1", "pct", 1.1, key, "zero"))
-        out.append(Strategy(f"{key}_auto_t1.1", "pct", 1.1, key, "auto"))
+        out.append(Strategy(f"{key}_zero_t1.1", "pct", 1.1, key, "zero", n_ref=main))
+        out.append(Strategy(f"{key}_auto_t1.1", "pct", 1.1, key, "auto", n_ref=main))
     if not quick:
         for thr in (1.05, 1.2):
-            out.append(Strategy(f"P2_zero_t{thr}", "pct", thr, "P2", "zero"))
-            out.append(Strategy(f"P2_auto_t{thr}", "pct", thr, "P2", "auto"))
-        if n_ref > 4:
-            out.append(Strategy("P2_zero_t1.1_n4", "pct", 1.1, "P2", "zero", n_ref=4))
-            out.append(Strategy("P2_auto_t1.1_n4", "pct", 1.1, "P2", "auto", n_ref=4))
+            out.append(Strategy(f"P2_zero_t{thr}", "pct", thr, "P2", "zero", n_ref=main))
+            out.append(Strategy(f"P2_auto_t{thr}", "pct", thr, "P2", "auto", n_ref=main))
+    for count in (4, 12, 16, 24):          # other numbers of reference tiles
+        if count != main and count <= n_available and (not quick or count in (4, 12)):
+            out.append(Strategy(f"P5b_zero_t1.1_n{count}", "pct", 1.1, "P5b", "zero",
+                                n_ref=count))
+            out.append(Strategy(f"P5b_auto_t1.1_n{count}", "pct", 1.1, "P5b", "auto",
+                                n_ref=count))
     fractions = (-0.8, -0.4, 0.4, 0.8) if quick else \
         (-0.8, -0.6, -0.4, -0.2, 0.2, 0.4, 0.6, 0.8)
     for f in fractions:
         out.append(Strategy(f"sweep_{f:+.1f}L", "pct", 1.1, "P2", "fixed",
-                            sweep_fraction=f))
+                            n_ref=main, sweep_fraction=f))
     return out
 
 
@@ -202,7 +219,7 @@ class Data:
 def make_maps(strategy: Strategy, data: Data, references: Sequence[int],
               limit: Optional[float]) -> Tuple[np.ndarray, np.ndarray, dict]:
     """Noise map, scaler map and a record of what was fitted."""
-    refs = list(references)[:strategy.n_ref] if strategy.n_ref else list(references)
+    refs = spread(references, strategy.n_ref) if strategy.n_ref else list(references)
     if strategy.kind == "old":
         pairs = [data.old(t, strategy.threshold) for t in refs]
         noise = np.median(np.stack([p[0] for p in pairs]), axis=0)
@@ -394,7 +411,9 @@ def main() -> None:
     p.add_argument("--layer", type=int, default=2)
     p.add_argument("--background_length", type=int, default=5000)
     p.add_argument("--out_dir", required=True)
-    p.add_argument("--n_reference_tiles", type=int, default=8)
+    p.add_argument("--n_reference_tiles", type=int, default=16,
+                   help="reference tiles to pick; the main strategies use 8 of them "
+                        "(evenly spread), others 4 / 12 / 16 / 24")
     p.add_argument("--n_eval_tiles", type=int, default=6)
     p.add_argument("--reference_tiles", type=int, nargs="*")
     p.add_argument("--eval_tiles", type=int, nargs="*")

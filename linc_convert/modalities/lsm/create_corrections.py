@@ -163,6 +163,7 @@ def _offset_corrections(
     crops: Dict[str, Crop], channels: List[str], vertical_flip: bool, layer: int,
     background_length: int, zy_threshold_multiplier: float,
     settings: "percentile_fit.PercentileSettings", report_path: str,
+    fixed_offset: Optional[float] = None,
 ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
     """Fit the shared offset and the multipliers; see ``create_corrections``.
 
@@ -188,6 +189,8 @@ def _offset_corrections(
         Percentile fit settings.
     report_path : str
         YAML file that records the fit.
+    fixed_offset : float, optional
+        Offset to use instead of estimating one.
 
     Returns
     -------
@@ -211,12 +214,14 @@ def _offset_corrections(
     maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     report: Dict[str, Any] = {}
     for ch in channels:
-        fit = percentile_fit.fit_offset(stats[ch], settings)
+        fit = percentile_fit.fit_offset(stats[ch], settings, fixed_offset=fixed_offset)
         noise = np.median(np.stack([t.noise_map for t in stats[ch]]), axis=0)
         maps[ch] = (noise - fit.offset,
                     percentile_fit.multiplier_to_scaler(fit.multiplier))
         reason = ""
-        if fit.offset == 0.0:
+        if fixed_offset is not None:
+            reason = " (fixed, not estimated)"
+        elif fit.offset == 0.0:
             reason = (" (estimate not significant or not inside the search range, "
                       "so 0)")
         print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
@@ -242,8 +247,8 @@ def _offset_corrections(
                       "subtracts less",
         "reference_tiles": [int(t) for t in reference_tiles], "layer": layer,
         "zy_threshold_multiplier": zy_threshold_multiplier,
-        "settings": {"low_percentile": settings.low,
-                     "high_percentile": settings.high,
+        "fixed_offset": None if fixed_offset is None else float(fixed_offset),
+        "settings": {"percentiles": [float(v) for v in settings.levels()],
                      "max_columns": settings.max_columns,
                      "max_offset_fraction": settings.max_offset_fraction,
                      "min_significance": settings.min_significance},
@@ -323,6 +328,8 @@ def create_corrections(
     fit_offset: bool = False,
     offset_low_percentile: float = 30.0,
     offset_high_percentile: float = 70.0,
+    offset_percentiles: Optional[List[float]] = None,
+    fixed_offset: Optional[float] = None,
     offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
 ) -> None:
@@ -414,6 +421,15 @@ def create_corrections(
         tiles of a channel are held in memory as 2 x Z x Y floats each.
     offset_low_percentile, offset_high_percentile : float, default=30, 70
         The two percentiles (0-100, low < high) of the tissue pixels of a row.
+    offset_percentiles : list of float, optional
+        Two or more increasing percentiles (0-100) used instead of the low / high
+        pair, for example ``25 37.5 50 62.5 75``. More percentiles make the
+        multipliers slightly more accurate on real data.
+    fixed_offset : float, optional
+        Use this offset (0 for none) instead of estimating one: no search, no
+        standard error, no significance test, only the multipliers are fitted,
+        with the percentile method. Needs ``fit_offset``. Use it when the
+        offset is not worth estimating (``evaluate_corrections`` can show that).
     offset_max_columns : int, default=512
         At most this many x columns (evenly strided) are read per row.
     offset_min_significance : float, default=2.0
@@ -441,6 +457,9 @@ def create_corrections(
     if auto_reference_tiles and (reference_tiles or per_chunk):
         raise ValueError("auto_reference_tiles cannot be combined with "
                          "reference_tiles or per_chunk")
+    if fixed_offset is not None and not fit_offset:
+        raise ValueError("fixed_offset needs fit_offset (the multipliers are then "
+                         "fitted with the percentile method at that offset)")
     if fit_offset and per_chunk:
         raise ValueError("fit_offset needs several reference tiles (stripes are "
                          "told from anatomy by repeating across tiles) and "
@@ -497,25 +516,24 @@ def create_corrections(
 
     bg_len, x_stride = _level_settings(background_length, layer)
     if fit_offset:
-        if len(reference_tiles) < 2:
+        if len(reference_tiles) < (1 if fixed_offset is not None else 2):
             raise ValueError("fit_offset needs at least 2 reference tiles "
                              f"(3 or more for a standard error), got "
                              f"{len(reference_tiles)}")
-        if len(reference_tiles) < 3:
+        if len(reference_tiles) < 3 and fixed_offset is None:
             print("WARNING: with fewer than 3 reference tiles the offset has no "
                   "standard error and is not applied")
-        if not 0 <= offset_low_percentile < offset_high_percentile <= 100:
-            raise ValueError("need 0 <= offset_low_percentile < "
-                             "offset_high_percentile <= 100, got "
-                             f"{offset_low_percentile}, {offset_high_percentile}")
         settings = percentile_fit.PercentileSettings(
             low=offset_low_percentile, high=offset_high_percentile,
+            percentiles=tuple(offset_percentiles) if offset_percentiles else None,
             max_columns=offset_max_columns,
             min_significance=offset_min_significance)
+        settings.levels()      # validates the percentiles
         maps = _offset_corrections(
             tile_paths, reference_tiles, crops, todo, vertical_flip, layer, bg_len,
             zy_threshold_multiplier, settings,
-            os.path.join(output_dir, f"offset_fit_camera{camera_id}.yaml"))
+            os.path.join(output_dir, f"offset_fit_camera{camera_id}.yaml"),
+            fixed_offset)
         for ch in todo:
             write_tiff(results[ch]["noise"], maps[ch][0])
             write_tiff(results[ch]["scaler"], maps[ch][1])
