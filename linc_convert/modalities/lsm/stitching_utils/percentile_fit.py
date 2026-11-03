@@ -64,7 +64,10 @@ class PercentileSettings:
     Parameters
     ----------
     low, high : float
-        Percentiles (0-100) of the tissue pixels of each row.
+        Percentiles (0-100) of the tissue pixels of each row (used when
+        ``percentiles`` is not given).
+    percentiles : tuple of float, optional
+        Two or more increasing percentiles (0-100) instead of ``low`` / ``high``.
     max_columns : int
         At most this many x columns (evenly strided) are read per row.
     min_pixels : int
@@ -81,14 +84,24 @@ class PercentileSettings:
     min_pixels: int = 8
     max_offset_fraction: float = 0.5
     min_significance: float = 2.0
+    percentiles: Optional[Tuple[float, ...]] = None
+
+    def levels(self) -> Tuple[float, ...]:
+        """The percentiles used: ``percentiles`` if given, else ``(low, high)``."""
+        levels = tuple(self.percentiles) if self.percentiles else (self.low, self.high)
+        if len(levels) < 2 or list(levels) != sorted(set(levels)) \
+                or not 0 <= levels[0] or not levels[-1] <= 100:
+            raise ValueError("percentiles must be at least two distinct values in "
+                             f"increasing order within 0-100, got {levels}")
+        return levels
 
 
 @dataclass
 class TileStats:
     """Per-row measurements of one tile and channel.
 
-    ``noise_map`` is (Z, Y); ``percentiles`` is (2, Z, Y) of RAW values
-    (low, high; NaN where the row has too few tissue pixels); ``weight`` is
+    ``noise_map`` is (Z, Y); ``percentiles`` is (K, Z, Y) of RAW values
+    (one per percentile, increasing; NaN where the row has too few tissue pixels); ``weight`` is
     (Z, Y), the tissue fraction (0 where the percentiles are NaN).
     """
     noise_map: np.ndarray
@@ -163,7 +176,8 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
     step = max(1, int(np.ceil(usable / settings.max_columns)))
     columns = vol[:, :, :usable:step]
     n_cols = columns.shape[2]
-    percentiles = np.full((2, n_z, n_y), np.nan, dtype=np.float32)
+    levels = settings.levels()
+    percentiles = np.full((len(levels), n_z, n_y), np.nan, dtype=np.float32)
     weight = np.zeros((n_z, n_y), dtype=np.float32)
 
     # the tile's typical tissue fraction, from a thin subsample of the rows
@@ -173,7 +187,7 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
     if present.size == 0:
         return TileStats(noise_map, percentiles, weight, 0.0)
     fraction = float(np.clip(np.median(present), 0.02, 0.98))
-    ranks = 1.0 - fraction * (1.0 - np.array([settings.low, settings.high]) / 100.0)
+    ranks = 1.0 - fraction * (1.0 - np.array(levels) / 100.0)
 
     per_slab = max(1, BLOCK_ELEMENTS // max(1, n_y * n_cols))
     for z0 in range(0, n_z, per_slab):
@@ -188,7 +202,7 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
 
 
 def _stack(tiles: List[TileStats]) -> Tuple[np.ndarray, np.ndarray]:
-    """Stack ``q - b`` as (C, 2, Z, Y) and the weights as (C, Z, Y)."""
+    """Stack ``q - b`` as (C, K, Z, Y) and the weights as (C, Z, Y)."""
     lines = np.stack([t.percentiles - t.noise_map[None] for t in tiles])
     weights = np.stack([t.weight for t in tiles])
     return lines.astype(np.float32), weights.astype(np.float32)
@@ -216,9 +230,9 @@ def _solve(lines: np.ndarray, weights: np.ndarray, offset: float,
     Parameters
     ----------
     lines : numpy.ndarray
-        ``q - b`` of shape (C, 2, Z, Y), NaN where the row has no tissue.
+        ``q - b`` of shape (C, K, Z, Y), NaN where the row has no tissue.
     weights : numpy.ndarray
-        Weight of every value (C, 2, Z, Y): the row's tissue fraction, 0 for
+        Weight of every value (C, K, Z, Y): the row's tissue fraction, 0 for
         values left out. Values must stay positive after adding ``offset``.
     offset : float
         The offset.
@@ -267,42 +281,8 @@ def _solve(lines: np.ndarray, weights: np.ndarray, offset: float,
     return np.where(rows, m, np.nan).astype(np.float32), float(score)
 
 
-def _ratio_f(lines: np.ndarray, weights: np.ndarray, offset: float) -> float:
-    """Row-effect F statistic of the percentile log-ratio at a given offset.
-
-    For tile ``c`` and row ``(z, y)`` let ``y = log((q_high - b + offset) /
-    (q_low - b + offset))``. Anatomy that brightens or darkens both percentiles
-    alike cancels in ``y``. With the right offset ``y`` has no dependence on the
-    row's gain, so after taking out each tile's mean, a row's tiles scatter
-    around zero by the anatomy noise only; with a wrong offset the gain (shared
-    by all tiles of the row) moves ``y`` of all its tiles the same way, which
-    shows up as a row effect. The statistic is the weighted between-row mean
-    square (of the tile-averaged ``y``) over the weighted within-row mean
-    square, a ratio that stays scale-free as the offset changes: about 1 at the
-    right offset, larger otherwise.
-
-    Parameters
-    ----------
-    lines : numpy.ndarray
-        ``q - b`` (C, 2, Z, Y).
-    weights : numpy.ndarray
-        Weight per tile and row (C, Z, Y), or per value (C, 2, Z, Y) of which
-        the smaller is used; 0 for values left out. Both percentiles must stay
-        positive after adding ``offset``.
-    offset : float
-        The offset.
-
-    Returns
-    -------
-    float
-        ``inf`` if there are too few rows seen in at least two tiles.
-    """
-    if weights.ndim == 4:
-        weights = weights.min(axis=1)
-    used = weights > 0
-    with np.errstate(invalid="ignore", divide="ignore"):
-        y = np.log((lines[:, 1] + offset) / (lines[:, 0] + offset))
-    used &= np.isfinite(y)
+def _row_effect_f(y: np.ndarray, used: np.ndarray, weights: np.ndarray) -> float:
+    """Weighted between-row over within-row mean square of ``y`` (C, Z, Y)."""
     w = np.where(used, weights, 0.0).astype(np.float64)
     y = np.where(used, y, 0.0)
     tile_w = w.sum(axis=(1, 2))
@@ -322,6 +302,48 @@ def _ratio_f(lines: np.ndarray, weights: np.ndarray, offset: float) -> float:
     if within_df <= 0 or within_ss <= 0:
         return float("inf")
     return between / (within_ss / within_df)
+
+
+def _ratio_f(lines: np.ndarray, weights: np.ndarray, offset: float) -> float:
+    """Row-effect F statistic of the percentile log-ratios at a given offset.
+
+    For tile ``c``, row ``(z, y)`` and every percentile ``k`` above the lowest let
+    ``y_k = log((q_k - b + offset) / (q_0 - b + offset))``. Anatomy that
+    brightens or darkens all percentiles alike cancels in ``y_k``. With the right
+    offset ``y_k`` has no dependence on the row's gain, so after taking out each
+    tile's mean, a row's tiles scatter around zero by the anatomy noise only;
+    with a wrong offset the gain (shared by all tiles of the row) moves ``y_k``
+    of all its tiles the same way, which shows up as a row effect. For each
+    ``k`` the statistic is the weighted between-row mean square (of the
+    tile-averaged ``y_k``) over the weighted within-row mean square, a ratio that
+    stays scale-free as the offset changes: about 1 at the right offset, larger
+    otherwise. The result is the mean over ``k``.
+
+    Parameters
+    ----------
+    lines : numpy.ndarray
+        ``q - b`` (C, K, Z, Y).
+    weights : numpy.ndarray
+        Weight per tile and row (C, Z, Y), or per value (C, K, Z, Y) of which
+        the smallest is used; 0 for values left out. All percentiles must stay
+        positive after adding ``offset``.
+    offset : float
+        The offset.
+
+    Returns
+    -------
+    float
+        ``inf`` if there are too few rows seen in at least two tiles.
+    """
+    if weights.ndim == 4:
+        weights = weights.min(axis=1)
+    base = lines[:, 0] + offset
+    scores = []
+    for k in range(1, lines.shape[1]):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            y = np.log((lines[:, k] + offset) / base)
+        scores.append(_row_effect_f(y, (weights > 0) & np.isfinite(y), weights))
+    return float(np.mean(scores))
 
 
 def _search(lines: np.ndarray, weights: np.ndarray, low: float, high: float) -> float:
@@ -352,8 +374,8 @@ def _search(lines: np.ndarray, weights: np.ndarray, low: float, high: float) -> 
     return float(0.5 * (lo + hi))
 
 
-def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = None
-               ) -> PercentileFit:
+def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = None,
+               fixed_offset: Optional[float] = None) -> PercentileFit:
     """Fit the shared offset and the (z, y) multipliers.
 
     Parameters
@@ -363,6 +385,10 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
         standard error).
     settings : PercentileSettings, optional
         Fit settings.
+    fixed_offset : float, optional
+        Skip the search and the significance test and solve the multipliers at
+        this offset (used to compare offsets); ``estimate`` is then this value
+        and the standard error is NaN.
 
     Returns
     -------
@@ -376,7 +402,7 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     n_tiles = len(tiles)
     _, n_z, n_y = tissue.shape
 
-    valid_high = lines[:, 1][tissue > 0]
+    valid_high = lines[:, -1][tissue > 0]
     typical = float(np.median(valid_high)) if valid_high.size else float("nan")
     if not np.isfinite(typical) or typical <= 0:
         nan_m = np.full((n_z, n_y), np.nan, dtype=np.float32)
@@ -390,13 +416,14 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     # left out, so the objective does not gain from the clipping itself.
     weights = np.where(lines > limit, tissue[:, None], 0.0).astype(np.float32)
 
-    estimate = _search(lines, weights, -limit, limit)
+    estimate = (float(fixed_offset) if fixed_offset is not None
+                else _search(lines, weights, -limit, limit))
     objective_zero = _ratio_f(lines, weights, 0.0)
     objective_estimate = _ratio_f(lines, weights, estimate)
 
     tile_estimates: List[float] = []
     se = float("nan")
-    if n_tiles >= 3:
+    if n_tiles >= 3 and fixed_offset is None:
         for leave in range(n_tiles):
             keep = [i for i in range(n_tiles) if i != leave]
             tile_estimates.append(_search(lines[keep], weights[keep], -limit, limit))
@@ -409,7 +436,8 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     interior = abs(estimate) < BOUNDARY_FRACTION * limit
     significant = (interior and np.isfinite(se) and se > 0
                    and abs(estimate) >= settings.min_significance * se)
-    applied = float(estimate) if significant else 0.0
+    applied = (float(fixed_offset) if fixed_offset is not None
+               else float(estimate) if significant else 0.0)
     final_weights = np.where(lines + applied > MIN_SCALER, tissue[:, None], 0.0)
     multiplier, _ = _solve(lines, final_weights.astype(np.float32), applied)
     rows_used = [int((final_weights[i].min(axis=0) > 0).sum()) for i in range(n_tiles)]
