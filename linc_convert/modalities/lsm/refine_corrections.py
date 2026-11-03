@@ -76,7 +76,8 @@ def tissue_blocks(ca: np.ndarray, cb: np.ndarray, block: int, tissue: np.ndarray
 
     ``ca`` and ``cb`` are the corrected overlap of the first and the second chunk,
     shape (z, rows, x); ``tissue`` is the (z, rows, x // block) mask of blocks that
-    stand out from the background in both copies (``compare_overlaps.block_tissue``).
+    stand out from the background in the later chunk (``compare_overlaps.block_tissue``).
+    It is applied to both copies, so the same blocks are used on both sides.
     """
     nz, h, nx = ca.shape
     nb = nx // block
@@ -454,16 +455,14 @@ def main() -> None:
     for n, i in enumerate(selected, 1):
         va = np.asarray(open_chunk(i)[a_z, a_rows, x0:x1].compute(), dtype=np.float32)
         vb = np.asarray(open_chunk(i + 1)[b_z, b_rows, x0:x1].compute(), dtype=np.float32)
-        tail_a = np.asarray(open_chunk(i)[a_z, a_rows, sx - bg_len:sx].compute(),
-                            dtype=np.float32)
         tail_b = np.asarray(open_chunk(i + 1)[b_z, b_rows, sx - bg_len:sx].compute(),
                             dtype=np.float32)
-        tissue = (block_tissue(va, noise[a_z, a_rows],
-                               background_sigma(tail_a, noise[a_z, a_rows]),
-                               1, 1, args.block, args.tissue_sigma)
-                  & block_tissue(vb, noise[b_z, b_rows],
-                                 background_sigma(tail_b, noise[b_z, b_rows]),
-                                 1, 1, args.block, args.tissue_sigma))
+        # one mask for both copies: tissue is judged on the top rows of the later chunk
+        # (its own overlap rows, against its own background level) and applied to the
+        # same blocks of the earlier chunk's overlap
+        tissue = block_tissue(vb, noise[b_z, b_rows],
+                              background_sigma(tail_b, noise[b_z, b_rows]),
+                              1, 1, args.block, args.tissue_sigma)
         ca = np.clip(va - noise[a_z, a_rows][:, :, None], 0, None) \
             * scaler[a_z, a_rows][:, :, None]
         cb = np.clip(vb - noise[b_z, b_rows][:, :, None], 0, None) \

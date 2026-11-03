@@ -41,6 +41,7 @@ the whole width.
 """
 
 import argparse
+import math
 import csv
 import os
 from typing import Dict, List, Optional, Tuple
@@ -219,6 +220,7 @@ def main() -> None:
     )
     from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
         get_crops,
+        get_skew_shear,
         get_vertical_flip,
     )
 
@@ -244,8 +246,20 @@ def main() -> None:
     if noise.shape != (sz, sy):
         raise SystemExit(f"corrections have shape {noise.shape} but chunks at layer "
                          f"{args.layer} are (Z, Y) = ({sz}, {sy})")
+    # --min_x / --max_x are in stitching coordinates (x of the sheared mosaic, x' = x +
+    # shear_x * z). A chunk column x is inside the window at every z only for
+    # min_x <= x and x < max_x - shear_x * (Z - 1), so that is the range used.
+    shift = int(math.ceil(get_skew_shear(scan) * (sz - 1)))
     x0 = 0 if args.min_x is None else max(0, int(round(args.min_x / scale)))
-    x1 = sx if args.max_x is None else min(sx, int(round(args.max_x / scale)))
+    x1 = sx if args.max_x is None else int(round(args.max_x / scale)) - shift
+    x1 = min(sx, x1)
+    if x1 <= x0:
+        raise SystemExit(f"the x window leaves no chunk columns after the shear "
+                         f"(shift {shift} px at this layer)")
+    if args.min_x is not None or args.max_x is not None:
+        print(f"x window {args.min_x}:{args.max_x} (stitching coordinates, full-res) -> "
+              f"chunk columns {x0}:{x1} at layer {args.layer} (shear shifts the window by "
+              f"up to {shift} px over z)")
     # the stitch puts chunk i at round(i * y_offset / scale); use its step
     step = int(round(y_offset / scale))
     chunk_full_y = sy * scale
@@ -286,19 +300,16 @@ def main() -> None:
         va = np.asarray(open_chunk(i)[a_z, a_rows, x0:x1].compute(), dtype=np.float32)
         vb = np.asarray(open_chunk(i + 1)[b_z, b_rows, x0:x1].compute(),
                         dtype=np.float32)
-        tail_a = np.asarray(open_chunk(i)[a_z, a_rows, sx - bg_len:sx].compute(),
-                            dtype=np.float32)
         tail_b = np.asarray(open_chunk(i + 1)[b_z, b_rows, sx - bg_len:sx].compute(),
                             dtype=np.float32)
-        sig_a = background_sigma(tail_a, noise[a_z, a_rows])
         sig_b = background_sigma(tail_b, noise[b_z, b_rows])
         ca = corrected_versions(va, noise[a_z, a_rows], scaler[a_z, a_rows])
         cb = corrected_versions(vb, noise[b_z, b_rows], scaler[b_z, b_rows])
         blk = {v: (block_mean(ca[v], args.block), block_mean(cb[v], args.block))
                for v in VARIANTS}
         b3 = (args.block,) * 3
-        mask = (block_tissue(va, noise[a_z, a_rows], sig_a, *b3)
-                & block_tissue(vb, noise[b_z, b_rows], sig_b, *b3))
+        # one mask for both copies: tissue is judged on the later chunk's overlap rows
+        mask = block_tissue(vb, noise[b_z, b_rows], sig_b, *b3)
         if mask.mean() < MIN_TISSUE_SHARE:
             mask = np.zeros_like(mask)
             print(f"{i + 1:>2}-{i + 2:<2}  (no tissue in the overlap: skipped)")
