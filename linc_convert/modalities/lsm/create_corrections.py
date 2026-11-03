@@ -12,7 +12,7 @@ Local-only: it reads existing tile folders and writes TIFFs, nothing else (no
         input_path="…/strips_raw/sample-slice019", yaml_path="LSM_metadata.yaml",
         camera_id=1, slice_number=19, reference_tiles=[23, 26, 29],
         output_dir="…/60_corrections", background_length=5000,
-        zy_threshold_multiplier=1.05)
+        zy_threshold_multiplier=1.1)
 
 Per channel of the camera and per reference tile (full-resolution level 0 only):
 
@@ -38,7 +38,7 @@ reference tiles. Output per channel ``ch``, in ``{output_dir}/{ch}/``
 
 With ``fit_offset`` the background that is subtracted becomes ``noise - offset``
 with one offset shared by all rows, and the multipliers are fitted together with
-it (see ``stitching_utils.offset_fit``); the noise TIFF then holds
+it (see ``stitching_utils.percentile_fit``); the noise TIFF then holds
 ``noise - offset``, so ``stitch_chunks`` and ``register_chunks`` need no change.
 
 ``reference_tiles`` are 1-based positions in the camera's tile list (1 is the
@@ -60,7 +60,7 @@ import numpy as np
 import yaml
 
 from linc_convert.modalities.lsm.cli import lsm
-from linc_convert.modalities.lsm.stitching_utils import offset_fit
+from linc_convert.modalities.lsm.stitching_utils import percentile_fit
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     X_STRIDE,
     calibrate_tile,
@@ -162,7 +162,7 @@ def _offset_corrections(
     tile_paths: Sequence[str], reference_tiles: Sequence[int],
     crops: Dict[str, Crop], channels: List[str], vertical_flip: bool, layer: int,
     background_length: int, zy_threshold_multiplier: float,
-    settings: "offset_fit.OffsetSettings", report_path: str,
+    settings: "percentile_fit.PercentileSettings", report_path: str,
 ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
     """Fit the shared offset and the multipliers; see ``create_corrections``.
 
@@ -184,8 +184,8 @@ def _offset_corrections(
         Trailing x columns (at this level) used for the row background.
     zy_threshold_multiplier : float
         Signal threshold multiplier.
-    settings : OffsetSettings
-        Offset fit settings.
+    settings : PercentileSettings
+        Percentile fit settings.
     report_path : str
         YAML file that records the fit.
 
@@ -195,47 +195,46 @@ def _offset_corrections(
         Per channel ``(noise_map, scaler_map)``; the noise map already has the
         offset taken out (``background - offset``).
     """
-    samples: Dict[str, List[offset_fit.TileSample]] = {ch: [] for ch in channels}
+    stats: Dict[str, List[percentile_fit.TileStats]] = {ch: [] for ch in channels}
     for ref_index in reference_tiles:
         path = tile_paths[ref_index - 1]
         print(f"[offset fit] tile {ref_index}: {os.path.basename(path)}", flush=True)
         tile = open_tile_array(path, layer, chunks=(128, 128, 128))
         for ch in channels:
             vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
-            sample = offset_fit.sample_tile(
+            tile_stats = percentile_fit.sample_tile(
                 vol, background_length, zy_threshold_multiplier, settings)
-            samples[ch].append(sample)
-            print(f"  channel {ch}: tissue in {sample.tissue_fraction:.0%} of the "
-                  "columns", flush=True)
+            stats[ch].append(tile_stats)
+            print(f"  channel {ch}: tissue in {tile_stats.tissue_fraction:.0%} of "
+                  "the columns", flush=True)
 
-    reach, gap = settings.at_layer(layer)
     maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     report: Dict[str, Any] = {}
     for ch in channels:
-        fit = offset_fit.fit_offset(
-            samples[ch], reach, gap, settings.iterations,
-            min_levels=settings.min_levels,
-            max_offset_fraction=settings.max_offset_fraction,
-            min_significance=settings.min_significance)
-        noise = np.median(np.stack([s.noise_map for s in samples[ch]]), axis=0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            multiplier = np.nanmedian(np.stack(fit.multipliers), axis=0)
-        maps[ch] = (noise - fit.offset, offset_fit.multiplier_to_scaler(multiplier))
-        significant = fit.offset != 0.0 or not np.isfinite(fit.estimate)
+        fit = percentile_fit.fit_offset(stats[ch], settings)
+        noise = np.median(np.stack([t.noise_map for t in stats[ch]]), axis=0)
+        maps[ch] = (noise - fit.offset,
+                    percentile_fit.multiplier_to_scaler(fit.multiplier))
+        reason = ""
+        if fit.offset == 0.0:
+            reason = (" (estimate not significant or not inside the search range, "
+                      "so 0)")
         print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
-              f"{fit.standard_error:.2f} (standard error); applied offset "
-              f"{fit.offset:+.2f}"
-              + ("" if significant else " (estimate not significant, so 0)"))
+              f"{fit.standard_error:.2f} (standard error, search range +-"
+              f"{fit.search_limit:.1f}); applied offset {fit.offset:+.2f}{reason}")
         report[ch] = {
             "offset_applied": float(fit.offset),
             "offset_estimate": float(fit.estimate),
             "standard_error": float(fit.standard_error),
-            "tile_estimates": {int(t): float(o) for t, o in
-                               zip(reference_tiles, fit.tile_offsets)},
-            "rows_with_multiplier_per_tile": {
-                int(t): round(u / max(n, 1), 3) for t, u, n in
-                zip(reference_tiles, fit.rows_used, fit.rows_total)}}
+            "search_limit": float(fit.search_limit),
+            "tile_estimates_leave_one_out": {
+                int(t): float(o) for t, o in
+                zip(reference_tiles, fit.tile_estimates)},
+            "row_effect_F_at_zero": float(fit.objective_zero),
+            "row_effect_F_at_estimate": float(fit.objective_estimate),
+            "rows_used_per_tile": {
+                int(t): round(u / max(fit.rows_total, 1), 3) for t, u in
+                zip(reference_tiles, fit.rows_used)}}
     os.makedirs(os.path.dirname(report_path) or ".", exist_ok=True)
     write_yaml(report_path, {
         "convention": "noise TIFF = background - offset; corrected = "
@@ -243,8 +242,10 @@ def _offset_corrections(
                       "subtracts less",
         "reference_tiles": [int(t) for t in reference_tiles], "layer": layer,
         "zy_threshold_multiplier": zy_threshold_multiplier,
-        "settings": {"n_levels": settings.n_levels, "reach": settings.reach,
-                     "gap": settings.gap, "iterations": settings.iterations,
+        "settings": {"low_percentile": settings.low,
+                     "high_percentile": settings.high,
+                     "max_columns": settings.max_columns,
+                     "max_offset_fraction": settings.max_offset_fraction,
                      "min_significance": settings.min_significance},
         "channels": report})
     return maps
@@ -315,14 +316,14 @@ def create_corrections(
     output_dir: str,
     per_chunk: bool = False,
     background_length: int = 5000,
-    zy_threshold_multiplier: float = 1.05,
+    zy_threshold_multiplier: float = 1.1,
     only_channel: Optional[str] = None,
     force: bool = False,
     layer: int = 0,
     fit_offset: bool = False,
-    offset_levels: int = 12,
-    offset_reach: int = 64,
-    offset_gap: int = 8,
+    offset_low_percentile: float = 30.0,
+    offset_high_percentile: float = 70.0,
+    offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
@@ -374,7 +375,7 @@ def create_corrections(
     background_length : int, default=5000
         Trailing x columns (full-resolution pixels) used for each row's noise
         floor.
-    zy_threshold_multiplier : float, default=1.05
+    zy_threshold_multiplier : float, default=1.1
         A pixel counts toward the scaler only if its raw value is at least
         ``median(noise_map) * zy_threshold_multiplier``.
     only_channel : str, optional
@@ -391,28 +392,30 @@ def create_corrections(
         Also fit one background offset shared by all rows of a channel (needs at
         least 3 reference tiles, 8 recommended; not with ``per_chunk``). The
         subtracted background becomes ``noise - offset`` and the noise TIFF holds
-        that, so a positive offset subtracts less and a negative one more. Every
-        row is summarised by ``offset_levels`` brightness levels (quantiles over
-        x). The offset is found from stripes pooled with a median over z (and
-        over y) and compared with their neighbours, and is told apart from
-        anatomy by the stripes repeating across tiles; the per-(z, y)
-        multipliers are then fitted against the neighbouring rows' corrected
-        levels (very bright rows are capped first). It is only
-        applied if it is significantly non-zero (``offset_min_significance``
-        standard errors, delete-one-tile jackknife); otherwise 0 is used, and the
-        multipliers are still the ones fitted here. The estimate, its standard
-        error and the per-tile estimates are written to
-        ``{output_dir}/offset_fit_camera{camera_id}.yaml``. All tiles of a channel
-        are held in memory as ``offset_levels`` x Z x Y floats each.
-    offset_levels : int, default=12
-        Brightness levels (quantiles over x) per row.
-    offset_reach : int, default=64
-        Half-width in z and y (full-resolution pixels) of the neighbourhood that
-        gives each row its reference. Wider is less noisy but follows slow
-        anatomy less; narrow references make the offset biased.
-    offset_gap : int, default=8
-        Half-width (full-resolution pixels) of the band of rows and columns
-        around a row that is left out of its reference; at least a stripe width.
+        that, so a positive offset subtracts less and a negative one more.
+        For every tile and (z, y) row the ``offset_low_percentile`` and
+        ``offset_high_percentile`` (default 30 and 70) of the row's tissue
+        pixels along x are taken (tissue: raw value >=
+        ``median(noise) * zy_threshold_multiplier``; at the same overall rank in
+        every row of a tile, so that a row's gain cannot change which pixels
+        count). The offset and the per-(z, y) multipliers are then fitted to the
+        percentiles of all reference tiles together: each row counts in
+        proportion to its fraction of tissue pixels, the multiplier of a row
+        must bring both percentiles of every tile to the tile's common levels
+        (least squares), and the offset is the value at which the ratio of the
+        corrected percentiles no longer depends on the row (the gain is shared by
+        all tiles of a row, anatomy is not). Its standard error comes from
+        leaving out one tile at a time; the offset is only applied if it lies
+        inside the search range (+-``0.5`` x the typical low percentile above the
+        background) and is at least ``offset_min_significance`` standard errors
+        from 0, otherwise 0 is used (the multipliers are still the ones fitted
+        here). The estimate, its standard error and the leave-one-out estimates
+        are written to ``{output_dir}/offset_fit_camera{camera_id}.yaml``. All
+        tiles of a channel are held in memory as 2 x Z x Y floats each.
+    offset_low_percentile, offset_high_percentile : float, default=30, 70
+        The two percentiles (0-100, low < high) of the tissue pixels of a row.
+    offset_max_columns : int, default=512
+        At most this many x columns (evenly strided) are read per row.
     offset_min_significance : float, default=2.0
         Standard errors the offset must differ from 0 to be applied (0 applies
         any estimate that has one).
@@ -501,8 +504,13 @@ def create_corrections(
         if len(reference_tiles) < 3:
             print("WARNING: with fewer than 3 reference tiles the offset has no "
                   "standard error and is not applied")
-        settings = offset_fit.OffsetSettings(
-            n_levels=offset_levels, reach=offset_reach, gap=offset_gap,
+        if not 0 <= offset_low_percentile < offset_high_percentile <= 100:
+            raise ValueError("need 0 <= offset_low_percentile < "
+                             "offset_high_percentile <= 100, got "
+                             f"{offset_low_percentile}, {offset_high_percentile}")
+        settings = percentile_fit.PercentileSettings(
+            low=offset_low_percentile, high=offset_high_percentile,
+            max_columns=offset_max_columns,
             min_significance=offset_min_significance)
         maps = _offset_corrections(
             tile_paths, reference_tiles, crops, todo, vertical_flip, layer, bg_len,
