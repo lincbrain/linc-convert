@@ -51,7 +51,8 @@ import yaml
 VARIANTS = ("raw", "noise only", "corrected")
 LEVELS = np.arange(10, 91, 10)       # percentiles matched between the copies
 TISSUE_FRACTION = 0.3                # tissue = block mean above this x the 90th percentile
-MAX_TISSUE_SHARE = 0.9               # more tissue blocks than this = no tissue contrast
+K_SIGMA = 5.0                        # tissue = block mean this many noise sigmas above background
+MIN_TISSUE_SHARE = 0.01              # fewer tissue blocks than this = pair lies in background
 MIN_BLOCKS = 500                     # fewest tissue blocks for a fit
 SHIFTS = range(-3, 4)
 
@@ -73,13 +74,33 @@ def corrected_versions(vol: np.ndarray, noise: np.ndarray, scaler: np.ndarray
     return {"raw": vol, "noise only": sub, "corrected": sub * scaler[:, :, None]}
 
 
-def tissue_mask(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Blocks that are tissue in both copies (from the noise-only version)."""
-    mean = 0.5 * (a + b)
-    pos = mean[mean > 0]
-    if pos.size == 0:
-        return np.zeros(a.shape, dtype=bool)
-    return mean > TISSUE_FRACTION * np.percentile(pos, 90)
+def background_sigma(tail: np.ndarray, noise: np.ndarray) -> np.ndarray:
+    """Noise level of every (z, row): robust sd of the trailing columns around the map.
+
+    ``tail`` is (z, rows, columns) of the columns the noise map was taken from, which
+    hold no tissue; the spread of ``tail - noise`` there is the pixel noise.
+    """
+    resid = tail - noise[:, :, None]
+    mid = np.median(resid, axis=2, keepdims=True)
+    return 1.4826 * np.median(np.abs(resid - mid), axis=2)
+
+
+def block_tissue(raw: np.ndarray, noise: np.ndarray, sigma: np.ndarray, bz: int,
+                 by: int, bx: int, k: float = K_SIGMA) -> np.ndarray:
+    """Blocks (bz, by, bx) whose mean lies ``k`` noise sigmas above the background.
+
+    ``raw`` is (z, rows, x), ``noise`` and ``sigma`` are (z, rows). Pixel noise is taken
+    as independent, so a block mean has sd ``sqrt(sum of variances) / n``. This tests
+    each block against the background alone, so a pair that is all tissue and a pair
+    that is all background are both called correctly.
+    """
+    nz, h, nx = raw.shape
+    zb, yb, xb = nz // bz, h // by, nx // bx
+    mean = (raw - noise[:, :, None])[:zb * bz, :yb * by, :xb * bx].reshape(
+        zb, bz, yb, by, xb, bx).mean(axis=(1, 3, 5))
+    var = (sigma ** 2)[:zb * bz, :yb * by].reshape(zb, bz, yb, by).sum(axis=(1, 3))
+    sd = np.sqrt(bx * var) / (bz * by * bx)
+    return mean > k * np.maximum(sd, 1e-6)[:, :, None]
 
 
 def compare(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> Optional[dict]:
@@ -265,15 +286,22 @@ def main() -> None:
         va = np.asarray(open_chunk(i)[a_z, a_rows, x0:x1].compute(), dtype=np.float32)
         vb = np.asarray(open_chunk(i + 1)[b_z, b_rows, x0:x1].compute(),
                         dtype=np.float32)
+        tail_a = np.asarray(open_chunk(i)[a_z, a_rows, sx - bg_len:sx].compute(),
+                            dtype=np.float32)
+        tail_b = np.asarray(open_chunk(i + 1)[b_z, b_rows, sx - bg_len:sx].compute(),
+                            dtype=np.float32)
+        sig_a = background_sigma(tail_a, noise[a_z, a_rows])
+        sig_b = background_sigma(tail_b, noise[b_z, b_rows])
         ca = corrected_versions(va, noise[a_z, a_rows], scaler[a_z, a_rows])
         cb = corrected_versions(vb, noise[b_z, b_rows], scaler[b_z, b_rows])
         blk = {v: (block_mean(ca[v], args.block), block_mean(cb[v], args.block))
                for v in VARIANTS}
-        mask = tissue_mask(*blk["noise only"])
-        if mask.mean() > MAX_TISSUE_SHARE:
-            # almost every block passes: the pair lies in background, not tissue
+        b3 = (args.block,) * 3
+        mask = (block_tissue(va, noise[a_z, a_rows], sig_a, *b3)
+                & block_tissue(vb, noise[b_z, b_rows], sig_b, *b3))
+        if mask.mean() < MIN_TISSUE_SHARE:
             mask = np.zeros_like(mask)
-            print(f"{i + 1:>2}-{i + 2:<2}  (mostly background: skipped)")
+            print(f"{i + 1:>2}-{i + 2:<2}  (no tissue in the overlap: skipped)")
         stats = {v: compare(blk[v][0], blk[v][1], mask) for v in VARIANTS}
         nan3 = [float("nan")] * 3
         bands = (band_ratios(*blk["corrected"], mask, 1),
