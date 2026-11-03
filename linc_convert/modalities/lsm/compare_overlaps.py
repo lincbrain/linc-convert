@@ -50,7 +50,8 @@ import yaml
 
 VARIANTS = ("raw", "noise only", "corrected")
 LEVELS = np.arange(10, 91, 10)       # percentiles matched between the copies
-TISSUE_FRACTION = 0.3                # tissue = block mean above this x the median
+TISSUE_FRACTION = 0.3                # tissue = block mean above this x the 90th percentile
+MAX_TISSUE_SHARE = 0.9               # more tissue blocks than this = no tissue contrast
 MIN_BLOCKS = 500                     # fewest tissue blocks for a fit
 SHIFTS = range(-3, 4)
 
@@ -78,7 +79,7 @@ def tissue_mask(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     pos = mean[mean > 0]
     if pos.size == 0:
         return np.zeros(a.shape, dtype=bool)
-    return mean > TISSUE_FRACTION * np.median(pos)
+    return mean > TISSUE_FRACTION * np.percentile(pos, 90)
 
 
 def compare(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> Optional[dict]:
@@ -269,17 +270,25 @@ def main() -> None:
         blk = {v: (block_mean(ca[v], args.block), block_mean(cb[v], args.block))
                for v in VARIANTS}
         mask = tissue_mask(*blk["noise only"])
+        if mask.mean() > MAX_TISSUE_SHARE:
+            # almost every block passes: the pair lies in background, not tissue
+            mask = np.zeros_like(mask)
+            print(f"{i + 1:>2}-{i + 2:<2}  (mostly background: skipped)")
         stats = {v: compare(blk[v][0], blk[v][1], mask) for v in VARIANTS}
+        nan3 = [float("nan")] * 3
         bands = (band_ratios(*blk["corrected"], mask, 1),
-                 band_ratios(*blk["corrected"], mask, 0))
+                 band_ratios(*blk["corrected"], mask, 0)) if mask.any() else (nan3, nan3)
         shifts = (shift_search(ca["corrected"], cb["corrected"], 1),
-                  shift_search(ca["corrected"], cb["corrected"], 0))
+                  shift_search(ca["corrected"], cb["corrected"], 0)) if mask.any() else (
+            (0, float("nan"), float("nan")),) * 2
         # background left in the overlap rows after the shared map is subtracted
         left_a = float(np.median(own(i)[a_z, a_rows] - noise[a_z, a_rows]))
         left_b = float(np.median(own(i + 1)[b_z, b_rows] - noise[b_z, b_rows]))
         results.append((i + 1, stats, bands, shifts, (left_a, left_b)))
         for v in VARIANTS:
             s = stats[v]
+            if not mask.any():
+                break
             print(f"{i + 1:>2}-{i + 2:<2} " + (f"{s['n']:>6}  {v:<11} {s['ratio']:7.3f}"
                   f" {s['gain']:6.3f} {s['offset']:7.1f} {s['scatter']:8.1f} "
                   f"{s['corr']:6.3f}" if s else f"{'':>6}  {v:<11}  (too little tissue)"))
@@ -314,16 +323,16 @@ def main() -> None:
               f"   median scatter {np.median([s['scatter'] for s in vals]):5.1f}%")
 
     if ok:
-        print("\nchunk brightness relative to the first chunk of the window "
-              "(product of the pair ratios; corrected)")
-        level = 1.0
-        out = [f"chunk {ok[0][0]:>3}: 1.000"]
-        for pair, stats, *_ in ok:
-            level *= stats["corrected"]["ratio"]
-            out.append(f"chunk {pair + 1:>3}: {level:.3f}")
-        print("\n".join(out))
-        print("A pattern that rises and falls with the chunk number (several % "
-              "peak to peak) gives the horizontal bands; scatter around 1 does not.")
+        ratios = np.array([r[1]["corrected"]["ratio"] for r in ok])
+        print(f"\nratio second/first copy, corrected, over the {len(ok)} pairs with tissue:"
+              f" median {np.median(ratios):.3f}, min {ratios.min():.3f}, "
+              f"max {ratios.max():.3f}")
+        print("Perfect corrections give 1.000 for every pair. A median clearly above or "
+              "below 1 that\nis the same for every pair is NOT a drift from chunk to chunk "
+              "(it cannot compound over\nthe chunks); it means the first rows of a chunk and "
+              "its last rows are at different\nlevels after correction, so every chunk has a "
+              "step or ramp of that size at the same\nplace: bands one chunk apart. "
+              "Scatter of the ratio around 1 with no sign is a random\nchunk-to-chunk gain.")
 
     if args.out_csv:
         os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
