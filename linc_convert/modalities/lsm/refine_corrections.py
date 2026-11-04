@@ -323,6 +323,12 @@ def main() -> None:
                         "their spread gives the noise level")
     p.add_argument("--min_x", type=float, help="full-res px, stitching coordinates")
     p.add_argument("--max_x", type=float)
+    p.add_argument("--column_mask_fraction", type=float, default=0.2,
+                   help="an x column is used for every row only if at most this share "
+                        "of its rows is background (the rule create_corrections uses); "
+                        "makes --min_x/--max_x unnecessary")
+    p.add_argument("--no_column_mask", action="store_true",
+                   help="judge every block on its own instead")
     p.add_argument("--min_y", type=float,
                    help="only pairs whose overlap lies in this y range (full-res px); "
                         "default: all pairs of the slice")
@@ -359,6 +365,7 @@ def main() -> None:
     from linc_convert.modalities.lsm.compare_overlaps import (
         background_sigma,
         block_tissue,
+        column_rule,
         pair_rows,
     )
     from linc_convert.modalities.lsm.stitching_utils.corrections import (
@@ -467,6 +474,15 @@ def main() -> None:
         tissue = block_tissue(vb, noise[b_z, b_rows],
                               background_sigma(tail_b, noise[b_z, b_rows]),
                               1, 1, args.block, args.tissue_sigma)
+        share = float(tissue.mean())           # blocks that are tissue
+        kept = 1.0
+        if not args.no_column_mask:
+            own = tissue
+            tissue = column_rule(own, args.column_mask_fraction)
+            kept = float(tissue[0, 0].mean()) if tissue.size else 0.0
+            # --min_pair_tissue is judged on the columns that are used, so a pair with
+            # background at its sides is not thrown out for it
+            share = float(own[tissue].mean()) if tissue.any() else 0.0
         ca = np.clip(va - noise[a_z, a_rows][:, :, None], 0, None) \
             * scaler[a_z, a_rows][:, :, None]
         cb = np.clip(vb - noise[b_z, b_rows][:, :, None], 0, None) \
@@ -475,7 +491,6 @@ def main() -> None:
             res = pair_quantiles(ca, cb, args.block, args.levels, tissue)
         else:
             res = pair_log_ratios(ca, cb, args.block, tissue)
-        share = float(tissue.mean())
         why = ""
         if res is None:
             why = "  -> no tissue, skipped"
@@ -483,7 +498,9 @@ def main() -> None:
             why = f"  -> below --min_pair_tissue {args.min_pair_tissue:g}, skipped"
             res = None
         print(f"  pair {i + 1}-{i + 2} ({n}/{len(selected)}): tissue "
-              f"{100 * share:4.1f}% of blocks{why}", flush=True)
+              f"{100 * share:4.1f}% of blocks"
+              + ("" if args.no_column_mask else f", {100 * kept:4.1f}% of columns kept")
+              + f"{why}", flush=True)
         if res is not None:
             data.append(res)
             used.append(i)
@@ -599,7 +616,9 @@ def main() -> None:
         phi, d, w, _ = fit_gain(everything)
     if not (w > 0).any():
         raise SystemExit("no (z, row) has enough tissue in enough pairs "
-                         f"(--min_blocks {args.min_blocks}, --min_pairs {args.min_pairs})")
+                         f"(--min_blocks {args.min_blocks}, --min_pairs {args.min_pairs}); "
+                         "if the column mask keeps few columns (see 'columns kept' "
+                         "above) raise --column_mask_fraction or use --no_column_mask")
     phi = phi - float(np.median(phi[valid]))
     clipped = float(np.mean(np.abs(phi) > args.max_correction))
     phi = np.clip(phi, -args.max_correction, args.max_correction)

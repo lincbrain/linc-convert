@@ -104,6 +104,21 @@ def block_tissue(raw: np.ndarray, noise: np.ndarray, sigma: np.ndarray, bz: int,
     return mean > k * np.maximum(sd, 1e-6)[:, :, None]
 
 
+def column_rule(tissue: np.ndarray, fraction: Optional[float]) -> np.ndarray:
+    """Column mask: use an x column for every row, or for none.
+
+    ``tissue`` is the (z, rows, x blocks) mask from ``block_tissue``. A block column
+    is kept for all rows if at most ``fraction`` of its (z, row) entries are not
+    tissue, and left out for all rows otherwise -- the rule ``create_corrections``
+    uses, so every row is judged on the same columns. ``fraction`` None leaves the
+    mask unchanged.
+    """
+    if fraction is None or tissue.size == 0:
+        return tissue
+    keep = (~tissue).mean(axis=(0, 1)) <= fraction
+    return np.broadcast_to(keep[None, None, :], tissue.shape).copy()
+
+
 def compare(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> Optional[dict]:
     """Agreement of two block arrays on the masked blocks."""
     if int(mask.sum()) < MIN_BLOCKS:
@@ -204,6 +219,11 @@ def main() -> None:
     p.add_argument("--block", type=int, default=4, help="block size (layer px)")
     p.add_argument("--min_x", type=float, help="full-res px")
     p.add_argument("--max_x", type=float)
+    p.add_argument("--column_mask_fraction", type=float, default=0.2,
+                   help="an x column is used for every row only if at most this share "
+                        "of its rows is background (as in create_corrections)")
+    p.add_argument("--no_column_mask", action="store_true",
+                   help="judge every block on its own instead")
     p.add_argument("--min_y", type=float, help="stitch window, full-res px")
     p.add_argument("--max_y", type=float)
     p.add_argument("--max_pairs", type=int, help="only the first N pairs of the window")
@@ -313,6 +333,8 @@ def main() -> None:
         # columns), not the map: a refined map carries a static offset, and measured
         # against it background would look like tissue
         mask = block_tissue(vb, np.median(tail_b, axis=2), sig_b, *b3)
+        if not args.no_column_mask:
+            mask = column_rule(mask, args.column_mask_fraction)
         if mask.mean() < MIN_TISSUE_SHARE:
             mask = np.zeros_like(mask)
             print(f"{i + 1:>2}-{i + 2:<2}  (no tissue in the overlap: skipped)")
