@@ -20,19 +20,19 @@ documentation = "https://lincbrain.github.io/linc-convert"
 keywords = ["python", "package", "template"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 packages = [{include = "linc_convert"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.12"
 cyclopts = "^3.0.0"
 numpy = "*"
 nibabel = "*"
-zarr = "^3.0.0"
-nifti-zarr = "^1.0.0rc7"
+zarr = "^3.4"
+nifti-zarr = ">=1.0.0rc9"
 tqdm = "*"
 dask = "*"
 universal_pathlib = "*"
@@ -45,10 +45,11 @@ scipy = { version = "*", optional = true }
 wkw = { version = "*", optional = true }
 tensorstore = { version = "*", optional = true }
 dask-image = { version = "*", optional = true }
+crc32c = { version = "*", optional = true }
 
 [tool.poetry.extras]
 df = ["glymur"]
-lsm = ["tifffile", "dask-image"]
+lsm = ["tifffile", "dask-image", "crc32c", "scipy"]
 psoct = ["h5py", "scipy"]
 wk = ["wkw"]
 ts = ["tensorstore"]

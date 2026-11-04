@@ -31,13 +31,11 @@ def multi_slice_mats(tmp_path):
 def test_oct_multi_slice(tmp_path, multi_slice_mats, zarr_version, driver):
     expected_zarr = f"data/oct_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
         multi_slice_mats,
         out=str(output),
         key="Psi_ObsLSQ",
         zarr_version=zarr_version,
-        ome_version=ome_version,
         overwrite=True,
         chunk=(64,),
         driver=driver,
@@ -53,13 +51,11 @@ def test_oct_multi_slice(tmp_path, multi_slice_mats, zarr_version, driver):
 def test_oct_multi_slice_regen_golden(tmp_path, multi_slice_mats, zarr_version):
     expected_zarr = f"data/oct_multi_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "multi_slice.nii.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
         multi_slice_mats,
         out=str(output),
         key="Psi_ObsLSQ",
         zarr_version=zarr_version,
-        ome_version=ome_version,
         overwrite=True,
         chunk=(64,),
         driver="zarr-python",
@@ -75,13 +71,11 @@ def test_oct_multi_slice_heavy(test_data_heavy_dir, tmp_path, zarr_version, driv
     files = glob.glob(str(multi_slice_heavy_data_dir / "*.mat"))
     files.sort()
     output_zarr = tmp_path / "output.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
         files,
         out=str(output_zarr),
         key="Psi_ObsLSQ",
         zarr_version=zarr_version,
-        ome_version=ome_version,
         overwrite=True,
         driver=driver,
     )
@@ -103,13 +97,11 @@ def test_oct_multi_slice_heavy_regen_golden(
     files = glob.glob(str(multi_slice_heavy_data_dir / "*.mat"))
     files.sort()
     output_zarr = tmp_path / "output.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     multi_slice.convert(
         files,
         out=str(output_zarr),
         key="Psi_ObsLSQ",
         zarr_version=zarr_version,
-        ome_version=ome_version,
         overwrite=True,
     )
     base = expected_zarr.with_suffix("")

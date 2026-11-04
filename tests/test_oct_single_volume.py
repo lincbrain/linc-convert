@@ -24,7 +24,6 @@ def single_volume_mat(tmp_path):
 @pytest.mark.parametrize(
         "zarr_version, expected_zarr",
         [
-            (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
             (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
         ],
 )
@@ -33,13 +32,11 @@ def test_oct_single_volume(
 ):
     output = tmp_path / "single_volume.nii.zarr"
 
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     single_volume.convert(
             str(single_volume_mat),
             out=str(output),
             key="volume",
             zarr_version=zarr_version,
-            ome_version=ome_version,
             overwrite=True,
             chunk=(64,),
             driver=driver,
@@ -55,7 +52,6 @@ def test_oct_single_volume(
 @pytest.mark.parametrize(
         "zarr_version, expected_zarr",
         [
-            (2, "data/oct_single_volume_zarr2.nii.zarr.zip"),
             (3, "data/oct_single_volume_zarr3.nii.zarr.zip"),
         ],
 )
@@ -66,13 +62,11 @@ def test_oct_single_volume_regen_golden(
     Rebuild single-volume golden archives. Only run with --regenerate-golden.
     """
     output = tmp_path / "single_volume.nii.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     single_volume.convert(
             str(single_volume_mat),
             out=str(output),
             key="volume",
             zarr_version=zarr_version,
-            ome_version=ome_version,
             overwrite=True,
             chunk=(64,),
             driver="zarr-python",

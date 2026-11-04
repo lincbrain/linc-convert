@@ -36,7 +36,7 @@ def driver(request):
     return request.param
 
 
-@pytest.fixture(scope="module", params=[2, 3])
+@pytest.fixture(scope="module", params=[3])
 def zarr_version(request):
     return request.param
 

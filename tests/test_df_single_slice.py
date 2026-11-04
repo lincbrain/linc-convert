@@ -25,12 +25,10 @@ def single_slice_jp2(tmp_path):
 def test_df_single_slice(tmp_path, single_slice_jp2, zarr_version, driver, max_load):
     expected_zarr = f"data/df_single_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "single_slice.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     single_slice.convert(
             str(single_slice_jp2),
             out=str(output),
             zarr_version=zarr_version,
-            ome_version=ome_version,
             driver=driver,
             max_load=max_load,
     )
@@ -41,12 +39,10 @@ def test_df_single_slice(tmp_path, single_slice_jp2, zarr_version, driver, max_l
 def test_df_single_slice_regen_golden(tmp_path, single_slice_jp2, zarr_version):
     expected_zarr = f"data/df_single_slice_zarr{zarr_version}.nii.zarr.zip"
     output = tmp_path / "single_slice.zarr"
-    ome_version = "0.4" if zarr_version == 2 else "0.5"
     single_slice.convert(
             str(single_slice_jp2),
             out=str(output),
             zarr_version=zarr_version,
-            ome_version=ome_version,
     )
     base = Path(expected_zarr).with_suffix("")
     shutil.make_archive(str(base), "zip", str(output))

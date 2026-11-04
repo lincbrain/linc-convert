@@ -10,7 +10,6 @@ import logging
 import os
 
 # externals
-import glymur
 from cyclopts import App
 
 # internals
@@ -62,6 +61,8 @@ def convert(
         NIfTI header related configuration
 
     """
+    import glymur
+
     general_config.set_default_name(os.path.splitext(inp)[0])
     omz = from_config(general_config.out, zarr_config)
     max_load = general_config.max_load
