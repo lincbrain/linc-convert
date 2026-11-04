@@ -327,6 +327,10 @@ def main() -> None:
                    help="an x column is used for every row only if at most this share "
                         "of its rows is background (the rule create_corrections uses); "
                         "makes --min_x/--max_x unnecessary")
+    p.add_argument("--min_pair_columns", type=float, default=0.3,
+                   help="with the column mask: a chunk pair is used only if at least this "
+                        "share of its x columns passes the mask (pairs at the edge of the "
+                        "sample, with little tissue, are left out)")
     p.add_argument("--no_column_mask", action="store_true",
                    help="judge every block on its own instead")
     p.add_argument("--min_y", type=float,
@@ -496,6 +500,9 @@ def main() -> None:
             why = "  -> no tissue, skipped"
         elif share < args.min_pair_tissue:
             why = f"  -> below --min_pair_tissue {args.min_pair_tissue:g}, skipped"
+            res = None
+        elif not args.no_column_mask and kept < args.min_pair_columns:
+            why = f"  -> below --min_pair_columns {args.min_pair_columns:g}, skipped"
             res = None
         print(f"  pair {i + 1}-{i + 2} ({n}/{len(selected)}): tissue "
               f"{100 * share:4.1f}% of blocks"
