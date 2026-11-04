@@ -79,3 +79,5 @@ SampleA
 SampleB
 ssh
 µm
+rsync
+zarrs
