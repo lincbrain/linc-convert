@@ -346,7 +346,7 @@ def create_corrections(
     offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
     column_mask: bool = True,
-    column_mask_fraction: float = 0.05,
+    column_mask_fraction: float = 0.2,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
@@ -459,7 +459,7 @@ def create_corrections(
         percentiles of top and bottom rows are not taken over the same pixels.
         Applies to the offset fit (percentiles) and to the plain multiplier
         calibration (row median).
-    column_mask_fraction : float, default=0.05
+    column_mask_fraction : float, default=0.2
         Share of rows (0-1) that may be masked in a column that is kept.
 
     Notes
