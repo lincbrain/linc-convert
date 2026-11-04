@@ -38,9 +38,42 @@ def apply_corrections(vol: da.Array, noise: np.ndarray,
     return da.clip(block, 0, 65535).astype(np.uint16)
 
 
+def keep_columns(columns: np.ndarray, threshold: float,
+                 max_below: float) -> np.ndarray:
+    """Which x columns are used for every row of a tile.
+
+    A pixel is "left out" (masked) if it is below ``threshold`` (or not finite).
+    Judged per pixel, a dim row loses more of its tissue pixels than a bright one
+    (same threshold, less signal), so the rows would be measured on different
+    pixels. Judged per column instead: if more than ``max_below`` of all the rows
+    of the tile are masked at an x column, that whole column is left out for every
+    row; otherwise the whole column is kept for every row, whatever a single row's
+    pixel there looks like. Every row is then measured on the same columns.
+
+    Parameters
+    ----------
+    columns : numpy.ndarray
+        Raw values, shape (Z, Y, n_columns).
+    threshold : float
+        Raw value below which a pixel is masked.
+    max_below : float
+        Largest share (0-1) of rows that may be masked in a kept column.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean (n_columns,): True for the kept columns.
+    """
+    ok = np.isfinite(columns) & (columns >= threshold)
+    below = 1.0 - ok.reshape(-1, columns.shape[2]).mean(axis=0)
+    return below <= max_below
+
+
 def calibrate_tile(vol: da.Array, background_length: int,
                    threshold_multiplier: float,
-                   x_stride: int = X_STRIDE) -> Tuple[np.ndarray, np.ndarray]:
+                   x_stride: int = X_STRIDE,
+                   column_mask_fraction: Optional[float] = None
+                   ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute the noise map and zy scaler map for one chunk and channel.
 
     Steps: noise map (``compute_noise_map``); threshold = median of the noise
@@ -61,6 +94,12 @@ def calibrate_tile(vol: da.Array, background_length: int,
     x_stride : int, default=X_STRIDE
         Every ``x_stride``-th x column feeds the per-row scaler median (use a
         smaller value on lower-resolution levels).
+    column_mask_fraction : float, optional
+        If given, the columns used are the same for every row: an x column is
+        left out for all rows if more than this share of the rows are below the
+        signal threshold there, and kept for all rows otherwise (``keep_columns``);
+        the row median is then taken over all kept columns. None keeps the pixel
+        by pixel threshold.
 
     Returns
     -------
@@ -74,13 +113,27 @@ def calibrate_tile(vol: da.Array, background_length: int,
     noise_map = compute_noise_map(vol, background_length)
 
     threshold = float(np.median(noise_map))
-    denoised = subtract_noise(vol, noise_map)
-    signal = da.where((vol >= threshold * threshold_multiplier) & da.isfinite(vol),
-                      denoised, np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        raw_scaler = np.asarray(
-            da.nanmedian(signal[:, :, ::x_stride], axis=2).compute())
+    if column_mask_fraction is not None:
+        raw = np.asarray(vol[:, :, ::x_stride].compute(), dtype=np.float32)
+        keep = keep_columns(raw, threshold * threshold_multiplier,
+                            column_mask_fraction)
+        print(f"  columns used for every row: {int(keep.sum())} of {keep.size}",
+              flush=True)
+        denoised = np.where(np.isfinite(raw),
+                            np.clip(raw - noise_map[:, :, None], 0, None), np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            raw_scaler = (np.nanmedian(denoised[:, :, keep], axis=2) if keep.any()
+                          else np.full(noise_map.shape, np.nan))
+    else:
+        denoised = subtract_noise(vol, noise_map)
+        signal = da.where(
+            (vol >= threshold * threshold_multiplier) & da.isfinite(vol),
+            denoised, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            raw_scaler = np.asarray(
+                da.nanmedian(signal[:, :, ::x_stride], axis=2).compute())
 
     # a row whose median signal is ~0 is as unusable as one with no data
     raw_scaler = np.where(np.isfinite(raw_scaler) & (raw_scaler > MIN_SCALER),

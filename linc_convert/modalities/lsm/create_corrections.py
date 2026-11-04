@@ -4,7 +4,9 @@ Builds the background-subtraction ("noise") and zy-correction ("scaler")
 TIFFs for one camera of one slice, from a fixed set of reference tiles.
 
 Local-only: it reads existing tile folders and writes TIFFs, nothing else (no
-``linc_convert`` needed). No tissue mask / MIP is used. The maths lives in
+``linc_convert`` needed). No tissue mask / MIP is used; instead every row of a tile
+is measured on the same x columns (``column_mask``, see ``create_corrections``). The
+maths lives in
 ``stitching_utils.corrections``.
 
     from create_corrections import create_corrections
@@ -208,8 +210,18 @@ def _offset_corrections(
             tile_stats = percentile_fit.sample_tile(
                 vol, background_length, zy_threshold_multiplier, settings)
             stats[ch].append(tile_stats)
+            used = (f"; {tile_stats.columns_kept} of {tile_stats.columns_total} "
+                    "sampled columns used for every row"
+                    if tile_stats.columns_total else "")
             print(f"  channel {ch}: tissue in {tile_stats.tissue_fraction:.0%} of "
-                  "the columns", flush=True)
+                  f"the columns{used}", flush=True)
+            if tile_stats.columns_total and \
+                    tile_stats.columns_kept < 0.1 * tile_stats.columns_total:
+                print(f"  WARNING: only {tile_stats.columns_kept} of "
+                      f"{tile_stats.columns_total} columns pass the column mask "
+                      f"(more than {settings.column_mask_fraction:.0%} of the rows "
+                      "are below the tissue threshold in the others); raise "
+                      "column_mask_fraction if the maps come out empty", flush=True)
 
     maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     report: Dict[str, Any] = {}
@@ -249,6 +261,7 @@ def _offset_corrections(
         "zy_threshold_multiplier": zy_threshold_multiplier,
         "fixed_offset": None if fixed_offset is None else float(fixed_offset),
         "settings": {"percentiles": [float(v) for v in settings.levels()],
+                     "column_mask_fraction": settings.column_mask_fraction,
                      "max_columns": settings.max_columns,
                      "max_offset_fraction": settings.max_offset_fraction,
                      "min_significance": settings.min_significance},
@@ -260,7 +273,7 @@ def _create_per_chunk(
     input_path: str, camera_id: int, slice_number: int, scan_parameters: dict,
     channels: List[str], chunk_numbers: Optional[List[int]], output_dir: str,
     background_length: int, zy_threshold_multiplier: float, force: bool,
-    layer: int = 0,
+    layer: int = 0, column_mask_fraction: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Calibrate each chunk on its own; see ``create_corrections(per_chunk)``."""
     tile_paths = discover_tile_paths(input_path, camera_id)
@@ -292,7 +305,7 @@ def _create_per_chunk(
         for ch in todo:
             vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
             noise_map, scaler_map = calibrate_tile(
-                vol, bg_len, zy_threshold_multiplier, x_stride)
+                vol, bg_len, zy_threshold_multiplier, x_stride, column_mask_fraction)
             write_tiff(results[ch][number]["noise"], noise_map)
             write_tiff(results[ch][number]["scaler"], scaler_map)
             print(f"  channel {ch}: noise_map mean={noise_map.mean():.2f}")
@@ -332,6 +345,8 @@ def create_corrections(
     fixed_offset: Optional[float] = None,
     offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
+    column_mask: bool = True,
+    column_mask_fraction: float = 0.05,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
@@ -435,6 +450,17 @@ def create_corrections(
     offset_min_significance : float, default=2.0
         Standard errors the offset must differ from 0 to be applied (0 applies
         any estimate that has one).
+    column_mask : bool, default=True
+        Measure every row of a tile on the same x columns. A pixel is masked if it
+        is below the tissue threshold; an x column is then masked for ALL rows if
+        more than ``column_mask_fraction`` of the tile's rows are masked there, and
+        kept for ALL rows otherwise. Without it every pixel is judged on its own,
+        so a dim row (weaker laser) loses more pixels than a bright one and the
+        percentiles of top and bottom rows are not taken over the same pixels.
+        Applies to the offset fit (percentiles) and to the plain multiplier
+        calibration (row median).
+    column_mask_fraction : float, default=0.05
+        Share of rows (0-1) that may be masked in a column that is kept.
 
     Notes
     -----
@@ -482,7 +508,8 @@ def create_corrections(
         _create_per_chunk(
             input_path, camera_id, slice_number, scan_parameters, channels,
             reference_tiles, output_dir, background_length,
-            zy_threshold_multiplier, force, layer)
+            zy_threshold_multiplier, force, layer,
+            column_mask_fraction if column_mask else None)
         return
 
     results: Dict[str, Dict[str, str]] = {}
@@ -527,7 +554,8 @@ def create_corrections(
             low=offset_low_percentile, high=offset_high_percentile,
             percentiles=tuple(offset_percentiles) if offset_percentiles else None,
             max_columns=offset_max_columns,
-            min_significance=offset_min_significance)
+            min_significance=offset_min_significance,
+            column_mask_fraction=column_mask_fraction if column_mask else None)
         settings.levels()      # validates the percentiles
         maps = _offset_corrections(
             tile_paths, reference_tiles, crops, todo, vertical_flip, layer, bg_len,
@@ -549,7 +577,8 @@ def create_corrections(
         for ch in todo:
             vol = crop_and_flip(tile, crops[ch], vertical_flip, layer)
             noise_map, scaler_map = calibrate_tile(
-                vol, bg_len, zy_threshold_multiplier, x_stride)
+                vol, bg_len, zy_threshold_multiplier, x_stride,
+                column_mask_fraction if column_mask else None)
             noises[ch].append(noise_map)
             scalers[ch].append(scaler_map)
             print(f"  channel {ch}: noise_map mean={noise_map.mean():.2f}")

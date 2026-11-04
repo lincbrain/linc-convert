@@ -48,6 +48,7 @@ import numpy as np
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     MIN_SCALER,
     compute_noise_map,
+    keep_columns,
 )
 
 BLOCK_ELEMENTS = 2 * 10 ** 7   # values read at a time while measuring the percentiles
@@ -77,6 +78,13 @@ class PercentileSettings:
         high percentile.
     min_significance : float
         Standard errors the estimate must differ from 0 to be applied.
+    column_mask_fraction : float, optional
+        If given, every row of a tile is measured on the same x columns: a column
+        is left out for all rows if more than this share of the tile's rows are
+        below the tissue threshold there, and kept for all rows otherwise (see
+        ``corrections.keep_columns``). The percentiles are then plain percentiles
+        of the kept columns. None: judge every pixel on its own, with the percentile
+        ranks adjusted for each tile's tissue fraction (the older method).
     """
     low: float = 30.0
     high: float = 70.0
@@ -85,6 +93,7 @@ class PercentileSettings:
     max_offset_fraction: float = 0.5
     min_significance: float = 2.0
     percentiles: Optional[Tuple[float, ...]] = None
+    column_mask_fraction: Optional[float] = None
 
     def levels(self) -> Tuple[float, ...]:
         """The percentiles used: ``percentiles`` if given, else ``(low, high)``."""
@@ -108,6 +117,8 @@ class TileStats:
     percentiles: np.ndarray
     weight: np.ndarray
     tissue_fraction: float
+    columns_kept: int = 0
+    columns_total: int = 0
 
 
 @dataclass
@@ -161,6 +172,10 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
     settings : PercentileSettings
         Fit settings.
 
+    With ``settings.column_mask_fraction`` set, all rows use the same columns
+    (``corrections.keep_columns``) and the percentiles are plain percentiles of
+    those columns (no rank adjustment is needed, every row has the same pixels).
+
     Returns
     -------
     TileStats
@@ -179,6 +194,28 @@ def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: flo
     levels = settings.levels()
     percentiles = np.full((len(levels), n_z, n_y), np.nan, dtype=np.float32)
     weight = np.zeros((n_z, n_y), dtype=np.float32)
+
+    if settings.column_mask_fraction is not None:
+        # one set of columns for every row: see corrections.keep_columns
+        allcols = np.asarray(columns.compute(), dtype=np.float32)
+        keep = keep_columns(allcols, threshold, settings.column_mask_fraction)
+        n_keep = int(keep.sum())
+        if n_keep < settings.min_pixels:
+            return TileStats(noise_map, percentiles, weight, 0.0, n_keep, n_cols)
+        kept = np.ascontiguousarray(allcols[:, :, keep])
+        del allcols
+        per_slab = max(1, BLOCK_ELEMENTS // max(1, n_y * n_keep))
+        for z0 in range(0, n_z, per_slab):
+            z1 = min(z0 + per_slab, n_z)
+            block = kept[z0:z1]
+            count = (np.isfinite(block) & (block >= threshold)).sum(axis=2)
+            values = np.quantile(block, np.array(levels) / 100.0,
+                                 axis=2).astype(np.float32)
+            good = (count >= settings.min_pixels) & np.all(values >= threshold, axis=0)
+            percentiles[:, z0:z1] = np.where(good[None], values, np.nan)
+            weight[z0:z1] = np.where(good, count / n_keep, 0.0)
+        return TileStats(noise_map, percentiles, weight, n_keep / n_cols,
+                         n_keep, n_cols)
 
     # the tile's typical tissue fraction, from a thin subsample of the rows
     coarse = np.asarray(columns[::8, ::8].compute(), dtype=np.float32)
