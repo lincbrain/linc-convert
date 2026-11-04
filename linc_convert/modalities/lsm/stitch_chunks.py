@@ -55,6 +55,21 @@ array is smaller, chunks outside the y range are not read, and the result equals
 the same slice of the full mosaic. x is the x of the sheared mosaic. z is never
 cropped.
 
+Bands (default): the output is written in bands, one band being one row of shards
+(the shard height in y, e.g. 2048 rows). Each band is the lazy join of the mosaic
+rows it covers (every chunk's blended overlap and own rows), cut along the shard grid
+and stored in one go, so every shard is written exactly once; chunks are re-read
+by the bands they cross. Bands cover different shards, so ``parallel_bands`` of them
+run at the same time. Checkpoints count finished bands (``last_band``) in order.
+``bands=False`` gives the older chunk-by-chunk writing, where a shard is rewritten
+by every chunk that crosses it and chunks run together only if they share no shards.
+
+Projections (default on): when a channel is stitched, its maximum and minimum
+intensity projections over z are written as float32 TIFFs
+``{out}/projections/slice{NNN}_{channel}_max.tiff`` and ``..._min.tiff`` (the min
+projection ignores zeros and is inverted against its 99th percentile). Existing
+files are not recomputed. They stay in ``out``, next to the channel's zarr folder.
+
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
 written, ``{general_config.out}/{channel}.stitch_checkpoint.json`` is updated.
 Running again with the same inputs reopens the output, skips the finished
@@ -72,7 +87,7 @@ import cyclopts
 import dask.array as da
 import numpy as np
 import yaml
-from dask.distributed import get_client, progress
+from dask.distributed import progress
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.blending import (
@@ -93,6 +108,7 @@ from linc_convert.modalities.lsm.stitching_utils.io import (
     open_tile_array,
     start_dask,
 )
+from linc_convert.modalities.lsm.stitching_utils.projections import write_projections
 from linc_convert.modalities.lsm.stitching_utils.registration import (
     load_pair_registration,
     load_tile_positions,
@@ -147,35 +163,12 @@ def _read_checkpoint(path: str, signature: dict) -> Optional[dict]:
     return state
 
 
-def _write_checkpoint(path: str, signature: dict, last_chunk: int,
-                      done: bool = False) -> None:
-    """Record that chunks ``0..last_chunk`` are completely written."""
-    text = json.dumps({"signature": signature, "last_chunk": last_chunk,
-                       "done": done})
+def _write_checkpoint(path: str, signature: dict, last: int, done: bool = False,
+                      key: str = "last_chunk", **extra: int) -> None:
+    """Record that units ``0..last`` (chunks, or bands with ``key="last_band"``)
+    are completely written. ``extra`` values are stored next to them."""
+    text = json.dumps({"signature": signature, key: last, "done": done, **extra})
     atomic_write(path, lambda tmp: tmp.write_text(text))
-
-
-def _store(arr: da.Array, target: object, regions: Tuple[slice, ...],
-           label: str) -> None:
-    """``da.store`` on the dask cluster, with a live progress bar.
-
-    Parameters
-    ----------
-    arr : dask.array.Array
-        Data to write.
-    target : object
-        Array (``__setitem__``) to write into.
-    regions : tuple of slice
-        Region of ``target`` that ``arr`` fills.
-    label : str
-        Printed before the bar.
-    """
-    print(f"  {label}", flush=True)
-    future = get_client().compute(
-        da.store(arr, target, regions=regions, lock=True, compute=False))
-    progress(future, notebook=False)
-    future.result()
-    print(flush=True)
 
 
 def _aligned_rechunk(arr: da.Array, start: Tuple[int, ...],
@@ -330,6 +323,123 @@ def _weights(scaler: np.ndarray, shear_z: float, z_out: int) -> np.ndarray:
     return sheared_weights(scaler[::-1], -shear_z, z_out)[::-1]
 
 
+def _stitch_bands(first_band: int, n: int, sy: int, z_out: int,
+                  mosaic: Tuple[int, int, int], window: Tuple[int, int, int, int],
+                  grid: Tuple[int, ...], target: object, client: object,
+                  positions_y: List[int], z_origin: List[int], tile_paths: List[str],
+                  open_tile, raw_shape: Tuple[int, int, int], chunk_maps,
+                  shear_x: float, shear_z: float, ckpt: str, signature: dict,
+                  parallel_bands: int) -> None:
+    """Write the mosaic band by band, a band being one row of shards.
+
+    Every band is the lazy join (along y) of the mosaic rows it covers: for each
+    chunk its blended overlap with the previous chunk and its own rows (a gap
+    between chunks is zeros). It is cut along the shard grid and stored in one
+    ``da.store``, so every shard is written exactly once and never read back.
+    Bands cover different shard rows, so up to ``parallel_bands`` of them can run at
+    the same time. A checkpoint records the last band of the finished prefix.
+    """
+    y0, y1, x0, x1 = window
+    gy = int(grid[1])
+    n_bands = -(-(y1 - y0) // gy)
+
+    # which rows come from where: (first row, end row, kind, chunk, overlap_prev)
+    segments = []
+    for k in range(n):
+        ystart = positions_y[k]
+        overlap_prev = max(sy - (ystart - positions_y[k - 1]), 0) if k > 0 else 0
+        overlap_next = (max(sy - (positions_y[k + 1] - ystart), 0)
+                        if k < n - 1 else 0)
+        if overlap_prev + overlap_next > sy:
+            raise ValueError(f"chunk {k}: overlaps ({overlap_prev} + "
+                             f"{overlap_next}) exceed the chunk height {sy}")
+        for kind, a, b in (("blend", ystart, ystart + overlap_prev),
+                           ("own", ystart + overlap_prev, ystart + sy - overlap_next)):
+            a, b = max(a, y0), min(b, y1)
+            if b > a:
+                segments.append((a, b, kind, k, overlap_prev))
+
+    tiles: dict = {}
+
+    def tile(k: int) -> Tuple[da.Array, np.ndarray]:
+        """Corrected, sheared chunk ``k`` (lazy) and its blend weights."""
+        if k not in tiles:
+            raw = open_tile(tile_paths[k])
+            if raw.shape != raw_shape:
+                raise ValueError(f"{os.path.basename(tile_paths[k])} has shape "
+                                 f"{raw.shape}, expected {raw_shape}")
+            noise, scaler, weights = chunk_maps(k)
+            tiles[k] = (corrected_tile(raw, noise, scaler, shear_x, shear_z),
+                        weights)
+        return tiles[k]
+
+    def zeros(rows: int) -> da.Array:
+        return da.zeros((mosaic[0], rows, x1 - x0), dtype=np.uint16,
+                        chunks=(mosaic[0], rows, x1 - x0))
+
+    def band_array(band: int) -> Tuple[da.Array, str]:
+        lo, hi = y0 + band * gy, min(y0 + (band + 1) * gy, y1)
+        pieces, row, used = [], lo, []
+        for a, b, kind, k, overlap_prev in segments:
+            a, b = max(a, lo), min(b, hi)
+            if b <= a:
+                continue
+            if a > row:
+                pieces.append(zeros(a - row))
+            ystart, zstart = positions_y[k], z_origin[k]
+            cur, cur_w = tile(k)
+            if kind == "blend":
+                prev, prev_w = tile(k - 1)
+                blended = blend_overlap(prev, cur, prev_w, cur_w, z_origin[k - 1],
+                                        zstart, mosaic[0], overlap_prev)
+                pieces.append(blended[:, a - ystart:b - ystart, x0:x1])
+            else:
+                own = cur[:, a - ystart:b - ystart, x0:x1]
+                if zstart > 0 or zstart + z_out < mosaic[0]:
+                    # same z extent as the other pieces; nothing else lies in
+                    # these rows, so the padding is zeros, as in the empty output
+                    own = da.pad(own, ((zstart, mosaic[0] - zstart - z_out),
+                                       (0, 0), (0, 0)))
+                pieces.append(own)
+            row = b
+            if k not in used:
+                used.append(k)
+        if row < hi:
+            pieces.append(zeros(hi - row))
+        data = pieces[0] if len(pieces) == 1 else da.concatenate(pieces, axis=1)
+        label = f"chunks {min(used) + 1}..{max(used) + 1}" if used else "no chunk"
+        return data, label
+
+    pending: List[Tuple[int, list]] = []
+
+    def finish_oldest() -> None:
+        band, futures = pending.pop(0)
+        print(f"  waiting for band {band + 1}/{n_bands}", flush=True)
+        progress(futures, notebook=False)
+        for fut in futures:
+            fut.result()
+        print(flush=True)
+        _write_checkpoint(ckpt, signature, band, key="last_band", band_rows=gy)
+
+    for band in range(first_band, n_bands):
+        data, label = band_array(band)
+        start = band * gy
+        data = _aligned_rechunk(data, (0, start, 0), grid)
+        region = (slice(0, mosaic[0]), slice(start, start + data.shape[1]),
+                  slice(0, x1 - x0))
+        stores = da.store([data], [target], regions=[region], lock=True,
+                          compute=False)
+        futures = client.compute(
+            list(stores) if isinstance(stores, (list, tuple)) else [stores])
+        print(f"band {band + 1}/{n_bands}: rows {start}:{start + data.shape[1]} from "
+              f"{label} ({len(pending)} other band(s) in flight)", flush=True)
+        pending.append((band, futures))
+        while len(pending) >= max(1, int(parallel_bands)):
+            finish_oldest()
+    while pending:
+        finish_oldest()
+
+
 def stitch_channel(
     tile_paths: List[str], channel: str, crop: Crop,
     vertical_flip: bool, shear_x: float, shear_z: float, positions_y: List[int],
@@ -338,6 +448,8 @@ def stitch_channel(
     per_chunk_corrections: bool = False, layer: int = 0,
     y_range: Tuple[Optional[int], Optional[int]] = (None, None),
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
+    memory_gb: int = 64, parallel_chunks: int = 2, bands: bool = True,
+    parallel_bands: int = 2,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -380,6 +492,18 @@ def stitch_channel(
         ``(lo, hi)`` window of the mosaic to write, in pixels of ``layer``
         (``hi`` exclusive; None leaves that side open). Values are clipped to
         the mosaic. Only the window is written; the output array has its size.
+    memory_gb : int, default=64
+        Total memory this process and its dask workers may use together. The
+        number of worker threads is reduced if tasks writing one output block
+        (a shard) could not all fit; see ``start_dask``.
+    parallel_chunks : int, default=2
+        Chunk mode only (``bands=False``): how many chunks are computed and
+        written at the same time.
+    bands : bool, default=True
+        Write the mosaic in bands of whole shard rows instead of chunk by chunk
+        (see the module docstring).
+    parallel_bands : int, default=2
+        Band mode only: how many bands are computed and written at the same time.
 
     Notes
     -----
@@ -452,6 +576,8 @@ def stitch_channel(
                  "per_chunk_corrections": bool(per_chunk_corrections)}
     if windowed:
         signature["window"] = [y0, y1, x0, x1]
+    if bands:
+        signature["mode"] = "bands"
     ckpt = _checkpoint_path(out_dir)
     state = _read_checkpoint(ckpt, signature)
     if state is not None and not os.path.isdir(out_dir):
@@ -460,6 +586,14 @@ def stitch_channel(
         print(
             f"channel {channel}: already stitched (checkpoint {ckpt}); skipping")
         return
+
+    group = array = None
+    if state is not None:
+        group = ZarrPythonGroup.open(out_dir, mode="r+")
+        array = group["0"]
+        if bands and state.get("band_rows") != int((array.shards or array.chunks)[1]):
+            print("  the shard height changed since the checkpoint; starting over")
+            state, group, array = None, None, None
 
     if state is None:
         # fresh start: discard any partial output of an unfinished earlier run
@@ -470,11 +604,13 @@ def stitch_channel(
         array = group.create_array("0", shape=fullshape, zarr_config=zarr_config,
                                    dtype=np.uint16)
         start = 0
+    elif bands:
+        start = int(state["last_band"]) + 1
+        print(f"channel {channel}: resuming after band {start - 1} "
+              f"({start} band(s) written)")
     else:
-        # resume: reopen the output and rebuild the last finished chunk lazily
-        # (nothing is written for it) so the next blend can use it
-        group = ZarrPythonGroup.open(out_dir, mode="r+")
-        array = group["0"]
+        # resume: the last finished chunk is rebuilt lazily below (nothing is
+        # written for it) so the next blend can use it
         start = int(state["last_chunk"]) + 1
         print(f"channel {channel}: resuming after chunk {start - 1} "
               f"({start}/{n} written)")
@@ -483,66 +619,137 @@ def stitch_channel(
     # array (a wrapper with a recursive __getattr__ cannot be unpickled)
     target = getattr(array, "_array", array)
 
-    prev: Optional[da.Array] = None
-    prev_weights: Optional[np.ndarray] = None
-    if start > 0:
-        raw = open_tile(tile_paths[start - 1])
-        if raw.shape != raw_shape:
-            raise ValueError(f"{os.path.basename(tile_paths[start - 1])} has shape "
-                             f"{raw.shape}, expected {raw_shape}")
-        noise, scaler, prev_weights = chunk_maps(start - 1)
-        prev = corrected_tile(raw, noise, scaler, shear_x, shear_z)
+    grid = tuple(int(g) for g in (array.shards or array.chunks))
+    block = [min(g, n) for g, n in zip(grid, fullshape)]
+    block_gib = float(np.prod(block)) * 2 / 2 ** 30                  # uint16
+    # a store task holds the block and the pieces it is merged from, plus the
+    # float32 working copy of the raw chunk pieces it reads; a band block also
+    # holds the float32 blend of the overlap rows
+    task_gb = (4.0 if bands else 2.5) * block_gib + 0.5
+    client = start_dask(memory_gb, task_gb=task_gb,
+                        reserve_gb=max(2.0, 0.1 * memory_gb))
+    try:
+        if bands:
+            _stitch_bands(
+                start, n, sy, z_out, mosaic, (y0, y1, x0, x1), grid, target, client,
+                positions_y, z_origin, tile_paths, open_tile, raw_shape, chunk_maps,
+                shear_x, shear_z, ckpt, signature, parallel_bands)
+            group.generate_pyramid(levels=zarr_config.levels)
+            group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
+            _write_checkpoint(ckpt, signature, -(-(y1 - y0) // grid[1]) - 1,
+                              done=True, key="last_band", band_rows=grid[1])
+            return
+        prev: Optional[da.Array] = None
+        prev_weights: Optional[np.ndarray] = None
+        if start > 0:
+            raw = open_tile(tile_paths[start - 1])
+            if raw.shape != raw_shape:
+                raise ValueError(f"{os.path.basename(tile_paths[start - 1])} has "
+                                 f"shape {raw.shape}, expected {raw_shape}")
+            noise, scaler, prev_weights = chunk_maps(start - 1)
+            prev = corrected_tile(raw, noise, scaler, shear_x, shear_z)
 
-    for index in range(start, n):
-        path = tile_paths[index]
-        raw = open_tile(path)
-        if raw.shape != raw_shape:
-            raise ValueError(f"{os.path.basename(path)} has shape {raw.shape}, "
-                             f"expected {raw_shape}")
-        ystart, zstart = positions_y[index], z_origin[index]
-        overlap_prev = max(
-            sy - (ystart - positions_y[index - 1]), 0) if index > 0 else 0
-        overlap_next = (max(sy - (positions_y[index + 1] - ystart), 0)
-                        if index < n - 1 else 0)
-        if overlap_prev + overlap_next > sy:
-            raise ValueError(f"chunk {index}: overlaps ({overlap_prev} + "
-                             f"{overlap_next}) exceed the chunk height {sy}")
-        print(f"[{index + 1}] {os.path.basename(path)}  y={ystart} z={zstart}  "
-              f"overlap prev/next = {overlap_prev}/{overlap_next}")
+        # chunks are independent (every blend is built lazily from the corrected
+        # chunks, nothing reads the output), so up to ``parallel_chunks`` of them are
+        # computed at the same time, with one hard rule: two chunks are in flight
+        # together only if they write to different rows of shards. Writing part of a
+        # shard reads, changes and rewrites the whole shard, so two writers of one
+        # shard would overwrite each other's rows. (With shards taller than the
+        # chunk step, as at layer 0, neighbouring chunks share shards and are
+        # therefore written one after another.) Checkpoints go in chunk order:
+        # chunk k is recorded only after chunks 0..k are written.
+        pending: List[Tuple[int, list, Tuple[int, int]]] = []
 
-        noise, scaler, cur_weights = chunk_maps(index)
-        cur = corrected_tile(raw, noise, scaler, shear_x, shear_z)
-        grid = array.shards or array.chunks
-        if overlap_prev > 0:
-            r0, r1 = max(ystart, y0), min(ystart + overlap_prev, y1)
+        def finish_oldest() -> None:
+            idx, futures, _ = pending.pop(0)
+            if futures:
+                print(f"  waiting for chunk {idx + 1}/{n}", flush=True)
+                progress(futures, notebook=False)
+                for fut in futures:
+                    fut.result()
+                print(flush=True)
+            _write_checkpoint(ckpt, signature, idx)
+
+        for index in range(start, n):
+            path = tile_paths[index]
+            raw = open_tile(path)
+            if raw.shape != raw_shape:
+                raise ValueError(f"{os.path.basename(path)} has shape {raw.shape}, "
+                                 f"expected {raw_shape}")
+            ystart, zstart = positions_y[index], z_origin[index]
+            overlap_prev = max(
+                sy - (ystart - positions_y[index - 1]), 0) if index > 0 else 0
+            overlap_next = (max(sy - (positions_y[index + 1] - ystart), 0)
+                            if index < n - 1 else 0)
+            if overlap_prev + overlap_next > sy:
+                raise ValueError(f"chunk {index}: overlaps ({overlap_prev} + "
+                                 f"{overlap_next}) exceed the chunk height {sy}")
+            print(f"[{index + 1}] {os.path.basename(path)}  y={ystart} z={zstart}  "
+                  f"overlap prev/next = {overlap_prev}/{overlap_next}")
+
+            noise, scaler, cur_weights = chunk_maps(index)
+            cur = corrected_tile(raw, noise, scaler, shear_x, shear_z)
+            # rows of the mosaic this chunk writes: its blended overlap with the
+            # previous chunk, then its own rows. They are contiguous, so they are
+            # joined and written as one array: every shard they touch is written by
+            # exactly one task.
+            parts, rows_written, full_z = [], None, False
+            if overlap_prev > 0:
+                r0, r1 = max(ystart, y0), min(ystart + overlap_prev, y1)
+                if r1 > r0:
+                    assert prev is not None and prev_weights is not None
+                    blended = blend_overlap(prev, cur, prev_weights, cur_weights,
+                                            z_origin[index - 1],
+                                            zstart, mosaic[0], overlap_prev)
+                    parts.append(blended[:, r0 - ystart:r1 - ystart, x0:x1])
+                    rows_written, full_z = (r0, r1), True
+            first_row, last_row = overlap_prev, sy - overlap_next
+            r0, r1 = max(ystart + first_row, y0), min(ystart + last_row, y1)
             if r1 > r0:
-                assert prev is not None and prev_weights is not None
-                blended = blend_overlap(prev, cur, prev_weights, cur_weights,
-                                        z_origin[index - 1],
-                                        zstart, mosaic[0], overlap_prev)
-                blended = blended[:, r0 - ystart:r1 - ystart, x0:x1]
-                blended = _aligned_rechunk(blended, (0, r0 - y0, 0), grid)
-                _store(blended, target,
-                       (slice(0, mosaic[0]), slice(r0 - y0, r1 - y0),
-                        slice(0, x1 - x0)),
-                       f"chunk {index + 1}/{n}: blended overlap ({r1 - r0} rows)")
-        first_row, last_row = overlap_prev, sy - overlap_next
-        r0, r1 = max(ystart + first_row, y0), min(ystart + last_row, y1)
-        if r1 > r0:
-            write_vals = cur[:, r0 - ystart:r1 - ystart, x0:x1]
-            write_vals = _aligned_rechunk(write_vals, (zstart, r0 - y0, 0), grid)
-            _store(write_vals, target,
-                   (slice(zstart, zstart + z_out), slice(r0 - y0, r1 - y0),
-                    slice(0, x1 - x0)),
-                   f"chunk {index + 1}/{n}: own rows ({r1 - r0})")
-        elif windowed:
-            print("  outside the requested y range; nothing to write", flush=True)
-        prev, prev_weights = cur, cur_weights
-        _write_checkpoint(ckpt, signature, index)
+                own = cur[:, r0 - ystart:r1 - ystart, x0:x1]
+                if parts:
+                    # same z extent as the blended rows (nothing else is in these
+                    # rows, so the padding is zeros, as in the empty output)
+                    own = da.pad(own, ((zstart, mosaic[0] - zstart - z_out),
+                                       (0, 0), (0, 0)))
+                parts.append(own)
+                rows_written = (rows_written[0] if rows_written else r0, r1)
+            elif windowed:
+                print("  outside the requested y range; nothing to write", flush=True)
+            futures: list = []
+            shard_rows = (0, -1)
+            if parts:
+                r0, r1 = rows_written
+                data = parts[0] if len(parts) == 1 else da.concatenate(parts, axis=1)
+                region_z = (slice(0, mosaic[0]) if full_z
+                            else slice(zstart, zstart + z_out))
+                data = _aligned_rechunk(data, (region_z.start, r0 - y0, 0), grid)
+                shard_rows = ((r0 - y0) // grid[1], (r1 - y0 - 1) // grid[1])
+                # wait for every chunk that writes to one of the same shard rows
+                while any(not (shard_rows[1] < p[2][0] or shard_rows[0] > p[2][1])
+                          for p in pending):
+                    finish_oldest()
+                futures = client.compute(da.store(
+                    [data], [target], regions=[(region_z, slice(r0 - y0, r1 - y0),
+                                                slice(0, x1 - x0))],
+                    lock=True, compute=False))
+                futures = list(futures) if isinstance(futures, (list, tuple)) \
+                    else [futures]
+                print(f"  chunk {index + 1}/{n}: submitted rows {r0 - y0}:{r1 - y0} "
+                      f"(shard rows {shard_rows[0]}..{shard_rows[1]}; "
+                      f"{len(pending)} other chunk(s) in flight)", flush=True)
+            pending.append((index, futures, shard_rows))
+            prev, prev_weights = cur, cur_weights
+            while len(pending) >= max(1, int(parallel_chunks)):
+                finish_oldest()
+        while pending:
+            finish_oldest()
 
-    group.generate_pyramid(levels=zarr_config.levels)
-    group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
-    _write_checkpoint(ckpt, signature, n - 1, done=True)
+        group.generate_pyramid(levels=zarr_config.levels)
+        group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
+        _write_checkpoint(ckpt, signature, n - 1, done=True)
+    finally:
+        client.close()
 
 
 # --------------------------------------------------------------------------
@@ -565,12 +772,17 @@ def stitch_chunks(
     corrections_dir: str,
     *,
     voxel_size: List[float] = [1, 1, 1],
-    memory_gb: int = 64,
+    memory_gb: int = 128,
     all_chunks: bool = False,
     dz_as_shear_z: bool = False,
     per_chunk_registration: bool = False,
     per_chunk_corrections: bool = False,
     restart: bool = False,
+    parallel_chunks: int = 2,
+    bands: bool = True,
+    parallel_bands: int = 4,
+    projections: bool = True,
+    projections_dir: Optional[str] = None,
     layer: int = 0,
     min_x: Optional[int] = None,
     max_x: Optional[int] = None,
@@ -603,7 +815,19 @@ def stitch_chunks(
     voxel_size : list of float
         Voxel size in x, y, z (microns) for the output metadata.
     memory_gb : int, default=64
-        Total memory, in GB, that the dask cluster may use.
+        Total memory, in GB, that this process and its dask workers may use
+        together (a tenth, at least 2 GB, is kept for this process). Worker
+        threads are reduced if tasks writing one shard could not all fit, so
+        a smaller shard size allows more threads.
+    bands : bool, default=True
+        Write the mosaic in bands of whole shard rows (every shard is written once)
+        instead of chunk by chunk. See the module docstring.
+    parallel_bands : int, default=2
+        With ``bands``: how many bands are computed and written at the same time.
+    parallel_chunks : int, default=2
+        Without ``bands``: how many chunks are computed and written at the same
+        time, only when they write to different shard rows (1 = one chunk after
+        another). Checkpoints still follow the chunk order.
     all_chunks : bool, default=False
         Stitch every chunk of the camera (sorted), ignoring the ``chunks`` list
         in the register_chunks YAML. Use it when the registration was run on a
@@ -628,6 +852,12 @@ def stitch_chunks(
         with ``per_chunk``), also used for each chunk's blend confidence.
     restart : bool, default=False
         Ignore any checkpoints and rewrite every channel from scratch.
+    projections : bool, default=True
+        After a channel is stitched, write its maximum and minimum intensity
+        projection over z as TIFFs (see the module docstring). Projections that
+        already exist are skipped, also when the stitch itself was already done.
+    projections_dir : str, optional
+        Where the projection TIFFs go; default ``{out}/projections``.
     layer : int, default=0
         Pyramid level of the raw chunks to stitch (0 = full resolution), for
         quick low-resolution test runs. Everything is scaled to the level: the
@@ -689,24 +919,25 @@ def stitch_chunks(
                 f"No register_chunks result for channel '{channel}': "
                 f"{coords_path.format(channel=channel)}")
 
-    client = start_dask(memory_gb)
-    try:
-        for channel in channels:
-            if restart:
-                ckpt = _checkpoint_path(
-                    os.path.join(general_config.out, channel))
-                if os.path.exists(ckpt):
-                    os.remove(ckpt)
-            coords = coords_path.format(channel=channel)
-            tile_paths = _resolve_tile_paths(input_path, camera_id, coords,
-                                             all_chunks)
-            positions_y, positions_z, shear_z = _layout(
-                coords, tile_paths, channel, dz_as_shear_z,
-                per_chunk_registration, layer)
-            stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
-                           shear_z, positions_y, positions_z, corrections_dir,
-                           os.path.join(general_config.out, channel),
-                           voxel_size, zarr_config, per_chunk_corrections, layer,
-                           y_range, x_range)
-    finally:
-        client.close()
+    for channel in channels:
+        if restart:
+            ckpt = _checkpoint_path(os.path.join(general_config.out, channel))
+            if os.path.exists(ckpt):
+                os.remove(ckpt)
+        coords = coords_path.format(channel=channel)
+        tile_paths = _resolve_tile_paths(input_path, camera_id, coords,
+                                         all_chunks)
+        positions_y, positions_z, shear_z = _layout(
+            coords, tile_paths, channel, dz_as_shear_z,
+            per_chunk_registration, layer)
+        stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
+                       shear_z, positions_y, positions_z, corrections_dir,
+                       os.path.join(general_config.out, channel),
+                       voxel_size, zarr_config, per_chunk_corrections, layer,
+                       y_range, x_range, memory_gb, parallel_chunks, bands,
+                       parallel_bands)
+        if projections:
+            write_projections(
+                os.path.join(general_config.out, channel),
+                projections_dir or os.path.join(general_config.out, "projections"),
+                slice_number, channel, memory_gb)

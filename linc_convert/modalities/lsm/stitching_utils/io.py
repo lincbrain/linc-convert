@@ -6,6 +6,7 @@ from glob import glob
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Union, cast
 
+import dask
 import dask.array as da
 import numpy as np
 import tifffile
@@ -159,19 +160,33 @@ def write_tiff(path: Union[str, Path], array: np.ndarray) -> None:
         tmp, array.astype(np.float32)))
 
 
-def start_dask(memory_gb: int, max_threads_per_worker: int = 8) -> Client:
+def start_dask(memory_gb: int, max_threads_per_worker: int = 8,
+               task_gb: Optional[float] = None, reserve_gb: float = 0.0) -> Client:
     """Start a local dask cluster that is limited to a total amount of memory.
 
     The CPU count comes from ``SLURM_CPUS_PER_TASK``, else the CPUs the process
     may use. Workers and threads are chosen from it automatically.
 
+    Memory is kept under ``memory_gb`` in three ways. The workers share
+    ``memory_gb - reserve_gb`` (the rest is for this process, which holds the
+    results it gathers). Every worker pauses new tasks at 75% of its limit and
+    spills finished results to disk before that. And with ``task_gb`` the number of
+    threads is capped so that tasks running at once cannot need more than 70% of
+    the workers' memory together (dask cannot split a running task, so this is the
+    only way to bound it).
+
     Parameters
     ----------
     memory_gb : int
-        Total memory, in GB, that dask may use across all workers.
+        Total memory, in GB, that this process and dask together may use.
     max_threads_per_worker : int, default=8
         Upper bound on threads in one worker; more CPUs are split over more
         workers.
+    task_gb : float, optional
+        Estimated peak memory of the largest task, in GB. Fewer threads are used
+        if all CPUs running such tasks would not fit.
+    reserve_gb : float, default=0
+        Memory kept for the calling process (not given to the workers).
 
     Returns
     -------
@@ -181,23 +196,43 @@ def start_dask(memory_gb: int, max_threads_per_worker: int = 8) -> Client:
     Raises
     ------
     ValueError
-        If ``memory_gb`` is not a positive integer.
+        If ``memory_gb`` is not a positive integer, or ``reserve_gb`` leaves less
+        than 1 GB for the workers.
     """
     if int(memory_gb) != memory_gb or memory_gb < 1:
         raise ValueError(
             f"memory_gb must be a positive integer, got {memory_gb!r}")
+    usable = float(memory_gb) - float(reserve_gb)
+    if usable < 1:
+        raise ValueError(f"memory_gb {memory_gb} minus reserve_gb {reserve_gb:.1f} "
+                         "leaves less than 1 GB for the dask workers")
     if "SLURM_CPUS_PER_TASK" in os.environ:
         n_cpus = int(os.environ["SLURM_CPUS_PER_TASK"])
     elif hasattr(os, "sched_getaffinity"):
         n_cpus = len(os.sched_getaffinity(0))
     else:
         n_cpus = os.cpu_count() or 1
+    n_threads = n_cpus
+    if task_gb:
+        n_threads = max(1, min(n_cpus, int(0.7 * usable // float(task_gb))))
     n_workers = max(
-        1, min(math.ceil(n_cpus / max_threads_per_worker), int(memory_gb)))
-    threads = max(1, n_cpus // n_workers)
+        1, min(math.ceil(n_threads / max_threads_per_worker), int(usable)))
+    threads = max(1, n_threads // n_workers)
+    # spill early and pause new tasks before a worker gets near its limit;
+    # terminate stays as a last resort
+    dask.config.set({"distributed.worker.memory.target": 0.55,
+                     "distributed.worker.memory.spill": 0.65,
+                     "distributed.worker.memory.pause": 0.75,
+                     "distributed.worker.memory.terminate": 0.95})
     cluster = LocalCluster(n_workers=n_workers, threads_per_worker=threads,
-                           memory_limit=f"{memory_gb / n_workers:.3f}GiB",
+                           memory_limit=f"{usable / n_workers:.3f}GiB",
                            dashboard_address=None)
+    note = ""
+    if n_threads < n_cpus:
+        note = (f"; {n_cpus - n_threads} of {n_cpus} CPUs left idle because a task "
+                f"may need up to {task_gb:.1f} GiB")
     print(f"dask: {n_workers} worker(s) x {threads} thread(s), "
-          f"{memory_gb / n_workers:.1f} GiB each ({memory_gb} GiB total)")
+          f"{usable / n_workers:.1f} GiB each ({usable:.0f} GiB of the {memory_gb} "
+          f"GiB total; {reserve_gb:.1f} GiB kept for the main process){note}",
+          flush=True)
     return Client(cluster)
