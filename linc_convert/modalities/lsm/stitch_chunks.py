@@ -457,7 +457,7 @@ def stitch_channel(
     per_chunk_corrections: bool = False, layer: int = 0,
     y_range: Tuple[Optional[int], Optional[int]] = (None, None),
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
-    memory_gb: int = 64, parallel_chunks: int = 2, bands: bool = True,
+    memory_gb: int = 128, parallel_chunks: int = 2, bands: bool = True,
     parallel_bands: int = 2,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
@@ -501,7 +501,7 @@ def stitch_channel(
         ``(lo, hi)`` window of the mosaic to write, in pixels of ``layer``
         (``hi`` exclusive; None leaves that side open). Values are clipped to
         the mosaic. Only the window is written; the output array has its size.
-    memory_gb : int, default=64
+    memory_gb : int, default=128
         Total memory this process and its dask workers may use together. The
         number of worker threads is reduced if tasks writing one output block
         (a shard) could not all fit; see ``start_dask``.
@@ -781,7 +781,7 @@ def stitch_chunks(
     corrections_dir: str,
     *,
     voxel_size: List[float] = [1, 1, 1],
-    memory_gb: int = 64,
+    memory_gb: int = 128,
     all_chunks: bool = False,
     dz_as_shear_z: bool = False,
     per_chunk_registration: bool = False,
@@ -823,7 +823,7 @@ def stitch_chunks(
         Folder written by ``create_corrections``.
     voxel_size : list of float
         Voxel size in x, y, z (microns) for the output metadata.
-    memory_gb : int, default=64
+    memory_gb : int, default=128
         Total memory, in GB, that this process and its dask workers may use
         together (a tenth, at least 2 GB, is kept for this process). Worker
         threads are reduced if tasks writing one shard could not all fit, so
