@@ -236,6 +236,11 @@ def _offset_corrections(
         elif fit.offset == 0.0:
             reason = (" (estimate not significant or not inside the search range, "
                       "so 0)")
+        if fit.excluded_levels:
+            print(f"channel {ch}: percentile levels {fit.excluded_levels} left out "
+                  "(their rows do not follow the other levels' multipliers; residuals "
+                  + ", ".join(f"{l:g}:{r:.3f}" for l, r in
+                              zip(fit.levels, fit.level_residuals)) + ")", flush=True)
         print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
               f"{fit.standard_error:.2f} (standard error, search range +-"
               f"{fit.search_limit:.1f}); applied offset {fit.offset:+.2f}{reason}")
@@ -247,6 +252,10 @@ def _offset_corrections(
             "tile_estimates_leave_one_out": {
                 int(t): float(o) for t, o in
                 zip(reference_tiles, fit.tile_estimates)},
+            "percentile_levels": [float(v) for v in fit.levels],
+            "excluded_levels": [float(v) for v in fit.excluded_levels],
+            "level_residuals": [None if not np.isfinite(v) else float(v)
+                                for v in fit.level_residuals],
             "row_effect_F_at_zero": float(fit.objective_zero),
             "row_effect_F_at_estimate": float(fit.objective_estimate),
             "rows_used_per_tile": {
