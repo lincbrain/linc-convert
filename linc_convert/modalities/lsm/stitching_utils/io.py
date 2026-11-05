@@ -50,8 +50,24 @@ def discover_tile_paths(input_path: str, camera_id: int) -> List[str]:
     return paths
 
 
+def coarse_chunks(stored: Sequence[int], shape: Sequence[int],
+                  target: Sequence[int]) -> Tuple[int, ...]:
+    """Dask block shape: the largest multiple of the stored chunks up to ``target``.
+
+    Whole multiples of the stored chunks keep every read aligned; blocks never
+    exceed the array. Fewer, larger blocks mean far fewer dask tasks, which keeps
+    the task graph (and the scheduler) manageable at full resolution.
+    """
+    out = []
+    for c, n, t in zip(stored, shape, target):
+        c = max(int(c), 1)
+        out.append(int(min(n, max(c, (int(t) // c) * c))))
+    return tuple(out)
+
+
 def open_tile_array(path: PathLike, layer: int = 0,
-                    chunks: Optional[Tuple[int, ...]] = None) -> da.Array:
+                    chunks: Optional[Tuple[int, ...]] = None,
+                    block: Optional[Sequence[int]] = None) -> da.Array:
     """Open one pyramid level of a chunk as a lazy dask array.
 
     Parameters
@@ -62,6 +78,10 @@ def open_tile_array(path: PathLike, layer: int = 0,
         Pyramid level (0 = full resolution).
     chunks : tuple of int, optional
         Dask chunks; default is the stored zarr chunks.
+    block : sequence of int, optional
+        Target dask block shape (z, y, x); used instead of the stored chunks,
+        rounded down to a multiple of them (see ``coarse_chunks``). Ignored if
+        ``chunks`` is given.
 
     Returns
     -------
@@ -78,6 +98,8 @@ def open_tile_array(path: PathLike, layer: int = 0,
         raise FileNotFoundError(
             f"raw chunk not found: {path} (this code only reads existing files)")
     arr = cast(zarr.Array, zarr.open_group(str(path), mode="r")[str(layer)])
+    if chunks is None and block is not None:
+        chunks = coarse_chunks(arr.chunks, arr.shape, block)
     return da.asarray(arr, chunks=chunks or arr.chunks)
 
 
@@ -220,7 +242,12 @@ def start_dask(memory_gb: int, max_threads_per_worker: int = 8,
     threads = max(1, n_threads // n_workers)
     # spill early and pause new tasks before a worker gets near its limit;
     # terminate stays as a last resort
-    dask.config.set({"distributed.worker.memory.target": 0.55,
+    # the scheduler runs inside this process: while it builds or ships a large graph
+    # it can stall for minutes, and the default 30 s tcp timeout would then drop the
+    # client and cancel every running write
+    dask.config.set({"distributed.comm.timeouts.tcp": "900s",
+                     "distributed.comm.timeouts.connect": "900s",
+                     "distributed.worker.memory.target": 0.55,
                      "distributed.worker.memory.spill": 0.65,
                      "distributed.worker.memory.pause": 0.75,
                      "distributed.worker.memory.terminate": 0.95})

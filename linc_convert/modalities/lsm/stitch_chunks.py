@@ -143,6 +143,12 @@ def _resolve_tile_paths(input_path: str, camera_id: int, coords_path: str,
     return tile_paths
 
 
+# target dask block (z, y, x) of the raw chunks, rounded down to a multiple of the
+# stored chunks: a few large blocks instead of very many small ones keeps the task
+# graph small at full resolution (a graph of ~200 MiB stalled the scheduler)
+DASK_BLOCK = (128, 256, 512)
+
+
 def _checkpoint_path(out_dir: str) -> str:
     """Checkpoint file of a channel, next to its output folder."""
     return out_dir.rstrip("/") + ".stitch_checkpoint.json"
@@ -530,8 +536,8 @@ def stitch_channel(
         raise ValueError("chunk positions must increase")
 
     def open_tile(path: str) -> da.Array:
-        return crop_and_flip(open_tile_array(path, layer), crop, vertical_flip,
-                             layer)
+        return crop_and_flip(open_tile_array(path, layer, block=DASK_BLOCK), crop,
+                             vertical_flip, layer)
 
     raw_shape = open_tile(tile_paths[0]).shape
     sz, sy, sx = raw_shape
@@ -780,7 +786,7 @@ def stitch_chunks(
     restart: bool = False,
     parallel_chunks: int = 2,
     bands: bool = True,
-    parallel_bands: int = 4,
+    parallel_bands: int = 2,
     projections: bool = True,
     projections_dir: Optional[str] = None,
     layer: int = 0,
