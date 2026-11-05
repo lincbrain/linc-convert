@@ -1,52 +1,49 @@
-"""Refine the correction maps of a channel with the overlaps between neighbouring chunks.
+"""Refine the background offset of a channel with the overlaps between chunks.
 
-``create_corrections`` finds the multiplier of every (z, y) row from tissue statistics.
-That cannot tell whether the first rows of a chunk and its last rows are at the right
-level *relative to each other*, because anatomy hides a smooth tilt. The overlap can:
-chunk ``i + 1`` images row ``step + k`` of chunk ``i`` again as its row ``k`` (z shifted
-by ``dz``), so after a perfect correction the two copies of the same tissue agree.
+``create_corrections`` fits one multiplier per (z, y) row for a given background
+offset. The right offset cannot be told from a single chunk, but the overlap can: chunk
+``i + 1`` images row ``step + k`` of chunk ``i`` again as its row ``k`` (z shifted by
+``dz``), so after a correct offset and multipliers the two copies of the same tissue
+have the same percentiles. This script finds that offset and feeds it back:
 
-The refinement keeps the existing maps and multiplies the multiplier map by a *smooth*
-factor ``exp(phi(z, y))`` found by one sparse least-squares problem:
+1. Chunk pairs. Only overlaps with a good amount of tissue are used (see
+   ``--min_pair_columns`` and ``--min_pair_rows``).
+2. Masking, the procedure of ``create_corrections``: a pixel is masked if its raw value
+   is below ``median(background) * zy_threshold_multiplier``; an x column is masked for
+   ALL rows of the overlap (both copies) if more than ``--column_mask_fraction`` of
+   them are masked there, and kept for ALL rows otherwise. Every row is then measured
+   on the same columns.
+3. Percentiles. For every (z, row) of both copies the percentiles ``--levels`` of the
+   kept columns are taken along x. They are of the RAW values, so they do not depend
+   on the correction maps and are measured once.
+4. Offset. With the current maps a corrected percentile is
+   ``multiplier * (percentile - noise + delta)``. ``delta`` (one number of counts for
+   the whole channel) is the value that makes the percentiles of the two copies as
+   close as possible. A multiplier is a gain: it moves all levels of a row by the same
+   factor (and ``create_corrections`` fits it again for every offset). So each row of
+   the two copies, ``pa - noise + delta`` and ``pb - noise + delta`` over the percentile
+   levels, is allowed its own gain, and what counts is how far it is from being
+   proportional: an offset error adds the same counts to every level, which no gain can
+   undo. ``delta`` minimises the squared residual of the best proportional fit over all
+   rows and pairs (a one-dimensional search, grid then golden section).
+5. The offsets add up (``offset += delta``), ``create_corrections`` is run again for the
+   channel with ``fixed_offset=offset`` to get the multipliers for it, and steps 4-5 are
+   repeated with the new maps until ``|delta| < --offset_tol`` or ``--max_iterations``
+   (5) rounds have been made. A last measurement shows what is left.
 
-    data        the two copies agree in the overlap. For every (z, k) the median over
-                tissue of log(second copy / first copy) is taken over every pair of
-                chunks (anatomy and random chunk gains average out), weighted by how
-                much tissue went into it
-    smoothness  second differences of phi along y and along z are small
-                (so no stripes can be added; row-to-row detail stays as it was)
-    ridge       phi stays small where the overlap says nothing
-
-Default: only ``phi`` is fitted, the noise map is left alone.
-
-With ``--fit_offset`` the channel also gets ONE static offset ``delta`` (a number of
-counts, the same for every row and chunk): the noise map becomes ``noise - delta``, so
-``corrected' = exp(phi) * multiplier * (raw - noise + delta)``. A gain error and an
-offset error look the same at one brightness but differ across brightness, and an
-offset error also acts differently on rows with different multipliers. The overlap is
-compared at several tissue levels (``--levels``, percentiles of the tissue values of each
-row), and ``delta`` is the value for which the best smooth ``phi`` leaves the smallest
-mismatch between the two copies, over all rows, z planes and chunk pairs together. It is
-found by a one-dimensional search (grid, then golden section). If the best value sits at
-the edge of the search range (``--offset_range``), it is not trusted and ``delta`` stays 0.
-
-Only differences between row ``step + k`` and row ``k`` are observed. The smoothness
-prior decides how the correction is spread over the chunk, so a smooth tilt or bow is
-recovered well, an isolated bump in the middle of a chunk is not (nothing sees it).
+The maps of the channel are replaced; the originals are kept once as
+``<channel>_alt_zy_scaler_prior.tiff`` / ``..._noise_prior.tiff`` and always used as the
+starting point, so running again does not stack. ``--restore`` puts them back. The
+history is written to ``<corrections_dir>/refine_offset_<channel>.yaml``.
 
     python -m linc_convert.modalities.lsm.refine_corrections \\
         --input_path .../sample-slice060 --yaml_path .../LSM_metadata.yaml \\
         --camera_id 2 --slice_number 60 --channel 561 \\
         --coords .../slice060_561.yaml --corrections_dir .../60_corrections_noreg_L2 \\
-        --layer 2 [--fit_offset]
+        --layer 2 --levels 25 37.5 50 62.5 75
 
-The pair data are split into two halves first: the fit on one half is tested on the
-other, and the before/after agreement of the held-out pairs is printed (with
-``--fit_offset`` also the offset found by each half on its own, which shows how well it
-is determined). Then the fit uses all pairs and the TIFFs of the channel are replaced.
-The originals are kept once as ``<channel>_alt_zy_scaler_prior.tiff`` and
-``<channel>_alt_zy_noise_prior.tiff`` and always used as the starting point, so running
-again does not stack corrections; ``--restore`` puts them back.
+The earlier version (smooth multiplier correction from the overlaps) is kept as
+``refine_corrections_gain.py``.
 """
 
 import argparse
@@ -54,230 +51,116 @@ import math
 import os
 import shutil
 import warnings
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
 
-MIN_TISSUE_SHARE = 0.01      # fewer tissue blocks than this: the pair lies in background
-VALID_SCALER = 1e-6          # rows with a smaller multiplier are invalid
-COUNT_SCALE = 300.0          # tissue blocks at which a row has weight 1/2
+CLIP = 0.3          # residuals of the log ratio are limited to +-CLIP (a few bad rows)
 
 
-def prior_path(path: str) -> str:
-    """Where the original of a correction TIFF is kept."""
-    return (path.replace("_alt_zy_scaler.tiff", "_alt_zy_scaler_prior.tiff")
-            .replace("_alt_zy_noise.tiff", "_alt_zy_noise_prior.tiff"))
+def percentiles_of_overlap(va: np.ndarray, vb: np.ndarray, threshold: float,
+                           levels: List[float], column_mask_fraction: Optional[float],
+                           min_pixels: int = 8
+                           ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, int, int]]:
+    """Percentiles along x of every (z, row) of both copies, on shared columns.
 
+    Parameters
+    ----------
+    va, vb : numpy.ndarray
+        RAW values of the two copies of the overlap, shape (z, rows, columns) (columns
+        already strided and without the background columns).
+    threshold : float
+        A pixel is masked if it is below this raw value.
+    levels : list of float
+        Percentiles (0-100).
+    column_mask_fraction : float, optional
+        The ``create_corrections`` column rule: a column is kept for all rows only if
+        at most this share of the rows of both copies is masked there. None keeps every
+        column.
+    min_pixels : int
+        Kept columns needed.
 
-def tissue_blocks(ca: np.ndarray, cb: np.ndarray, block: int, tissue: np.ndarray
-                  ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """x-block means of both copies and the tissue mask; None if there is no tissue.
-
-    ``ca`` and ``cb`` are the corrected overlap of the first and the second chunk,
-    shape (z, rows, x); ``tissue`` is the (z, rows, x // block) mask of blocks that
-    stand out from the background in the later chunk (``compare_overlaps.block_tissue``).
-    It is applied to both copies, so the same blocks are used on both sides.
+    Returns
+    -------
+    (pa, pb, weight, kept, total) or None
+        ``pa`` / ``pb``: (levels, z, rows) raw percentiles of the first / second copy,
+        NaN where a row's percentile is itself below the threshold; ``weight``
+        (z, rows): share of the kept pixels that are tissue in the poorer copy;
+        ``kept`` / ``total``: columns kept and columns offered. None if too few
+        columns are kept.
     """
-    nz, h, nx = ca.shape
-    nb = nx // block
-    if nb == 0:
-        return None
-    a = ca[:, :, :nb * block].reshape(nz, h, nb, block).mean(axis=3)
-    b = cb[:, :, :nb * block].reshape(nz, h, nb, block).mean(axis=3)
-    mask = tissue[:, :, :nb] & (a > 0) & (b > 0)
-    if mask.mean() < MIN_TISSUE_SHARE:
-        return None
-    return a, b, mask
-
-
-def pair_log_ratios(ca: np.ndarray, cb: np.ndarray, block: int, tissue: np.ndarray
-                    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """Per (z, row) median of log(second / first) over tissue, and the tissue count."""
-    blocks = tissue_blocks(ca, cb, block, tissue)
-    if blocks is None:
-        return None
-    a, b, mask = blocks
-    with np.errstate(divide="ignore", invalid="ignore"):
-        logr = np.where(mask, np.log(np.where(b > 0, b, 1) / np.where(a > 0, a, 1)),
-                        np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        med = np.nanmedian(logr, axis=2)
-    return med.astype(np.float32), mask.sum(axis=2).astype(np.float32)
-
-
-def pair_quantiles(ca: np.ndarray, cb: np.ndarray, block: int, levels: List[float],
-                   tissue: np.ndarray
-                   ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Per (z, row) percentiles of the tissue values of both copies, and the count.
-
-    Returns ``(first, second, count)`` with shapes (levels, z, rows), (levels, z, rows)
-    and (z, rows).
-    """
-    blocks = tissue_blocks(ca, cb, block, tissue)
-    if blocks is None:
-        return None
-    a, b, mask = blocks
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        qa = np.nanpercentile(np.where(mask, a, np.nan), levels, axis=2)
-        qb = np.nanpercentile(np.where(mask, b, np.nan), levels, axis=2)
-    return (qa.astype(np.float32), qb.astype(np.float32),
-            mask.sum(axis=2).astype(np.float32))
-
-
-def aggregate(logs: List[np.ndarray], counts: List[np.ndarray], min_blocks: int,
-              min_pairs: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Combine the pairs: median log ratio per (z, row) and a weight in 0..1.
-
-    A (z, row) needs ``min_pairs`` pairs with at least ``min_blocks`` tissue blocks;
-    others get weight 0. The weight grows with the total tissue count.
-    """
-    stack = np.stack(logs)
-    n = np.stack(counts)
-    stack = np.where(n >= min_blocks, stack, np.nan)
-    ok = np.isfinite(stack)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        med = np.nanmedian(stack, axis=0)
-    total = np.where(ok, n, 0).sum(axis=0)
-    weight = total / (total + COUNT_SCALE)
-    weight = np.where(ok.sum(axis=0) >= min_pairs, weight, 0.0)
-    return np.nan_to_num(med), weight.astype(np.float64)
-
-
-def offset_mismatch(firsts: List[np.ndarray], seconds: List[np.ndarray],
-                    counts: List[np.ndarray], s_first: np.ndarray, s_second: np.ndarray,
-                    delta: float, min_blocks: int, min_pairs: int
-                    ) -> Tuple[np.ndarray, np.ndarray]:
-    """Mismatch of the two copies at every level if the noise map were lowered by ``delta``.
-
-    ``firsts`` / ``seconds`` are the per-pair percentiles (levels, z, rows) of the
-    corrected overlap with the current maps, ``s_first`` / ``s_second`` the current
-    multipliers of the rows of the two copies (z, rows). Lowering the noise by ``delta``
-    raises every raw-minus-noise value by ``delta``, so a corrected percentile ``q`` of
-    a row with multiplier ``s`` becomes ``q + s * delta`` (percentiles commute with this
-    monotone change). Returns ``(log(second / first) median over pairs, weight)``,
-    shapes (levels, z, rows) and (z, rows).
-    """
-    qa, qb = np.stack(firsts), np.stack(seconds)          # (pairs, levels, z, rows)
-    n = np.stack(counts)                                  # (pairs, z, rows)
-    na = qa + s_first[None, None] * delta
-    nb = qb + s_second[None, None] * delta
-    good = (n >= min_blocks)[:, None] & (qa > 0) & (qb > 0) & (na > 0) & (nb > 0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        logd = np.where(good, np.log(np.where(nb > 0, nb, 1) / np.where(na > 0, na, 1)),
-                        np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        d = np.nanmedian(logd, axis=0)
-    all_levels = good.all(axis=1)                         # (pairs, z, rows)
-    total = np.where(all_levels, n, 0).sum(axis=0)
-    weight = total / (total + COUNT_SCALE)
-    weight = np.where(all_levels.sum(axis=0) >= min_pairs, weight, 0.0)
-    return np.nan_to_num(d), weight.astype(np.float64)
-
-
-def _second_difference(sz: int, sy: int, axis: int, weight: float):
-    """Rows ``weight * (x[i-1] - 2 x[i] + x[i+1])`` along y (axis 1) or z (axis 0)."""
-    if axis == 1:
-        zz, yy = np.meshgrid(np.arange(sz), np.arange(1, sy - 1), indexing="ij")
-        zz, yy = zz.ravel(), yy.ravel()
-        parts = [(zz, yy - 1), (zz, yy), (zz, yy + 1)]
+    from linc_convert.modalities.lsm.stitching_utils.corrections import keep_columns
+    total = va.shape[2]
+    if column_mask_fraction is None:
+        keep = np.ones(total, dtype=bool)
     else:
-        zz, yy = np.meshgrid(np.arange(1, sz - 1), np.arange(sy), indexing="ij")
-        zz, yy = zz.ravel(), yy.ravel()
-        parts = [(zz - 1, yy), (zz, yy), (zz + 1, yy)]
-    r = np.arange(len(zz))
-    cols = [z * sy + y for z, y in parts]
-    vals = [np.full(len(r), weight), np.full(len(r), -2 * weight), np.full(len(r), weight)]
-    return (np.concatenate(vals), np.concatenate([r, r, r]), np.concatenate(cols),
-            len(r))
+        keep = keep_columns(np.concatenate([va, vb], axis=0), threshold,
+                            column_mask_fraction)
+    kept = int(keep.sum())
+    if kept < min_pixels:
+        return None
+    ka, kb = va[:, :, keep], vb[:, :, keep]
+    q = np.asarray(levels, dtype=float) / 100.0
+    out = []
+    weight = []
+    for k in (ka, kb):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            vals = np.quantile(k, q, axis=2).astype(np.float32)
+        count = (np.isfinite(k) & (k >= threshold)).sum(axis=2)
+        good = (count >= min_pixels) & np.all(vals >= threshold, axis=0)
+        out.append(np.where(good[None], vals, np.nan))
+        weight.append(np.where(good, count / kept, 0.0))
+    return out[0], out[1], np.minimum(weight[0], weight[1]).astype(np.float32), kept, total
 
 
-def solve_phi(shape: Tuple[int, int], step: int, dz: int, z_lo: int, d: np.ndarray,
-              weight: np.ndarray, smooth_y: float, smooth_z: float, ridge: float
-              ) -> Tuple[np.ndarray, float]:
-    """Solve for the log gain ``phi`` (z, y) from the overlap data ``d``.
+def mismatch(delta: float, pa: np.ndarray, pb: np.ndarray, weight: np.ndarray,
+             na: np.ndarray, nb: np.ndarray, min_levels: int = 3) -> Tuple[float, int]:
+    """How far the two copies are from being the same up to a gain, for an offset.
 
-    ``d[l, i, k]`` is the log mismatch at level ``l`` of first-copy z index ``z_lo + i``
-    and overlap row ``k``; ``weight`` has the same shape. The equation is
-    ``phi(z - dz, k) - phi(z, step + k) = -d``.
+    ``pa`` / ``pb`` are (pairs, levels, z, rows) raw percentiles of the first and second
+    copy, ``weight`` (pairs, z, rows), ``na`` / ``nb`` the (z, rows) noise maps of the
+    rows of the two copies. With the offset ``delta`` a row's percentiles are
+    ``u = pa - na + delta`` (first copy) and ``v = pb - nb + delta`` (second copy).
+    The same tissue seen through a gain ``g`` gives ``v = g * u`` at every level, for
+    the right ``delta`` only: an offset error adds the same number of counts to every
+    level, which no gain can undo. The multiplier of a row is such a gain (and
+    ``create_corrections`` fits it again for every offset), so it is left free: for each
+    (pair, z, row) the best ``g`` is found and the squared residual
+    ``sum_levels (v - g * u) ** 2`` is what counts. The score is its weighted mean.
 
-    Returns ``phi`` and the weighted mean squared residual of the data equations (the
-    mismatch the smooth ``phi`` could not remove).
+    Returns
+    -------
+    (score, n)
+        Weighted mean squared residual (counts squared) and the number of rows used;
+        inf if there are none.
     """
-    import scipy.sparse as sp
-    from scipy.sparse.linalg import spsolve
-
-    sz, sy = shape
-    n = sz * sy
-    nlev, nzo, h = d.shape
-    iz, ik = np.meshgrid(np.arange(nzo), np.arange(h), indexing="ij")
-    z_a = (z_lo + iz).ravel()
-    z_b = z_a - dz
-    k = ik.ravel()
-    inside = (z_b >= 0) & (z_b < sz) & (z_a >= 0) & (z_a < sz)
-
-    blocks, rhs, n_data = [], [], 0
-    sq_weight, sq_resid_rows = 0.0, []
-    for lev in range(nlev):
-        w = np.sqrt(weight[lev].ravel() / nlev)
-        keep = (w > 0) & inside
-        za, zb, kk, ww = z_a[keep], z_b[keep], k[keep], w[keep]
-        rows = np.arange(len(kk))
-        blocks.append(sp.coo_matrix(
-            (np.concatenate([ww, -ww]),
-             (np.concatenate([rows, rows]),
-              np.concatenate([zb * sy + kk, za * sy + step + kk]))),
-            shape=(len(kk), n)))
-        rhs.append((-d[lev].ravel()[keep]) * ww)
-        n_data += len(kk)
-    data_rows = n_data
-    for axis, weight_s, enabled in ((1, smooth_y, smooth_y > 0 and sy > 2),
-                                    (0, smooth_z, smooth_z > 0 and sz > 2)):
-        if enabled:
-            vals, r_idx, c_idx, nrows = _second_difference(sz, sy, axis, weight_s)
-            blocks.append(sp.coo_matrix((vals, (r_idx, c_idx)), shape=(nrows, n)))
-            rhs.append(np.zeros(nrows))
-    if ridge > 0:
-        blocks.append(sp.coo_matrix((np.full(n, ridge), (np.arange(n), np.arange(n))),
-                                    shape=(n, n)))
-        rhs.append(np.zeros(n))
-    a = sp.vstack(blocks).tocsr()
-    b = np.concatenate(rhs)
-    solution = np.asarray(spsolve((a.T @ a).tocsc(), a.T @ b), dtype=np.float64)
-    resid = (a @ solution - b)[:data_rows]
-    # the data rows are already scaled by sqrt(weight / levels), so the sum of squares is
-    # a weighted sum; divide by the total weight (= sum of the squared scales)
-    scale_sq = float(sum((blk.data[:len(blk.data) // 2] ** 2).sum() for blk in blocks[:nlev]))
-    msr = float((resid ** 2).sum() / scale_sq) if scale_sq > 0 else float("nan")
-    return solution.reshape(sz, sy), msr
+    u = pa - na[None, None] + delta
+    v = pb - nb[None, None] + delta
+    ok = (u > 0) & (v > 0) & np.isfinite(u) & np.isfinite(v)
+    ok &= ok.sum(axis=1, keepdims=True) >= min_levels   # a row needs a few levels
+    u = np.where(ok, u, 0.0).astype(np.float64)
+    v = np.where(ok, v, 0.0).astype(np.float64)
+    suu, suv, svv = (u * u).sum(axis=1), (u * v).sum(axis=1), (v * v).sum(axis=1)
+    rows = ok.any(axis=1) & (weight > 0)
+    if not rows.any():
+        return float("inf"), 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        resid = np.where(suu > 0, svv - suv * suv / suu, 0.0)
+    w = np.where(rows, weight, 0.0)
+    return float((w * np.maximum(resid, 0.0)).sum() / w.sum()), int(rows.sum())
 
 
-def implied_change(field: np.ndarray, step: int, dz: int, z_lo: int,
-                   shape: Tuple[int, int]) -> np.ndarray:
-    """``field(z - dz, k) - field(z, step + k)`` over the overlap (z, rows)."""
-    sz, sy = shape
-    h = sy - step
-    z_hi = min(sz, sz + dz)
-    za = np.arange(z_lo, z_hi)
-    return field[za - dz][:, :h] - field[za][:, step:step + h]
-
-
-def robust_sd(x: np.ndarray) -> float:
-    x = x[np.isfinite(x)]
-    return float(1.4826 * np.median(np.abs(x - np.median(x)))) if x.size else float("nan")
-
-
-def search_offset(evaluate, limit: float, grid_points: int = 11, golden_steps: int = 8
-                  ) -> Tuple[float, bool, List[Tuple[float, float]]]:
-    """Minimise ``evaluate(delta)`` (the leftover mismatch) over ``[-limit, limit]``.
+def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: int = 60,
+                  precision: float = 0.005) -> Tuple[float, bool, List[Tuple[float, float]]]:
+    """Minimise ``evaluate(delta)`` over ``[-limit, limit]``.
 
     A grid first, then golden-section steps between the neighbours of the best grid
-    point. Returns ``(delta, interior, curve)``: ``interior`` is False if the best grid
-    point is at an end of the range, and ``curve`` lists the grid ``(delta, value)``.
+    point, until the bracket is narrower than ``precision`` counts. Returns
+    ``(delta, interior, curve)``: ``interior`` is False if the best
+    grid point is at an end of the range, and ``curve`` lists the grid
+    ``(delta, value)``.
     """
     grid = np.linspace(-limit, limit, grid_points)
     values = [evaluate(float(g)) for g in grid]
@@ -293,6 +176,8 @@ def search_offset(evaluate, limit: float, grid_points: int = 11, golden_steps: i
     x1, x2 = hi - phi * (hi - lo), lo + phi * (hi - lo)
     f1, f2 = evaluate(x1), evaluate(x2)
     for _ in range(golden_steps):
+        if hi - lo < precision:
+            break
         if f1 < f2:
             hi, x2, f2 = x2, x1, f1
             x1 = hi - phi * (hi - lo)
@@ -302,6 +187,21 @@ def search_offset(evaluate, limit: float, grid_points: int = 11, golden_steps: i
             x2 = lo + phi * (hi - lo)
             f2 = evaluate(x2)
     return 0.5 * (lo + hi), True, curve
+
+
+def level_ratios(delta: float, pa, pb, weight, na, nb, sa, sb) -> np.ndarray:
+    """Median ratio second / first per percentile level (no pair gain removed)."""
+    ua = pa - na[None, None] + delta
+    ub = pb - nb[None, None] + delta
+    ok = (ua > 0) & (ub > 0) & np.isfinite(ua) & np.isfinite(ub)
+    ok &= (weight[:, None] > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = (sb[None, None] * ub) / (sa[None, None] * ua)
+    out = []
+    for lv in range(pa.shape[1]):
+        sel = ok[:, lv]
+        out.append(float(np.median(r[:, lv][sel])) if sel.any() else float("nan"))
+    return np.array(out)
 
 
 def main() -> None:
@@ -314,64 +214,56 @@ def main() -> None:
     p.add_argument("--coords", required=True, help="register_chunks YAML")
     p.add_argument("--corrections_dir", required=True)
     p.add_argument("--layer", type=int, default=2)
-    p.add_argument("--block", type=int, default=4, help="x block size (layer px)")
-    p.add_argument("--tissue_sigma", type=float, default=5.0,
-                   help="a block is tissue if its mean is this many noise sigmas above "
-                        "the background map")
-    p.add_argument("--background_length", type=int, default=5000,
-                   help="trailing columns (full-res px) the noise map was taken from; "
-                        "their spread gives the noise level")
-    p.add_argument("--min_x", type=float, help="full-res px, stitching coordinates")
-    p.add_argument("--max_x", type=float)
+    p.add_argument("--levels", type=float, nargs="+", default=[25, 37.5, 50, 62.5, 75],
+                   help="percentiles (0-100) of the rows' values along x that are made "
+                        "equal in the two copies")
     p.add_argument("--column_mask_fraction", type=float, default=0.2,
-                   help="an x column is used for every row only if at most this share "
-                        "of its rows is background (the rule create_corrections uses); "
-                        "makes --min_x/--max_x unnecessary")
-    p.add_argument("--min_pair_columns", type=float, default=0.3,
-                   help="with the column mask: a chunk pair is used only if at least this "
-                        "share of its x columns passes the mask (pairs at the edge of the "
-                        "sample, with little tissue, are left out)")
-    p.add_argument("--no_column_mask", action="store_true",
-                   help="judge every block on its own instead")
+                   help="an x column is used for every row only if at most this share of "
+                        "the rows is masked there (as in create_corrections)")
+    p.add_argument("--zy_threshold_multiplier", type=float, default=1.1,
+                   help="a pixel is masked below median(background) times this (use the "
+                        "value of create_corrections)")
+    p.add_argument("--background_length", type=int, default=5000,
+                   help="trailing columns (full-res px) the noise map was taken from")
+    p.add_argument("--max_columns", type=int, default=512,
+                   help="at most this many x columns (evenly strided) per row")
+    p.add_argument("--min_x", type=float, help="full-res px, stitching coordinates "
+                                               "(optional, the mask makes it unnecessary)")
+    p.add_argument("--max_x", type=float)
     p.add_argument("--min_y", type=float,
-                   help="only pairs whose overlap lies in this y range (full-res px); "
-                        "default: all pairs of the slice")
+                   help="only pairs whose overlap lies in this y range (full-res px)")
     p.add_argument("--max_y", type=float)
-    p.add_argument("--smooth_y", type=float, default=30.0,
-                   help="weight of the second-difference penalty along y")
-    p.add_argument("--smooth_z", type=float, default=30.0, help="same along z")
-    p.add_argument("--ridge", type=float, default=0.05, help="pull of phi towards 0")
-    p.add_argument("--fit_offset", action="store_true",
-                   help="also fit one static offset for the channel (noise map - delta)")
-    p.add_argument("--min_pair_tissue", type=float, default=0.3,
-                   help="a chunk pair is used only if at least this share of its overlap "
-                        "blocks is tissue; pairs at the edge of the sample (mostly "
-                        "background) otherwise pull the fit")
-    p.add_argument("--levels", type=float, nargs="+", default=[20, 35, 50, 65, 80],
-                   help="tissue percentiles compared when the offset is fitted")
-    p.add_argument("--offset_range", type=float, default=1.0,
-                   help="search delta within +- this share of the raw tissue level "
-                        "above background (20th percentile)")
-    p.add_argument("--min_blocks", type=int, default=50,
-                   help="tissue blocks a (z, row) needs in a pair")
-    p.add_argument("--min_pairs", type=int, default=3,
-                   help="pairs a (z, row) needs")
-    p.add_argument("--max_correction", type=float, default=0.5,
-                   help="largest |log change| of the multiplier allowed")
-    p.add_argument("--no_validate", action="store_true")
-    p.add_argument("--dry_run", action="store_true", help="do not write the TIFFs")
+    p.add_argument("--min_pair_columns", type=float, default=0.3,
+                   help="a chunk pair is used only if at least this share of its x "
+                        "columns passes the column mask")
+    p.add_argument("--min_pair_rows", type=float, default=0.5,
+                   help="... and at least this share of its (z, row)s has tissue "
+                        "percentiles in both copies")
+    p.add_argument("--min_pairs", type=int, default=3, help="pairs needed")
+    p.add_argument("--offset_range", type=float, default=0.5,
+                   help="search delta within +- this multiple of the typical lowest "
+                        "percentile above the background")
+    p.add_argument("--offset_limit", type=float,
+                   help="search range in counts (replaces --offset_range)")
+    p.add_argument("--offset_tol", type=float, default=0.5,
+                   help="stop when |delta| of a round is below this many counts (or the "
+                        "mismatch no longer improves by 0.1%%)")
+    p.add_argument("--max_iterations", type=int, default=5)
+    p.add_argument("--n_reference_tiles", type=int, default=16,
+                   help="reference tiles create_corrections picks automatically")
+    p.add_argument("--reference_tiles", type=int, nargs="+",
+                   help="reference tiles of create_corrections (1-based) instead of the "
+                        "automatic pick")
+    p.add_argument("--create_percentiles", type=float, nargs="+",
+                   help="--offset_percentiles of create_corrections (default: --levels)")
+    p.add_argument("--dry_run", action="store_true",
+                   help="measure and report, change nothing")
     p.add_argument("--restore", action="store_true",
                    help="put the original maps back and stop")
     args = p.parse_args()
-    if args.fit_offset and len(args.levels) < 2:
-        raise SystemExit("--fit_offset needs at least two --levels")
 
-    from linc_convert.modalities.lsm.compare_overlaps import (
-        background_sigma,
-        block_tissue,
-        column_rule,
-        pair_rows,
-    )
+    from linc_convert.modalities.lsm.compare_overlaps import pair_rows
+    from linc_convert.modalities.lsm.create_corrections import create_corrections
     from linc_convert.modalities.lsm.stitching_utils.corrections import (
         correction_paths,
         load_corrections,
@@ -381,6 +273,7 @@ def main() -> None:
         discover_tile_paths,
         open_tile_array,
         write_tiff,
+        write_yaml,
     )
     from linc_convert.modalities.lsm.stitching_utils.scan_metadata import (
         get_crops,
@@ -390,25 +283,47 @@ def main() -> None:
 
     paths_ = correction_paths(args.corrections_dir, args.channel)
     scaler_file, noise_file = paths_["scaler"], paths_["noise"]
-    scaler_backup, noise_backup = prior_path(scaler_file), prior_path(noise_file)
+    scaler_backup = scaler_file.replace("_alt_zy_scaler.tiff", "_alt_zy_scaler_prior.tiff")
+    noise_backup = noise_file.replace("_alt_zy_noise.tiff", "_alt_zy_noise_prior.tiff")
+    state_file = os.path.join(args.corrections_dir, f"refine_offset_{args.channel}.yaml")
     if args.restore:
         if not os.path.exists(scaler_backup):
             raise SystemExit(f"no original multiplier map at {scaler_backup}")
         shutil.copyfile(scaler_backup, scaler_file)
-        print(f"restored {scaler_file}")
-        if os.path.exists(noise_backup):
-            shutil.copyfile(noise_backup, noise_file)
-            print(f"restored {noise_file}")
+        shutil.copyfile(noise_backup, noise_file)
+        print(f"restored {scaler_file} and {noise_file}")
         return
-    import tifffile
-    if os.path.exists(scaler_backup):
-        print(f"starting from the original maps ({scaler_backup})")
-        scaler = tifffile.imread(scaler_backup).astype(np.float32)
-        noise = (tifffile.imread(noise_backup) if os.path.exists(noise_backup)
-                 else tifffile.imread(noise_file)).astype(np.float32)
-    else:
-        noise, scaler = load_corrections(args.corrections_dir, args.channel)
 
+    # the offset the original maps were made with: remembered from the first run, else
+    # taken from the report of create_corrections (0 if there is none)
+    start_offset = 0.0
+    if os.path.exists(state_file) and os.path.exists(scaler_backup):
+        with open(state_file) as f:
+            start_offset = float(yaml.safe_load(f)["start_offset"])
+    else:
+        report = os.path.join(args.corrections_dir,
+                              f"offset_fit_camera{args.camera_id}.yaml")
+        if os.path.exists(report):
+            with open(report) as f:
+                rep = yaml.safe_load(f) or {}
+            start_offset = float(rep.get("channels", {}).get(args.channel, {})
+                                 .get("offset_applied", 0.0))
+        if not args.dry_run:
+            if not os.path.exists(scaler_backup):
+                shutil.copyfile(scaler_file, scaler_backup)
+                shutil.copyfile(noise_file, noise_backup)
+                print(f"kept the originals at {scaler_backup} and {noise_backup}")
+            write_yaml(state_file, {"start_offset": start_offset})
+    if os.path.exists(scaler_backup) and not args.dry_run:
+        # always start from the originals
+        shutil.copyfile(scaler_backup, scaler_file)
+        shutil.copyfile(noise_backup, noise_file)
+    noise, scaler = load_corrections(args.corrections_dir, args.channel)
+    offset = start_offset
+    print(f"channel {args.channel}: the original maps were made with offset "
+          f"{start_offset:+.2f} counts")
+
+    # ------------------------------------------------------------------ geometry
     scale = 2 ** args.layer
     with open(args.yaml_path) as f:
         scan = yaml.safe_load(f)
@@ -433,26 +348,20 @@ def main() -> None:
     if rows is None:
         raise SystemExit("the chunks do not overlap with this registration")
     a_rows, b_rows, a_z, b_z = rows
-    # --min_x / --max_x are in stitching coordinates (x of the sheared mosaic, x' = x +
-    # shear_x * z). A chunk column x is inside the window at every z only for
-    # min_x <= x and x < max_x - shear_x * (Z - 1), so that is the range used.
+    bg_len = max(1, args.background_length // scale)
     shift = int(math.ceil(get_skew_shear(scan) * (sz - 1)))
     x0 = 0 if args.min_x is None else max(0, int(round(args.min_x / scale)))
-    x1 = sx if args.max_x is None else int(round(args.max_x / scale)) - shift
-    x1 = min(sx, x1)
+    x1 = sx - bg_len if args.max_x is None else int(round(args.max_x / scale)) - shift
+    x1 = min(sx - bg_len, x1)
     if x1 <= x0:
-        raise SystemExit(f"the x window leaves no chunk columns after the shear "
-                         f"(shift {shift} px at this layer)")
-    if args.min_x is not None or args.max_x is not None:
-        print(f"x window {args.min_x}:{args.max_x} (stitching coordinates, full-res) -> "
-              f"chunk columns {x0}:{x1} at layer {args.layer} (shear shifts the window by "
-              f"up to {shift} px over z)")
-    h = sy - step
-    bg_len = max(1, args.background_length // scale)
-    mode = "gain + static offset" if args.fit_offset else "gain only"
-    print(f"channel {args.channel} ({mode}): {len(chunks)} chunks, chunk (Z,Y,X)="
-          f"({sz},{sy},{sx}) at layer {args.layer}, step {step}, overlap {h} rows, "
-          f"dz {dz} rows; x {x0}:{x1}")
+        raise SystemExit("the x window leaves no columns")
+    stride = max(1, int(math.ceil((x1 - x0) / args.max_columns)))
+    # the background level the threshold of the column mask refers to: the noise map
+    # before any offset was taken off
+    threshold = float(np.median(noise + offset)) * args.zy_threshold_multiplier
+    print(f"{len(chunks)} chunks, chunk (Z,Y,X)=({sz},{sy},{sx}) at layer {args.layer}, "
+          f"step {step}, overlap {sy - step} rows, dz {dz}; x {x0}:{x1} every {stride}; "
+          f"tissue threshold {threshold:.1f} (raw)")
 
     selected = []
     for i in range(len(chunks) - 1):
@@ -465,210 +374,125 @@ def main() -> None:
     if not selected:
         raise SystemExit("no chunk pair in the y range")
 
-    valid = scaler > VALID_SCALER
-    data, used = [], []        # per pair: (log ratios, counts) or (first, second, counts)
+    # ------------------------------------------------------ measure (once)
+    pas, pbs, wts, used = [], [], [], []
     for n, i in enumerate(selected, 1):
-        va = np.asarray(open_chunk(i)[a_z, a_rows, x0:x1].compute(), dtype=np.float32)
-        vb = np.asarray(open_chunk(i + 1)[b_z, b_rows, x0:x1].compute(), dtype=np.float32)
-        tail_b = np.asarray(open_chunk(i + 1)[b_z, b_rows, sx - bg_len:sx].compute(),
-                            dtype=np.float32)
-        # one mask for both copies: tissue is judged on the top rows of the later chunk
-        # (its own overlap rows, against its own background level) and applied to the
-        # same blocks of the earlier chunk's overlap
-        tissue = block_tissue(vb, noise[b_z, b_rows],
-                              background_sigma(tail_b, noise[b_z, b_rows]),
-                              1, 1, args.block, args.tissue_sigma)
-        share = float(tissue.mean())           # blocks that are tissue
-        kept = 1.0
-        if not args.no_column_mask:
-            own = tissue
-            tissue = column_rule(own, args.column_mask_fraction)
-            kept = float(tissue[0, 0].mean()) if tissue.size else 0.0
-            # --min_pair_tissue is judged on the columns that are used, so a pair with
-            # background at its sides is not thrown out for it
-            share = float(own[tissue].mean()) if tissue.any() else 0.0
-        ca = np.clip(va - noise[a_z, a_rows][:, :, None], 0, None) \
-            * scaler[a_z, a_rows][:, :, None]
-        cb = np.clip(vb - noise[b_z, b_rows][:, :, None], 0, None) \
-            * scaler[b_z, b_rows][:, :, None]
-        if args.fit_offset:
-            res = pair_quantiles(ca, cb, args.block, args.levels, tissue)
-        else:
-            res = pair_log_ratios(ca, cb, args.block, tissue)
+        va = np.asarray(open_chunk(i)[a_z, a_rows, x0:x1:stride].compute(),
+                        dtype=np.float32)
+        vb = np.asarray(open_chunk(i + 1)[b_z, b_rows, x0:x1:stride].compute(),
+                        dtype=np.float32)
+        res = percentiles_of_overlap(va, vb, threshold, args.levels,
+                                     args.column_mask_fraction)
         why = ""
         if res is None:
-            why = "  -> no tissue, skipped"
-        elif share < args.min_pair_tissue:
-            why = f"  -> below --min_pair_tissue {args.min_pair_tissue:g}, skipped"
-            res = None
-        elif not args.no_column_mask and kept < args.min_pair_columns:
-            why = f"  -> below --min_pair_columns {args.min_pair_columns:g}, skipped"
-            res = None
-        print(f"  pair {i + 1}-{i + 2} ({n}/{len(selected)}): tissue "
-              f"{100 * share:4.1f}% of blocks"
-              + ("" if args.no_column_mask else f", {100 * kept:4.1f}% of columns kept")
-              + f"{why}", flush=True)
-        if res is not None:
-            data.append(res)
+            why = "  -> too few columns pass the mask, skipped"
+            kept_share, row_share = 0.0, 0.0
+        else:
+            pa, pb, wt, kept, total = res
+            kept_share, row_share = kept / total, float((wt > 0).mean())
+            if kept_share < args.min_pair_columns:
+                why = f"  -> below --min_pair_columns {args.min_pair_columns:g}, skipped"
+            elif row_share < args.min_pair_rows:
+                why = f"  -> below --min_pair_rows {args.min_pair_rows:g}, skipped"
+        print(f"  pair {i + 1}-{i + 2} ({n}/{len(selected)}): "
+              f"{100 * kept_share:4.1f}% of columns kept, "
+              f"{100 * row_share:4.1f}% of rows with tissue{why}", flush=True)
+        if not why:
+            pas.append(pa)
+            pbs.append(pb)
+            wts.append(wt)
             used.append(i)
     if len(used) < max(args.min_pairs, 2):
         raise SystemExit(f"only {len(used)} pairs have enough tissue; need at least "
-                         f"{max(args.min_pairs, 2)} (see --min_pair_tissue)")
-    print(f"\n{len(used)} of {len(selected)} pairs used (pairs {used[0] + 1}-{used[0] + 2} "
-          f"... {used[-1] + 1}-{used[-1] + 2})")
-    z_lo = a_z.start
-    levels = np.asarray(args.levels, dtype=float)
-    s_a, s_b = scaler[a_z, a_rows], scaler[b_z, b_rows]
-    row_ok = (valid[a_z, a_rows] & valid[b_z, b_rows])
-    shape = (sz, sy)
+                         f"{max(args.min_pairs, 2)} (see --min_pair_columns, "
+                         "--min_pair_rows, --column_mask_fraction)")
+    pa, pb, wt = np.stack(pas), np.stack(pbs), np.stack(wts)
+    print(f"\n{len(used)} of {len(selected)} pairs used")
+    del pas, pbs, wts
 
-    def fit_gain(sel: List[int]):
-        d, w = aggregate([data[j][0] for j in sel], [data[j][1] for j in sel],
-                         args.min_blocks, args.min_pairs)
-        w = w * row_ok
-        phi, msr = solve_phi(shape, step, dz, z_lo, d[None],
-                             np.broadcast_to(w, d.shape)[None], args.smooth_y,
-                             args.smooth_z, args.ridge)
-        return phi, d[None], w, msr
+    def current_rows():
+        return (noise[a_z, a_rows], noise[b_z, b_rows],
+                scaler[a_z, a_rows], scaler[b_z, b_rows])
 
-    def fit_at(sel: List[int], delta: float):
-        """phi, mismatch data, weight and leftover mismatch for a given offset."""
-        d, w = offset_mismatch([data[j][0] for j in sel], [data[j][1] for j in sel],
-                               [data[j][2] for j in sel], s_a, s_b, delta,
-                               args.min_blocks, args.min_pairs)
-        w = w * row_ok
-        phi, msr = solve_phi(shape, step, dz, z_lo, d, np.broadcast_to(w, d.shape),
-                             args.smooth_y, args.smooth_z, args.ridge)
-        return phi, d, w, msr
-
-    def find_offset(sel: List[int]):
-        """Static offset of the pairs ``sel``: (delta, interior, curve, limit)."""
-        low = np.stack([data[j][0][0] for j in sel]) / np.maximum(s_a, 1e-12)[None]
-        ok = np.isfinite(low) & (low > 0) & row_ok[None]
-        level = float(np.median(low[ok])) if ok.any() else 0.0
-        limit = args.offset_range * level
-        if limit <= 0:
-            return 0.0, False, [], 0.0
-        delta, interior, curve = search_offset(
-            lambda x: fit_at(sel, x)[3], limit)
-        return delta, interior, curve, limit
-
-    def ratios_after(j: int, phi: np.ndarray, delta: float) -> np.ndarray:
-        """Median second/first ratio per level of pair j after phi and delta."""
-        qa, qb, cnt = data[j]
-        na, nb = qa + s_a[None] * delta, qb + s_b[None] * delta
-        with np.errstate(divide="ignore", invalid="ignore"):
-            r = (nb / na) * np.exp(implied_change(phi, step, dz, z_lo, shape))[None]
-        good = (cnt >= args.min_blocks)[None] & (na > 0) & (nb > 0) & row_ok[None]
-        return np.array([np.median(r[lv][good[lv]]) if good[lv].any() else np.nan
-                         for lv in range(len(levels))])
-
-    if not args.no_validate and len(used) >= 2 * args.min_pairs:
-        train = list(range(0, len(used), 2))
-        test = list(range(1, len(used), 2))
-        print(f"\nheld-out check: fit on {len(train)} pairs, test on {len(test)} others")
-        if args.fit_offset:
-            d_tr, ok_tr, _, lim = find_offset(train)
-            d_te, ok_te, _, _ = find_offset(test)
-            note = lambda ok: "" if ok else " (at the edge of the range: not trusted)"  # noqa: E731
-            print(f"  static offset found by the train half {d_tr:+.1f}{note(ok_tr)}, by "
-                  f"the test half {d_te:+.1f}{note(ok_te)} counts (search range +-{lim:.1f})")
-            delta_tr = d_tr if ok_tr else 0.0
-            phi_tr = fit_at(train, delta_tr)[0]
-            print("  pair   ratio second/first at the tissue percentiles "
-                  f"{[int(v) for v in levels]}: before -> after (train offset and phi)")
-            for j in test:
-                b4 = ratios_after(j, np.zeros((sz, sy)), 0.0)
-                af = ratios_after(j, phi_tr, delta_tr)
-                print(f"  {used[j] + 1:>2}-{used[j] + 2:<2}  "
-                      + " ".join(f"{v:.3f}" for v in b4) + "  ->  "
-                      + " ".join(f"{v:.3f}" for v in af))
-            print("  (1.000 is perfect; a gain error moves all percentiles by the same "
-                  "factor, an offset moves the low ones more)")
+    def measure_round(label: str) -> Tuple[float, bool, float, float, float]:
+        na, nb, sa, sb = current_rows()
+        if args.offset_limit is not None:
+            limit = float(args.offset_limit)
         else:
-            phi_tr, _, _, _ = fit_gain(train)
-            print("  pair   median ratio   row scatter (%)")
-            for j in test:
-                before, cnt = data[j]
-                after = before + implied_change(phi_tr, step, dz, z_lo, shape)
-                good = cnt >= args.min_blocks
-                print(f"  {used[j] + 1:>2}-{used[j] + 2:<2}  "
-                      f"{np.exp(np.median(before[good])):.3f} -> "
-                      f"{np.exp(np.median(after[good])):.3f}   "
-                      f"{100 * robust_sd(before[good]):.1f} -> "
-                      f"{100 * robust_sd(after[good]):.1f}")
-            print("  (ratio = second / first copy of the overlap, 1.000 is perfect; "
-                  "row scatter is the spread of the log ratio over the rows)")
+            low = (pa[:, 0] - na[None])[np.isfinite(pa[:, 0])]
+            level = float(np.median(low[low > 0])) if (low > 0).any() else 0.0
+            limit = max(args.offset_range * level, 1.0)
+        ev = lambda x: mismatch(x, pa, pb, wt, na, nb)[0]  # noqa: E731
+        before = ev(0.0)
+        delta, interior, curve = search_offset(ev, limit)
+        after = ev(delta)
+        print(f"\n{label}: search range +-{limit:.1f} counts; mismatch "
+              f"{before:.5f} at delta 0 -> {after:.5f} at delta {delta:+.2f}"
+              + ("" if interior else "  (at the EDGE of the range)"))
+        r0 = level_ratios(0.0, pa, pb, wt, na, nb, sa, sb)
+        r1 = level_ratios(delta, pa, pb, wt, na, nb, sa, sb)
+        print("  median ratio second/first at percentiles "
+              f"{[float(v) for v in args.levels]}")
+        print("    delta 0:     " + " ".join(f"{v:.3f}" for v in r0))
+        print(f"    delta {delta:+.2f}: " + " ".join(f"{v:.3f}" for v in r1))
+        return delta, interior, before, after, limit
 
-    everything = list(range(len(used)))
-    delta = 0.0
-    if args.fit_offset:
-        d_all, interior, curve, limit = find_offset(everything)
-        base = fit_at(everything, 0.0)[3]
-        print(f"\nstatic offset from all {len(used)} pairs: search range +-{limit:.1f} "
-              f"counts")
-        print("  offset   leftover mismatch (mean square of log ratio, x1e-4)")
-        for g, v in curve:
-            print(f"  {g:+8.1f}   {1e4 * v:8.2f}")
-        if interior:
-            delta = d_all
-            best = fit_at(everything, delta)[3]
-            print(f"  best {delta:+.2f} counts: leftover {1e4 * base:.2f} -> "
-                  f"{1e4 * best:.2f} (x1e-4) against no offset")
-        else:
-            print(f"  the best value ({d_all:+.1f}) is at the edge of the range: not "
-                  "trusted, offset stays 0 (widen --offset_range to look further)")
-        phi, d, w, _ = fit_at(everything, delta)
+    history: List[Dict] = []
+    stable = False
+    for it in range(1, args.max_iterations + 1):
+        delta, interior, before, after, limit = measure_round(
+            f"round {it}: offset so far {offset:+.2f}")
+        history.append({"round": it, "offset_before": float(offset),
+                        "delta": float(delta), "interior": bool(interior),
+                        "mismatch_at_zero": float(before),
+                        "mismatch_at_delta": float(after), "search_limit": float(limit)})
+        if abs(delta) < args.offset_tol or before - after <= 1e-3 * before:
+            why = (f"|delta| {abs(delta):.2f} < {args.offset_tol:g}"
+                   if abs(delta) < args.offset_tol else
+                   "the mismatch does not improve by 0.1% or more")
+            print(f"  {why}: the offset is stable")
+            stable = True
+            break
+        if args.dry_run:
+            print("  dry run: no new maps")
+            break
+        offset += delta
+        print(f"  offset becomes {offset:+.2f}; running create_corrections again")
+        history[-1]["offset_after"] = float(offset)
+        create_corrections(
+            input_path=args.input_path, yaml_path=args.yaml_path,
+            camera_id=args.camera_id, slice_number=args.slice_number,
+            reference_tiles=args.reference_tiles,
+            auto_reference_tiles=args.reference_tiles is None,
+            n_reference_tiles=args.n_reference_tiles,
+            output_dir=args.corrections_dir, background_length=args.background_length,
+            zy_threshold_multiplier=args.zy_threshold_multiplier,
+            only_channel=args.channel, force=True, layer=args.layer, fit_offset=True,
+            fixed_offset=float(offset),
+            offset_percentiles=args.create_percentiles or args.levels,
+            column_mask=True, column_mask_fraction=args.column_mask_fraction)
+        noise, scaler = load_corrections(args.corrections_dir, args.channel)
     else:
-        phi, d, w, _ = fit_gain(everything)
-    if not (w > 0).any():
-        raise SystemExit("no (z, row) has enough tissue in enough pairs "
-                         f"(--min_blocks {args.min_blocks}, --min_pairs {args.min_pairs}); "
-                         "if the column mask keeps few columns (see 'columns kept' "
-                         "above) raise --column_mask_fraction or use --no_column_mask")
-    phi = phi - float(np.median(phi[valid]))
-    clipped = float(np.mean(np.abs(phi) > args.max_correction))
-    phi = np.clip(phi, -args.max_correction, args.max_correction)
-    new_scaler = np.where(valid, scaler * np.exp(phi), scaler).astype(np.float32)
-    new_noise = (noise - delta).astype(np.float32)
+        if not args.dry_run:
+            delta, interior, before, after, limit = measure_round(
+                f"after round {args.max_iterations}: offset {offset:+.2f}")
+            history.append({"round": "final", "offset_before": float(offset),
+                            "delta": float(delta), "interior": bool(interior),
+                            "mismatch_at_zero": float(before),
+                            "mismatch_at_delta": float(after)})
+            stable = abs(delta) < args.offset_tol
+            print("  (not applied)")
 
-    good = w > 0
-    after = d + implied_change(phi, step, dz, z_lo, shape)[None]
-    print(f"\nfit on all {len(used)} pairs: rows with data {int(good.sum())} of {good.size}")
-    if args.fit_offset:
-        lvl = lambda arr: "  ".join(  # noqa: E731
-            f"p{int(lv)} {np.exp(np.median(arr[i][good])):.3f}"
-            for i, lv in enumerate(levels))
-        print("  overlap ratio second/first by tissue percentile, before: " + lvl(d))
-        print("                                                    after:  " + lvl(after))
-    else:
-        print(f"  overlap mismatch (median ratio): {np.exp(np.median(d[0][good])):.3f} -> "
-              f"{np.exp(np.median(after[0][good])):.3f}; row scatter "
-              f"{100 * robust_sd(d[0][good]):.1f}% -> {100 * robust_sd(after[0][good]):.1f}%")
-    print(f"  phi: min {phi[valid].min():+.3f}, max {phi[valid].max():+.3f} "
-          f"(log factors; {100 * clipped:.1f}% of rows at the limit)")
-    if args.fit_offset:
-        print(f"  static offset: noise map lowered by {delta:+.2f} counts")
-    profile = np.array([phi[valid[:, y], y].mean() if valid[:, y].any() else np.nan
-                        for y in range(sy)])
-    print("  mean correction by chunk row (factor on the multiplier):")
-    for y0 in range(0, sy, max(1, sy // 12)):
-        y1 = min(sy, y0 + max(1, sy // 12))
-        tag = "  <- overlap with the previous chunk" if y1 <= h else (
-            "  <- overlap with the next chunk" if y0 >= step else "")
-        print(f"    rows {y0:>3}-{y1 - 1:<3} {np.exp(np.nanmean(profile[y0:y1])):.3f}{tag}")
-
-    if args.dry_run:
-        print("dry run: nothing written")
-        return
-    if not os.path.exists(scaler_backup):
-        shutil.copyfile(scaler_file, scaler_backup)
-        shutil.copyfile(noise_file, noise_backup)
-        print(f"kept the originals at {scaler_backup} and {noise_backup}")
-    write_tiff(scaler_file, new_scaler)
-    write_tiff(noise_file, new_noise)
-    print(f"wrote {scaler_file} and {noise_file}"
-          + ("" if args.fit_offset else " (noise map unchanged)"))
+    print(f"\nfinal offset {offset:+.2f} counts (started at {start_offset:+.2f}); "
+          + ("stable" if stable else f"not stable after {args.max_iterations} rounds"))
+    if not args.dry_run:
+        write_yaml(state_file, {"start_offset": start_offset,
+                                "final_offset": float(offset), "stable": bool(stable),
+                                "pairs_used": [int(i) + 1 for i in used],
+                                "levels": [float(v) for v in args.levels],
+                                "column_mask_fraction": args.column_mask_fraction,
+                                        "rounds": history})
+        print(f"wrote {scaler_file} and {noise_file}; history in {state_file}")
 
 
 if __name__ == "__main__":
