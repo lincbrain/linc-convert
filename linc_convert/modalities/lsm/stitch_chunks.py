@@ -98,7 +98,6 @@ from linc_convert.modalities.lsm.stitching_utils.corrections import (
     apply_corrections,
     correction_paths,
     load_corrections,
-    load_refined_corrections,
     shear_volume,
     sheared_shape,
 )
@@ -456,10 +455,9 @@ def stitch_channel(
     positions_z: List[int], corrections_dir: str, out_dir: str,
     voxel_size: List[float], zarr_config: ZarrConfig,
     per_chunk_corrections: bool = False, layer: int = 0,
-    refined_corrections: bool = False,
     y_range: Tuple[Optional[int], Optional[int]] = (None, None),
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
-    memory_gb: int = 128, parallel_chunks: int = 2, bands: bool = True,
+    memory_gb: int = 64, parallel_chunks: int = 2, bands: bool = True,
     parallel_bands: int = 2,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
@@ -495,10 +493,6 @@ def stitch_channel(
         Use each chunk's own maps (``create_corrections`` with ``per_chunk``,
         chunk ``i`` uses chunk number ``i + 1``) instead of the shared ones.
         Each chunk's own blend confidence follows from its own scaler.
-    refined_corrections : bool, default=False
-        Use the three files of ``refine_multipliers`` instead of ``create_corrections``
-        maps: ``(raw - background_subtraction).clip(0) * multiplier_correction *
-        multiplier_noise``.
     layer : int, default=0
         Pyramid level of the raw chunks to stitch (0 = full resolution). The
         crop is scaled to it; ``positions_y``/``positions_z``, the corrections
@@ -507,7 +501,7 @@ def stitch_channel(
         ``(lo, hi)`` window of the mosaic to write, in pixels of ``layer``
         (``hi`` exclusive; None leaves that side open). Values are clipped to
         the mosaic. Only the window is written; the output array has its size.
-    memory_gb : int, default=128
+    memory_gb : int, default=64
         Total memory this process and its dask workers may use together. The
         number of worker threads is reduced if tasks writing one output block
         (a shard) could not all fit; see ``start_dask``.
@@ -562,11 +556,8 @@ def stitch_channel(
 
     def chunk_maps(index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Noise map, scaler map and blend confidence of one chunk."""
-        if refined_corrections:
-            noise, scaler = load_refined_corrections(corrections_dir, channel)
-        else:
-            noise, scaler = load_corrections(
-                corrections_dir, channel, index + 1 if per_chunk_corrections else None)
+        noise, scaler = load_corrections(
+            corrections_dir, channel, index + 1 if per_chunk_corrections else None)
         if noise.shape != (sz, sy) or scaler.shape != (sz, sy):
             raise ValueError(
                 f"corrections for channel {channel} have shape {noise.shape}, "
@@ -591,8 +582,7 @@ def stitch_channel(
                  "positions_y": [int(y) for y in positions_y],
                  "z_origin": z_origin, "shape": list(fullshape),
                  "shear": [float(shear_x), float(shear_z)],
-                 "per_chunk_corrections": bool(per_chunk_corrections),
-                 "refined_corrections": bool(refined_corrections)}
+                 "per_chunk_corrections": bool(per_chunk_corrections)}
     if windowed:
         signature["window"] = [y0, y1, x0, x1]
     if bands:
@@ -791,12 +781,11 @@ def stitch_chunks(
     corrections_dir: str,
     *,
     voxel_size: List[float] = [1, 1, 1],
-    memory_gb: int = 128,
+    memory_gb: int = 64,
     all_chunks: bool = False,
     dz_as_shear_z: bool = False,
     per_chunk_registration: bool = False,
     per_chunk_corrections: bool = False,
-    refined_corrections: bool = False,
     restart: bool = False,
     parallel_chunks: int = 2,
     bands: bool = True,
@@ -834,7 +823,7 @@ def stitch_chunks(
         Folder written by ``create_corrections``.
     voxel_size : list of float
         Voxel size in x, y, z (microns) for the output metadata.
-    memory_gb : int, default=128
+    memory_gb : int, default=64
         Total memory, in GB, that this process and its dask workers may use
         together (a tenth, at least 2 GB, is kept for this process). Worker
         threads are reduced if tasks writing one shard could not all fit, so
@@ -870,10 +859,6 @@ def stitch_chunks(
     per_chunk_corrections : bool, default=False
         Give every chunk its own noise and scaler maps (create_corrections
         with ``per_chunk``), also used for each chunk's blend confidence.
-    refined_corrections : bool, default=False
-        Apply the three files of ``refine_multipliers`` (``<ch>_background_subtraction``,
-        ``<ch>_multiplier_correction``, ``<ch>_multiplier_noise``) instead of the
-        ``create_corrections`` maps.
     restart : bool, default=False
         Ignore any checkpoints and rewrite every channel from scratch.
     projections : bool, default=True
@@ -958,10 +943,8 @@ def stitch_chunks(
                        shear_z, positions_y, positions_z, corrections_dir,
                        os.path.join(general_config.out, channel),
                        voxel_size, zarr_config, per_chunk_corrections, layer,
-                       refined_corrections=refined_corrections, y_range=y_range,
-                       x_range=x_range, memory_gb=memory_gb,
-                       parallel_chunks=parallel_chunks, bands=bands,
-                       parallel_bands=parallel_bands)
+                       y_range, x_range, memory_gb, parallel_chunks, bands,
+                       parallel_bands)
         if projections:
             write_projections(
                 os.path.join(general_config.out, channel),

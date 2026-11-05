@@ -192,30 +192,6 @@ def load_corrections(
     return maps[0], maps[1]
 
 
-def refined_paths(corrections_dir: str, channel: str) -> Dict[str, str]:
-    """Files written by ``refine_multipliers``."""
-    folder = os.path.join(corrections_dir, channel)
-    return {"background": os.path.join(folder, f"{channel}_background_subtraction.tiff"),
-            "multiplier": os.path.join(folder, f"{channel}_multiplier_correction.tiff"),
-            "noise": os.path.join(folder, f"{channel}_multiplier_noise.tiff")}
-
-
-def load_refined_corrections(corrections_dir: str, channel: str
-                             ) -> Tuple[np.ndarray, np.ndarray]:
-    """Background map and scaler from the three files of ``refine_multipliers``.
-
-    The scaler is ``multiplier_correction * multiplier_noise`` (about 0 where the
-    multiplier noise marks the row invalid, so the blend gives it no weight).
-    """
-    maps = {}
-    for key, path in refined_paths(corrections_dir, channel).items():
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Missing refined correction file: {path} (run refine_multipliers)")
-        maps[key] = tifffile.imread(path).astype(np.float32)
-    return maps["background"], maps["multiplier"] * maps["noise"]
-
-
 def sheared_shape(shape: Tuple[int, int, int], shear_x: float,
                   shear_z: float) -> Tuple[int, int, int]:
     """Shape of a chunk after the x-by-z and z-by-y shears."""
