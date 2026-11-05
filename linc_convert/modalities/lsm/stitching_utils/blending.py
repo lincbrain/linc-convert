@@ -6,14 +6,23 @@ import scipy.ndimage
 
 from linc_convert.modalities.lsm.stitching_utils.corrections import MIN_SCALER
 
-RAMP_POWER = 3               # 1 = linear; larger = longer plateau at 0.5
+RAMP_POWER = 1               # 1 = linear blend across the overlap; larger = longer
+                             #   plateau at 0.5
+CONFIDENCE_POWER = 0.5       # how much the size of a row's correction (its multiplier)
+                             #   counts: the confidence is (1 / multiplier) ** this.
+                             #   0 = not at all (pure ramp); it was 2.
 
 
 def sheared_weights(scaler: np.ndarray, shear_z: float, z_out: int) -> np.ndarray:
-    """Per-(z, y) blending confidence of a chunk, in the sheared frame."""
+    """Per-(z, y) blending confidence of a chunk, in the sheared frame.
+
+    A row that needed a large multiplier (a dim row) counts a little less:
+    ``(1 / multiplier) ** CONFIDENCE_POWER``. Rows that are invalid (multiplier at or
+    below ``MIN_SCALER``) have no weight at all, so the other chunk is used there.
+    """
     weight = np.where(scaler > MIN_SCALER,
                       (1.0 / np.maximum(scaler, MIN_SCALER))
-                      ** 2, 0.0).astype(np.float32)
+                      ** CONFIDENCE_POWER, 0.0).astype(np.float32)
     if z_out == weight.shape[0] and shear_z == 0:
         return weight
     return scipy.ndimage.affine_transform(
