@@ -24,6 +24,14 @@ the offset found by ``refine_corrections``), so every row is measured as
    surroundings (``--noise_window`` pixels in z and y). A pixel of 1 means no
    fine structure; the rest is multiplier noise.
 
+With ``--base_scaler`` the existing map ``S`` is kept and only a small smooth residual is
+fitted on top of it (``M = S * exp(a(y) + b(z))``, few knots, strong smoothness). The
+residual is applied only if it lowers the disagreement of overlap pairs it was not
+fitted on (the pairs are split in two halves, each scored by the fit of the other) by
+``--min_gain``; otherwise the files reproduce ``S`` exactly. ``multiplier_correction``
+is then the median-filtered ``S`` times the residual and ``multiplier_noise`` the rest
+of ``S``, so their product is ``S * residual``.
+
 Three files are written to ``<corrections_dir>/<channel>/`` (nothing existing is changed):
 
 * ``<ch>_background_subtraction.tiff``  -- background minus offset (the noise map)
@@ -223,6 +231,19 @@ def main() -> None:
     p.add_argument("--noise_window", type=int, nargs=2, default=[15, 15],
                    metavar=("Z", "Y"),
                    help="size (layer pixels) of the median filter of the multiplier noise")
+    p.add_argument("--base_scaler", action="store_true",
+                   help="keep the existing multiplier map S and fit only a small smooth "
+                        "residual on top of it, M = S * exp(a(y) + b(z)); the residual is "
+                        "used only if it improves pairs it was not fitted on")
+    p.add_argument("--base_y_knots", type=int, default=4,
+                   help="--base_scaler: spline intervals of the residual along y")
+    p.add_argument("--base_z_knots", type=int, default=3,
+                   help="--base_scaler: spline intervals of the residual along z")
+    p.add_argument("--base_smooth", type=float, default=1e-2,
+                   help="--base_scaler: curvature penalty of the residual")
+    p.add_argument("--min_gain", type=float, default=0.05,
+                   help="--base_scaler: the residual is applied only if the rms "
+                        "disagreement of the held-out pairs falls by at least this share in BOTH halves")
     args = p.parse_args()
 
     from linc_convert.modalities.lsm.compare_overlaps import pair_rows
@@ -333,13 +354,80 @@ def main() -> None:
                          f"{max(args.min_pairs, 2)}")
     print(f"\n{len(used)} of {len(selected)} pairs used")
 
-    log_f, log_g, pair_const, rscale = fit_curves(
-        data, step, sy, sz, a_z.start, b_z.start, args.y_knots, args.z_knots, args.smooth)
-    curve = np.exp(log_f[None, :] + log_g[:, None])
     valid = scaler > MIN_SCALER
-    curve = (curve * float(np.median(scaler[valid])) / float(np.median(curve[valid]))
-             ).astype(np.float32)
     mult_noise = noise_map(scaler, tuple(args.noise_window))
+    held_out = None
+    if args.base_scaler:
+        # residual on top of the existing map: fit what is left after applying it
+        ls = np.log(np.maximum(scaler, 1e-12))
+        ok_rows = valid[a_z, a_rows] & valid[b_z, b_rows]
+        shift = np.where(ok_rows, ls[a_z, a_rows] - ls[b_z, b_rows], 0.0)
+        data_b = [(np.where(ok_rows, d - shift, 0.0), np.where(ok_rows, w, 0.0))
+                  for d, w in data]
+
+        def fit_on(idx):
+            return fit_curves([data_b[i] for i in idx], step, sy, sz, a_z.start, b_z.start,
+                              args.base_y_knots, args.base_z_knots, args.base_smooth)
+
+        def rms_of(idx, lf, lg):
+            """Rms disagreement of pairs ``idx`` after the residual curves (free pair constant)."""
+            ya, yb = np.arange(a_rows.start, a_rows.stop), np.arange(b_rows.start, b_rows.stop)
+            za, zb = np.arange(a_z.start, a_z.stop), np.arange(b_z.start, b_z.stop)
+            model = (lf[ya] - lf[yb])[None, :] + (lg[za] - lg[zb])[:, None]
+            sq = ww = 0.0
+            for i in idx:
+                d, w = data_b[i]
+                if w.sum() <= 0:
+                    continue
+                r = d - model
+                r = r - float((w * r).sum() / w.sum())
+                sq += float((w * r * r).sum())
+                ww += float(w.sum())
+            return sq / max(ww, 1e-12), ww
+
+        folds = [list(range(0, len(data_b), 2)), list(range(1, len(data_b), 2))]
+        sq0 = sq1 = wsum = 0.0
+        fold_gain = []
+        for k in range(2):
+            train, test = folds[1 - k], folds[k]
+            lf_k, lg_k, _, _ = fit_on(train)
+            m1, w1 = rms_of(test, lf_k, lg_k)
+            m0, _ = rms_of(test, np.zeros(sy), np.zeros(sz))
+            sq0 += m0 * w1
+            sq1 += m1 * w1
+            wsum += w1
+            fold_gain.append(1.0 - math.sqrt(m1 / max(m0, 1e-30)))
+        rms0, rms1 = math.sqrt(sq0 / wsum), math.sqrt(sq1 / wsum)
+        apply = all(g >= args.min_gain for g in fold_gain)   # both halves must improve
+        held_out = {"rms_existing_map": rms0, "rms_with_residual": rms1,
+                    "fold_gain": [float(g) for g in fold_gain],
+                    "min_gain": args.min_gain, "applied": bool(apply)}
+        print(f"\nheld-out check (fit on every other pair, scored on the others): rms "
+              f"{rms0:.4f} with the existing map -> {rms1:.4f} with the residual curves: "
+              + f"(per half: {100 * fold_gain[0]:+.1f}%, {100 * fold_gain[1]:+.1f}%) "
+              + ("residual APPLIED" if apply else
+                 f"both halves need at least {100 * args.min_gain:.0f}% improvement, "
+                 "residual NOT applied (existing map kept)"))
+        if apply:
+            log_f, log_g, pair_const, rscale = fit_on(list(range(len(data_b))))
+        else:
+            log_f, log_g = np.zeros(sy), np.zeros(sz)
+            pair_const, rscale = np.zeros(len(data_b)), float("nan")
+        resid = np.exp(log_f[None, :] + log_g[:, None])
+        # smooth part of the existing map times the residual; the fine part stays in the
+        # multiplier noise, so the product is exactly S * residual
+        idx = ndimage.distance_transform_edt(~valid, return_distances=False,
+                                             return_indices=True)
+        smooth_part = ndimage.median_filter(scaler[tuple(idx)],
+                                            size=tuple(args.noise_window), mode="nearest")
+        curve = (smooth_part * resid).astype(np.float32)
+    else:
+        log_f, log_g, pair_const, rscale = fit_curves(
+            data, step, sy, sz, a_z.start, b_z.start, args.y_knots, args.z_knots,
+            args.smooth)
+        curve = np.exp(log_f[None, :] + log_g[:, None])
+        curve = (curve * float(np.median(scaler[valid])) / float(np.median(curve[valid]))
+                 ).astype(np.float32)
     combined = np.where(valid, curve * mult_noise, 1e-9).astype(np.float32)
 
     # ---- how well the two copies agree with each map (weighted rms of the row ratios,
@@ -368,12 +456,16 @@ def main() -> None:
           "per pair; rms / median abs):")
     for name, m in (("no multiplier", None), ("current multiplier map (create_corrections)",
                                               scaler),
-                    ("new curves f(y)*g(z)", curve),
-                    ("new curves * multiplier noise", combined)):
+                    (("existing map * residual (smooth part)" if args.base_scaler
+                      else "new curves f(y)*g(z)"), curve),
+                    (("existing map * residual (final)" if args.base_scaler
+                      else "new curves * multiplier noise"), combined)):
         rms, med = disagreement(m)
         rows_report[name] = {"rms": rms, "median_abs": med}
         print(f"  {name:46s} {rms:.4f} / {med:.4f}")
-    print("  (the curves were fitted on these overlaps; the current map was not)")
+    print("  (the curves were fitted on these overlaps; the current map was not"
+          + ("; the held-out check above is the fair test of the residual)" if args.base_scaler
+             else ")"))
 
     paths = correction_paths(args.corrections_dir, args.channel)
     folder = os.path.dirname(paths["noise"])
@@ -394,6 +486,7 @@ def main() -> None:
         "noise_window": list(args.noise_window),
         "log_f_of_y": [float(v) for v in log_f], "log_g_of_z": [float(v) for v in log_g],
         "pair_constants": [float(v) for v in pair_const],
+        "base_scaler": bool(args.base_scaler), "held_out": held_out,
         "residual_scale": float(rscale), "disagreement": rows_report, "files": out})
     for path in out.values():
         print(f"wrote {path}")
