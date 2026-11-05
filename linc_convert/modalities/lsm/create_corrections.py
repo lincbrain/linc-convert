@@ -236,11 +236,6 @@ def _offset_corrections(
         elif fit.offset == 0.0:
             reason = (" (estimate not significant or not inside the search range, "
                       "so 0)")
-        if fit.excluded_levels:
-            print(f"channel {ch}: percentile levels {fit.excluded_levels} left out "
-                  "(their rows do not follow the other levels' multipliers; residuals "
-                  + ", ".join(f"{l:g}:{r:.3f}" for l, r in
-                              zip(fit.levels, fit.level_residuals)) + ")", flush=True)
         print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
               f"{fit.standard_error:.2f} (standard error, search range +-"
               f"{fit.search_limit:.1f}); applied offset {fit.offset:+.2f}{reason}")
@@ -252,10 +247,6 @@ def _offset_corrections(
             "tile_estimates_leave_one_out": {
                 int(t): float(o) for t, o in
                 zip(reference_tiles, fit.tile_estimates)},
-            "percentile_levels": [float(v) for v in fit.levels],
-            "excluded_levels": [float(v) for v in fit.excluded_levels],
-            "level_residuals": [None if not np.isfinite(v) else float(v)
-                                for v in fit.level_residuals],
             "row_effect_F_at_zero": float(fit.objective_zero),
             "row_effect_F_at_estimate": float(fit.objective_estimate),
             "rows_used_per_tile": {
@@ -356,7 +347,6 @@ def create_corrections(
     offset_min_significance: float = 2.0,
     column_mask: bool = True,
     column_mask_fraction: float = 0.2,
-    exclude_outlier_levels: bool = True,
 ) -> None:
     """Create the background-subtraction and zy-correction TIFFs.
 
@@ -469,10 +459,6 @@ def create_corrections(
         percentiles of top and bottom rows are not taken over the same pixels.
         Applies to the offset fit (percentiles) and to the plain multiplier
         calibration (row median).
-    exclude_outlier_levels : bool, default=True
-        Leave out percentile levels whose rows do not follow the multipliers of the
-        other levels (e.g. a low percentile that still holds background); the levels
-        left out are listed in the offset fit report.
     column_mask_fraction : float, default=0.2
         Share of rows (0-1) that may be masked in a column that is kept.
 
@@ -569,8 +555,7 @@ def create_corrections(
             percentiles=tuple(offset_percentiles) if offset_percentiles else None,
             max_columns=offset_max_columns,
             min_significance=offset_min_significance,
-            column_mask_fraction=column_mask_fraction if column_mask else None,
-            exclude_outlier_levels=exclude_outlier_levels)
+            column_mask_fraction=column_mask_fraction if column_mask else None)
         settings.levels()      # validates the percentiles
         maps = _offset_corrections(
             tile_paths, reference_tiles, crops, todo, vertical_flip, layer, bg_len,

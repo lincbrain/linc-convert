@@ -172,11 +172,9 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
     if best in (0, grid_points - 1):
         return float(grid[best]), False, curve
     lo, hi = float(grid[best - 1]), float(grid[best + 1])
-    tried = [(float(g), v) for g, v in zip(grid, values) if np.isfinite(v)]
     phi = (math.sqrt(5) - 1) / 2
     x1, x2 = hi - phi * (hi - lo), lo + phi * (hi - lo)
     f1, f2 = evaluate(x1), evaluate(x2)
-    tried += [(x1, f1), (x2, f2)]
     for _ in range(golden_steps):
         if hi - lo < precision:
             break
@@ -184,92 +182,11 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
             hi, x2, f2 = x2, x1, f1
             x1 = hi - phi * (hi - lo)
             f1 = evaluate(x1)
-            tried.append((x1, f1))
         else:
             lo, x1, f1 = x1, x2, f2
             x2 = lo + phi * (hi - lo)
             f2 = evaluate(x2)
-            tried.append((x2, f2))
-    # the middle of the final bracket can be worse than a point already tried when the
-    # objective is nearly flat: return the best point actually evaluated
-    mid = 0.5 * (lo + hi)
-    tried.append((mid, evaluate(mid)))
-    return float(min((t for t in tried if np.isfinite(t[1])), key=lambda t: t[1])[0]), \
-        True, curve
-
-
-def level_outliers(pa, pb, wt, na, nb, active: List[int], limit: float, k: float,
-                   floor: float, min_levels: int) -> Tuple[List[int], Dict[int, float]]:
-    """Percentile levels whose offset recommendation or residual differs wildly.
-
-    Two checks, repeated (worst level first) while levels remain above ``min_levels``:
-
-    * leave one out: the offset ``d_-p`` found without level ``p``. A level that still
-      holds background pulls the offset; leaving it out moves the estimate away from the
-      ``d_-q`` of all the other levels. ``p`` is an outlier if ``|d_-p - median(d_-q)|``
-      is above ``k`` robust standard deviations (1.4826 * MAD of the ``d_-q``) and
-      above ``floor`` counts.
-    * residual: at the offset of all active levels, each level's residual against the
-      gain fitted WITHOUT that level, relative to its own size. An outlier is more than
-      ``k`` robust standard deviations above the median, at least twice it and above
-      0.01 (this also catches several bad levels together).
-
-    Both checks are skipped when an offset search runs to the end of its range (the
-    estimates mean nothing then). Returns the excluded level indices and the
-    leave-one-out offset of every level (first pass).
-    """
-    active = list(active)
-    excluded: List[int] = []
-    first: Dict[int, float] = {}
-    quick = dict(grid_points=11, golden_steps=40, precision=0.02)
-
-    def best(levels):
-        sel = np.asarray(levels)
-        d, interior, _ = search_offset(
-            lambda x: mismatch(x, pa[:, sel], pb[:, sel], wt, na, nb)[0], limit, **quick)
-        return d if interior else float("nan")
-
-    while len(active) > min_levels:
-        d_all = best(active)
-        drops = {p: best([q for q in active if q != p]) for p in active}
-        if not np.isfinite(d_all) or not all(np.isfinite(v) for v in drops.values()):
-            print("  (level check skipped: the offset search ran to the end of its "
-                  "range for some level set)")
-            break
-        if not first:
-            first = dict(drops)
-        vals = np.array(list(drops.values()))
-        med = float(np.median(vals))
-        mad = float(np.median(np.abs(vals - med)))
-        worst_p = max(drops, key=lambda p: abs(drops[p] - med))
-        flag = None
-        if abs(drops[worst_p] - med) > max(k * 1.4826 * mad, floor):
-            flag = worst_p
-        if flag is None:
-            sel = np.asarray(active)
-            u = pa[:, sel] - na[None, None] + d_all
-            v = pb[:, sel] - nb[None, None] + d_all
-            ok = (u > 0) & (v > 0) & np.isfinite(u) & np.isfinite(v) & (wt[:, None] > 0)
-            uu = np.where(ok, u, 0.0)
-            vv = np.where(ok, v, 0.0)
-            suu = (uu * uu).sum(axis=1, keepdims=True)
-            suv = (uu * vv).sum(axis=1, keepdims=True)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                g = np.where(suu - uu * uu > 0, (suv - uu * vv) / (suu - uu * uu), 0.0)
-                r = np.abs(vv - g * uu) / np.maximum(vv, 1e-9)
-            w = np.where(ok, wt[:, None], 0.0)
-            res = (w * r).sum(axis=(0, 2, 3)) / np.maximum(w.sum(axis=(0, 2, 3)), 1e-12)
-            rmed = float(np.median(res))
-            rmad = float(np.median(np.abs(res - rmed)))
-            j = int(np.argmax(res))
-            if res[j] > rmed + k * 1.4826 * rmad and res[j] > 2.0 * rmed \
-                    and res[j] > 0.01:
-                flag = active[j]
-        if flag is None:
-            break
-        excluded.append(flag)
-        active.remove(flag)
-    return excluded, first
+    return 0.5 * (lo + hi), True, curve
 
 
 def level_ratios(delta: float, pa, pb, weight, na, nb, sa, sb) -> np.ndarray:
@@ -337,17 +254,6 @@ def main() -> None:
     p.add_argument("--reference_tiles", type=int, nargs="+",
                    help="reference tiles of create_corrections (1-based) instead of the "
                         "automatic pick")
-    p.add_argument("--outlier_k", type=float, default=4.0,
-                   help="a percentile level is left out (in this and later rounds, and "
-                        "in create_corrections) when its recommended offset or its "
-                        "residual is more than this many robust standard deviations "
-                        "from the other levels'")
-    p.add_argument("--outlier_floor", type=float, default=1.0,
-                   help="... and its offset differs by at least this many counts")
-    p.add_argument("--min_levels", type=int, default=5,
-                   help="never keep fewer levels than this")
-    p.add_argument("--no_level_exclusion", action="store_true",
-                   help="use every level, whatever they recommend")
     p.add_argument("--dry_run", action="store_true",
                    help="measure and report, change nothing")
     p.add_argument("--restore", action="store_true",
@@ -508,26 +414,8 @@ def main() -> None:
 
     levels = [float(v) for v in args.levels]
 
-    excluded: List[int] = []          # indices into levels, kept for all later rounds
-
     def active_levels() -> List[int]:
-        return [i for i in range(len(levels)) if i not in excluded]
-
-    def merge_create_exclusions() -> None:
-        """Take over the levels create_corrections left out of the multiplier fit."""
-        path = os.path.join(args.corrections_dir, f"offset_fit_camera{args.camera_id}.yaml")
-        if not os.path.exists(path):
-            return
-        with open(path) as f:
-            rep = (yaml.safe_load(f) or {}).get("channels", {}).get(args.channel, {})
-        for v in rep.get("excluded_levels", []) or []:
-            for i, lv in enumerate(levels):
-                if abs(lv - float(v)) < 1e-6 and i not in excluded:
-                    excluded.append(i)
-                    print(f"  level {lv:g} was left out by create_corrections: "
-                          "left out here too from now on")
-
-    merge_create_exclusions()          # levels the first create_corrections already dropped
+        return list(range(len(levels)))
 
     def measure_round(label: str) -> Tuple[float, bool, float, float, float]:
         na, nb, sa, sb = current_rows()
@@ -540,44 +428,21 @@ def main() -> None:
             low = (pa[:, near] - na[None])[np.isfinite(pa[:, near])]
             level = float(np.median(low[low > 0])) if (low > 0).any() else 0.0
             limit = max(args.offset_range * level, 1.0)
-        if not args.no_level_exclusion:
-            new, first = level_outliers(pa, pb, wt, na, nb, active_levels(), limit,
-                                        args.outlier_k, args.outlier_floor,
-                                        args.min_levels)
-            if first:
-                print("  offset without each level: " + " ".join(
-                    f"{levels[i]:g}:{d:+.2f}" for i, d in first.items()))
-            for i in new:
-                excluded.append(i)
-                print(f"  level {levels[i]:g} recommends a wildly different offset or "
-                      "does not fit the others: left out from now on")
         act = np.asarray(active_levels())
         pa_a, pb_a = pa[:, act], pb[:, act]
         ev = lambda x: mismatch(x, pa_a, pb_a, wt, na, nb)[0]  # noqa: E731
         before = ev(0.0)
         delta, interior, curve = search_offset(ev, limit)
         after = ev(delta)
-        if not after < before:
-            # never move to an offset that scores worse than the one we have
-            delta, after = 0.0, before
         print(f"\n{label}: search range +-{limit:.1f} counts; mismatch "
               f"{before:.5f} at delta 0 -> {after:.5f} at delta {delta:+.2f}"
               + ("" if interior else "  (at the EDGE of the range)"))
         r0 = level_ratios(0.0, pa_a, pb_a, wt, na, nb, sa, sb)
         r1 = level_ratios(delta, pa_a, pb_a, wt, na, nb, sa, sb)
-        print("  levels used: " + " ".join(f"{levels[i]:g}" for i in act)
-              + ("" if not excluded else "   left out: "
-                 + " ".join(f"{levels[i]:g}" for i in excluded)))
+        print("  levels used: " + " ".join(f"{levels[i]:g}" for i in act))
         print("  median ratio second/first at those levels")
         print("    delta 0:     " + " ".join(f"{v:.3f}" for v in r0))
         print(f"    delta {delta:+.2f}: " + " ".join(f"{v:.3f}" for v in r1))
-        print("  scan: offset change -> score, median ratio at lowest / highest level, "
-              "gap (highest - lowest)")
-        for frac in (-0.5, -0.25, -0.1, 0.0, 0.1, 0.25, 0.5):
-            d = frac * limit
-            rr = level_ratios(d, pa_a, pb_a, wt, na, nb, sa, sb)
-            print(f"    delta {d:+8.2f}: score {ev(d):12.5f}  ratios {rr[0]:.3f} / {rr[-1]:.3f}"
-                  f"  gap {rr[-1] - rr[0]:+.3f}")
         return delta, interior, before, after, limit
 
     history: List[Dict] = []
@@ -623,10 +488,8 @@ def main() -> None:
             only_channel=args.channel, force=True, layer=args.layer, fit_offset=True,
             fixed_offset=float(offset),
             offset_percentiles=[levels[i] for i in active_levels()],
-            exclude_outlier_levels=not args.no_level_exclusion,
             column_mask=True, column_mask_fraction=args.column_mask_fraction)
         noise, scaler = load_corrections(args.corrections_dir, args.channel)
-        merge_create_exclusions()
     else:
         if not args.dry_run:
             delta, interior, before, after, limit = measure_round(
@@ -649,7 +512,6 @@ def main() -> None:
                                 "stop_reason": stop_reason,
                                 "pairs_used": [int(i) + 1 for i in used],
                                 "levels": levels,
-                                "excluded_levels": [levels[i] for i in excluded],
                                 "column_mask_fraction": args.column_mask_fraction,
                                 "rounds": history})
         print(f"wrote {scaler_file} and {noise_file}; history in {state_file}")
