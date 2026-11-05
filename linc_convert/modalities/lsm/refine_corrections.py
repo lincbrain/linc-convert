@@ -245,9 +245,9 @@ def main() -> None:
                         "percentile above the background")
     p.add_argument("--offset_limit", type=float,
                    help="search range in counts (replaces --offset_range)")
-    p.add_argument("--offset_tol", type=float, default=0.5,
-                   help="stop when |delta| of a round is below this many counts (or the "
-                        "mismatch no longer improves by 0.1%%)")
+    p.add_argument("--offset_tol", type=float, default=0.05,
+                   help="the offset is stable when |delta| of a round is below this many "
+                        "counts")
     p.add_argument("--max_iterations", type=int, default=5)
     p.add_argument("--n_reference_tiles", type=int, default=16,
                    help="reference tiles create_corrections picks automatically")
@@ -439,6 +439,8 @@ def main() -> None:
 
     history: List[Dict] = []
     stable = False
+    stop_reason = "max_iterations"
+    prev_delta: Optional[float] = None
     for it in range(1, args.max_iterations + 1):
         delta, interior, before, after, limit = measure_round(
             f"round {it}: offset so far {offset:+.2f}")
@@ -446,13 +448,21 @@ def main() -> None:
                         "delta": float(delta), "interior": bool(interior),
                         "mismatch_at_zero": float(before),
                         "mismatch_at_delta": float(after), "search_limit": float(limit)})
-        if abs(delta) < args.offset_tol or before - after <= 1e-3 * before:
-            why = (f"|delta| {abs(delta):.2f} < {args.offset_tol:g}"
-                   if abs(delta) < args.offset_tol else
-                   "the mismatch does not improve by 0.1% or more")
-            print(f"  {why}: the offset is stable")
+        if abs(delta) < args.offset_tol:
+            print(f"  |delta| {abs(delta):.3f} < {args.offset_tol:g}: the offset is stable")
             stable = True
+            stop_reason = "stable"
             break
+        if prev_delta is not None and delta * prev_delta < 0 \
+                and abs(delta) >= abs(prev_delta):
+            # the last step overshot and this one would overshoot back by as much:
+            # more rounds would only swing between the two, so keep the maps as they are
+            print(f"  delta {delta:+.3f} undoes the last step ({prev_delta:+.3f}) without "
+                  "getting smaller: flip-flop, stopping with the current offset")
+            history[-1]["flip_flop"] = True
+            stop_reason = "flip-flop"
+            break
+        prev_delta = delta
         if args.dry_run:
             print("  dry run: no new maps")
             break
@@ -481,17 +491,21 @@ def main() -> None:
                             "mismatch_at_zero": float(before),
                             "mismatch_at_delta": float(after)})
             stable = abs(delta) < args.offset_tol
+            stop_reason = "stable" if stable else stop_reason
             print("  (not applied)")
 
     print(f"\nfinal offset {offset:+.2f} counts (started at {start_offset:+.2f}); "
-          + ("stable" if stable else f"not stable after {args.max_iterations} rounds"))
+          + ("stable" if stable else
+             "stopped at a flip-flop between two offsets" if stop_reason == "flip-flop"
+             else f"not stable after {args.max_iterations} rounds"))
     if not args.dry_run:
         write_yaml(state_file, {"start_offset": start_offset,
                                 "final_offset": float(offset), "stable": bool(stable),
+                                "stop_reason": stop_reason,
                                 "pairs_used": [int(i) + 1 for i in used],
                                 "levels": [float(v) for v in args.levels],
                                 "column_mask_fraction": args.column_mask_fraction,
-                                        "rounds": history})
+                                "rounds": history})
         print(f"wrote {scaler_file} and {noise_file}; history in {state_file}")
 
 
