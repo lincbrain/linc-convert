@@ -85,6 +85,15 @@ class PercentileSettings:
         ``corrections.keep_columns``). The percentiles are then plain percentiles
         of the kept columns. None: judge every pixel on its own, with the percentile
         ranks adjusted for each tile's tissue fraction (the older method).
+    exclude_outlier_levels : bool
+        Leave out percentile levels whose values do not follow the same row
+        multipliers as the other levels (see ``outlier_levels``).
+    outlier_k : float
+        A level is an outlier if its residual is more than this many robust standard
+        deviations (1.4826 * MAD) above the median residual of the levels, at least
+        twice that median and above 0.01.
+    min_levels : int
+        Outlier exclusion never leaves fewer levels than this.
     """
     low: float = 30.0
     high: float = 70.0
@@ -94,6 +103,9 @@ class PercentileSettings:
     min_significance: float = 2.0
     percentiles: Optional[Tuple[float, ...]] = None
     column_mask_fraction: Optional[float] = None
+    exclude_outlier_levels: bool = True
+    outlier_k: float = 4.0
+    min_levels: int = 5
 
     def levels(self) -> Tuple[float, ...]:
         """The percentiles used: ``percentiles`` if given, else ``(low, high)``."""
@@ -142,6 +154,9 @@ class PercentileFit:
     rows_used: List[int] = field(default_factory=list)
     rows_total: int = 0
     search_limit: float = float("nan")
+    levels: List[float] = field(default_factory=list)
+    excluded_levels: List[float] = field(default_factory=list)
+    level_residuals: List[float] = field(default_factory=list)
 
 
 def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: float,
@@ -411,6 +426,73 @@ def _search(lines: np.ndarray, weights: np.ndarray, low: float, high: float) -> 
     return float(0.5 * (lo + hi))
 
 
+def level_residuals(lines: np.ndarray, weights: np.ndarray, offset: float,
+                    multiplier: np.ndarray) -> np.ndarray:
+    """Weighted mean ``|a * m / T - 1|`` of every percentile level, shape (K,).
+
+    ``a = q - b + offset``; ``T`` is the weighted tile level of each percentile for the
+    given multipliers. NaN for a level with no weight.
+    """
+    used = np.isfinite(lines) & (weights > 0)
+    w = np.where(used, weights, 0.0).astype(np.float64)
+    a = np.where(used, lines + offset, 1.0).astype(np.float64)
+    m = np.where(np.isfinite(multiplier), multiplier, 1.0).astype(np.float64)
+    wm = w * m[None, None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        target = (wm * a).sum(axis=(2, 3)) / w.sum(axis=(2, 3))
+        resid = np.abs(a * m[None, None] / target[:, :, None, None] - 1.0)
+        out = (w * resid).sum(axis=(0, 2, 3)) / w.sum(axis=(0, 2, 3))
+    return out
+
+
+def outlier_levels(lines: np.ndarray, weights: np.ndarray, offset: float,
+                   k: float = 4.0, min_levels: int = 5
+                   ) -> Tuple[List[int], np.ndarray, np.ndarray]:
+    """Find percentile levels that disagree with the others about the multipliers.
+
+    For every active level the multipliers are fitted with the OTHER active levels and
+    the level's own residual (``level_residuals``) is measured, so a bad level cannot
+    pull the multipliers towards itself. The level with the largest residual is dropped
+    if it is more than ``k`` robust standard deviations (1.4826 * MAD, over the active
+    levels) above their median, at least twice the median and above 0.01 (relative).
+    Then the fit is repeated, until nothing is flagged or only ``min_levels`` are left.
+
+    Returns
+    -------
+    (excluded, weights, residuals)
+        Indices of the excluded levels, the weights with those levels set to 0, and
+        the residual of every level at the last pass it was measured in.
+    """
+    weights = weights.copy()
+    active = [i for i in range(lines.shape[1]) if (weights[:, i] > 0).any()]
+    excluded: List[int] = []
+    shown = np.full(lines.shape[1], np.nan)
+    while True:
+        res = np.full(lines.shape[1], np.nan)
+        for i in active:
+            w_i = weights.copy()
+            w_i[:, i] = 0.0
+            m, _ = _solve(lines, w_i, offset)
+            only = np.zeros_like(weights)
+            only[:, i] = weights[:, i]
+            res[i] = level_residuals(lines, only, offset, m)[i]
+        for i in active:
+            shown[i] = res[i]
+        if len(active) <= min_levels:
+            break
+        r = res[active]
+        med = float(np.nanmedian(r))
+        mad = float(np.nanmedian(np.abs(r - med)))
+        worst = active[int(np.nanargmax(r))]
+        if not (res[worst] > med + k * 1.4826 * mad and res[worst] > 2.0 * med
+                and res[worst] > 0.01):
+            break
+        excluded.append(worst)
+        active.remove(worst)
+        weights[:, worst] = 0.0
+    return excluded, weights, shown
+
+
 def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = None,
                fixed_offset: Optional[float] = None) -> PercentileFit:
     """Fit the shared offset and the (z, y) multipliers.
@@ -455,6 +537,13 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
 
     estimate = (float(fixed_offset) if fixed_offset is not None
                 else _search(lines, weights, -limit, limit))
+    excluded: List[int] = []
+    shown = np.full(lines.shape[1], np.nan)
+    if settings.exclude_outlier_levels:
+        excluded, weights, shown = outlier_levels(
+            lines, weights, estimate, settings.outlier_k, settings.min_levels)
+        if excluded and fixed_offset is None:
+            estimate = _search(lines, weights, -limit, limit)
     objective_zero = _ratio_f(lines, weights, 0.0)
     objective_estimate = _ratio_f(lines, weights, estimate)
 
@@ -476,12 +565,16 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     applied = (float(fixed_offset) if fixed_offset is not None
                else float(estimate) if significant else 0.0)
     final_weights = np.where(lines + applied > MIN_SCALER, tissue[:, None], 0.0)
+    if excluded:
+        final_weights[:, excluded] = 0.0
     multiplier, _ = _solve(lines, final_weights.astype(np.float32), applied)
     rows_used = [int((final_weights[i].min(axis=0) > 0).sum()) for i in range(n_tiles)]
     return PercentileFit(
         applied, float(estimate), se, multiplier, tile_estimates,
         float(objective_zero), float(objective_estimate),
-        rows_used, n_z * n_y, float(limit))
+        rows_used, n_z * n_y, float(limit), list(settings.levels()),
+        [float(settings.levels()[i]) for i in excluded],
+        [float(v) for v in shown])
 
 
 def multiplier_to_scaler(multiplier: np.ndarray) -> np.ndarray:
