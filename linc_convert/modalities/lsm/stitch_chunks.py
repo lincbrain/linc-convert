@@ -145,8 +145,11 @@ def _resolve_tile_paths(input_path: str, camera_id: int, coords_path: str,
 
 # target dask block (z, y, x) of the raw chunks, rounded down to a multiple of the
 # stored chunks: a few large blocks instead of very many small ones keeps the task
-# graph small at full resolution (a graph of ~200 MiB stalled the scheduler)
-DASK_BLOCK = (128, 256, 512)
+# graph small at full resolution (a graph of ~200 MiB stalled the scheduler).
+# y is never split: with a z shear the nearest-neighbour shear of dask-image is off
+# by one voxel in z at some rows next to every y block edge (0.4% of the voxels;
+# splitting z or x is exact), so a chunk is kept whole along y.
+DASK_BLOCK = (128, 1 << 30, 512)
 
 
 def _checkpoint_path(out_dir: str) -> str:
@@ -778,7 +781,7 @@ def stitch_chunks(
     corrections_dir: str,
     *,
     voxel_size: List[float] = [1, 1, 1],
-    memory_gb: int = 128,
+    memory_gb: int = 64,
     all_chunks: bool = False,
     dz_as_shear_z: bool = False,
     per_chunk_registration: bool = False,
