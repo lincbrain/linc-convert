@@ -233,31 +233,26 @@ def _offset_corrections(
         reason = ""
         if fixed_offset is not None:
             reason = " (fixed, not estimated)"
-        elif fit.offset == 0.0:
-            reason = (" (estimate not significant or not inside the search range, "
-                      "so 0)")
-        if fit.excluded_levels:
-            print(f"channel {ch}: percentile levels {fit.excluded_levels} left out "
-                  "(their rows do not follow the other levels' multipliers; residuals "
-                  + ", ".join(f"{l:g}:{r:.3f}" for l, r in
-                              zip(fit.levels, fit.level_residuals)) + ")", flush=True)
-        print(f"channel {ch}: offset estimate {fit.estimate:+.2f} +- "
-              f"{fit.standard_error:.2f} (standard error, search range +-"
-              f"{fit.search_limit:.1f}); applied offset {fit.offset:+.2f}{reason}")
+        elif fit.offset == 0.0 and abs(fit.estimate) > 0:
+            reason = " (estimate not inside the search range, so 0)"
+        elif not np.isfinite(fit.estimate):
+            reason = " (no usable rows)"
+        rounds = ", ".join(f"{h:+.2f}" for h in fit.offset_history)
+        print(f"channel {ch}: offset {fit.estimate:+.2f} after {len(fit.offset_history)} "
+              f"round(s) [{rounds}]{'' if fit.converged else ' (NOT converged)'}; "
+              f"search range +-{fit.search_limit:.1f}; applied offset "
+              f"{fit.offset:+.2f}{reason}", flush=True)
         report[ch] = {
             "offset_applied": float(fit.offset),
             "offset_estimate": float(fit.estimate),
-            "standard_error": float(fit.standard_error),
+            "converged": bool(fit.converged),
+            "offset_history": [float(h) for h in fit.offset_history],
             "search_limit": float(fit.search_limit),
-            "tile_estimates_leave_one_out": {
-                int(t): float(o) for t, o in
-                zip(reference_tiles, fit.tile_estimates)},
             "percentile_levels": [float(v) for v in fit.levels],
-            "excluded_levels": [float(v) for v in fit.excluded_levels],
-            "level_residuals": [None if not np.isfinite(v) else float(v)
-                                for v in fit.level_residuals],
-            "row_effect_F_at_zero": float(fit.objective_zero),
-            "row_effect_F_at_estimate": float(fit.objective_estimate),
+            "multiplier_level_weights": [float(v) for v in fit.multiplier_level_weights],
+            "offset_level_weights": [float(v) for v in fit.offset_level_weights],
+            "offset_score_at_zero": float(fit.score_zero),
+            "offset_score_at_estimate": float(fit.score_estimate),
             "rows_used_per_tile": {
                 int(t): round(u / max(fit.rows_total, 1), 3) for t, u in
                 zip(reference_tiles, fit.rows_used)}}
@@ -273,7 +268,10 @@ def _offset_corrections(
                      "column_mask_fraction": settings.column_mask_fraction,
                      "max_columns": settings.max_columns,
                      "max_offset_fraction": settings.max_offset_fraction,
-                     "min_significance": settings.min_significance},
+                     "multiplier_weight_power": settings.multiplier_weight_power,
+                     "offset_weight_power": settings.offset_weight_power,
+                     "max_iterations": settings.max_iterations,
+                     "offset_tol": settings.offset_tol},
         "channels": report})
     return maps
 
@@ -353,7 +351,11 @@ def create_corrections(
     offset_percentiles: Optional[List[float]] = None,
     fixed_offset: Optional[float] = None,
     offset_max_columns: int = 512,
-    offset_min_significance: float = 2.0,
+    offset_max_fraction: float = 0.5,
+    offset_weight_power: float = 3.0,
+    multiplier_weight_power: float = 3.0,
+    offset_max_iterations: int = 8,
+    offset_tol: float = 0.1,
     column_mask: bool = True,
     column_mask_fraction: float = 0.2,
 ) -> None:
@@ -421,44 +423,49 @@ def create_corrections(
         ``output_dir``) with ``stitch_chunks``.
     fit_offset : bool, default=False
         Also fit one background offset shared by all rows of a channel (needs at
-        least 3 reference tiles, 8 recommended; not with ``per_chunk``). The
+        least 2 reference tiles, 8 or more recommended; not with ``per_chunk``). The
         subtracted background becomes ``noise - offset`` and the noise TIFF holds
         that, so a positive offset subtracts less and a negative one more.
-        For every tile and (z, y) row the ``offset_low_percentile`` and
-        ``offset_high_percentile`` (default 30 and 70) of the row's tissue
-        pixels along x are taken (tissue: raw value >=
-        ``median(noise) * zy_threshold_multiplier``; at the same overall rank in
-        every row of a tile, so that a row's gain cannot change which pixels
-        count). The offset and the per-(z, y) multipliers are then fitted to the
-        percentiles of all reference tiles together: each row counts in
-        proportion to its fraction of tissue pixels, the multiplier of a row
-        must bring both percentiles of every tile to the tile's common levels
-        (least squares), and the offset is the value at which the ratio of the
-        corrected percentiles no longer depends on the row (the gain is shared by
-        all tiles of a row, anatomy is not). Its standard error comes from
-        leaving out one tile at a time; the offset is only applied if it lies
-        inside the search range (+-``0.5`` x the typical low percentile above the
-        background) and is at least ``offset_min_significance`` standard errors
-        from 0, otherwise 0 is used (the multipliers are still the ones fitted
-        here). The estimate, its standard error and the leave-one-out estimates
-        are written to ``{output_dir}/offset_fit_camera{camera_id}.yaml``. All
-        tiles of a channel are held in memory as 2 x Z x Y floats each.
+        For every reference tile (a whole chunk after the stitching crop) and
+        (z, y) row, the ``offset_percentiles`` of the row's tissue pixels along x
+        are taken (tissue: raw value >= ``median(noise) * zy_threshold_multiplier``,
+        the same x columns for every row, see ``column_mask``). The offset and the
+        per-(z, y) multipliers are then found by ALTERNATING, see
+        ``stitching_utils.percentile_fit``: multipliers for the current offset with
+        the HIGH percentiles weighted heavily, then the offset that minimises the
+        differences between the rows' corrected percentiles of every tile for those
+        multipliers, with the LOW percentiles weighted heavily; repeated until the
+        offset moves by less than ``offset_tol`` counts or ``offset_max_iterations``
+        rounds. The offset is applied only if it lies inside the search range
+        (+-``offset_max_fraction`` x the typical lowest percentile above the
+        background), otherwise 0 is used (the multipliers are still the ones fitted
+        here). The offset after every round is written to
+        ``{output_dir}/offset_fit_camera{camera_id}.yaml``. All tiles of a channel are
+        held in memory as K x Z x Y floats each (K percentiles).
     offset_low_percentile, offset_high_percentile : float, default=30, 70
-        The two percentiles (0-100, low < high) of the tissue pixels of a row.
+        Only used when ``offset_percentiles`` is not given.
     offset_percentiles : list of float, optional
         Two or more increasing percentiles (0-100) used instead of the low / high
-        pair, for example ``25 37.5 50 62.5 75``. More percentiles make the
-        multipliers slightly more accurate on real data.
+        pair, for example ``10 15 20 30 40 50 60 70 80 90 95``.
+    offset_weight_power : float, default=3
+        Percentile ``p`` counts ``(1 - p / 100) ** power`` in the offset search
+        (lower percentiles heavy). 0 weights all percentiles equally.
+    multiplier_weight_power : float, default=3
+        Percentile ``p`` counts ``(p / 100) ** power`` in the multiplier fit
+        (higher percentiles heavy).
+    offset_max_fraction : float, default=0.5
+        Offset search range, as a share of the typical lowest percentile above the
+        background.
+    offset_max_iterations : int, default=8
+        Rounds of (multipliers, offset) at most.
+    offset_tol : float, default=0.1
+        Counts; the offset is stable when a round moves it by less.
     fixed_offset : float, optional
-        Use this offset (0 for none) instead of estimating one: no search, no
-        standard error, no significance test, only the multipliers are fitted,
-        with the percentile method. Needs ``fit_offset``. Use it when the
+        Use this offset (0 for none) instead of estimating one: no search, only
+        the multipliers are fitted, with the percentile method. Needs ``fit_offset``. Use it when the
         offset is not worth estimating (``evaluate_corrections`` can show that).
     offset_max_columns : int, default=512
         At most this many x columns (evenly strided) are read per row.
-    offset_min_significance : float, default=2.0
-        Standard errors the offset must differ from 0 to be applied (0 applies
-        any estimate that has one).
     column_mask : bool, default=True
         Measure every row of a tile on the same x columns. A pixel is masked if it
         is below the tissue threshold; an x column is then masked for ALL rows if
@@ -554,16 +561,14 @@ def create_corrections(
     if fit_offset:
         if len(reference_tiles) < (1 if fixed_offset is not None else 2):
             raise ValueError("fit_offset needs at least 2 reference tiles "
-                             f"(3 or more for a standard error), got "
-                             f"{len(reference_tiles)}")
-        if len(reference_tiles) < 3 and fixed_offset is None:
-            print("WARNING: with fewer than 3 reference tiles the offset has no "
-                  "standard error and is not applied")
+                             f"(8 or more recommended), got {len(reference_tiles)}")
         settings = percentile_fit.PercentileSettings(
             low=offset_low_percentile, high=offset_high_percentile,
             percentiles=tuple(offset_percentiles) if offset_percentiles else None,
-            max_columns=offset_max_columns,
-            min_significance=offset_min_significance,
+            max_columns=offset_max_columns, max_offset_fraction=offset_max_fraction,
+            multiplier_weight_power=multiplier_weight_power,
+            offset_weight_power=offset_weight_power,
+            max_iterations=offset_max_iterations, offset_tol=offset_tol,
             column_mask_fraction=column_mask_fraction if column_mask else None)
         settings.levels()      # validates the percentiles
         maps = _offset_corrections(

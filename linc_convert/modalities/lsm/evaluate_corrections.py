@@ -242,8 +242,8 @@ def make_maps(strategy: Strategy, data: Data, references: Sequence[int],
     record = {"offset": float(fit.offset), "estimate": float(fit.estimate),
               "standard_error": float(fit.standard_error),
               "search_limit": float(fit.search_limit), "n_ref": len(refs),
-              "F_at_zero": float(fit.objective_zero),
-              "F_at_estimate": float(fit.objective_estimate)}
+              "score_at_zero": float(fit.score_zero),
+              "score_at_estimate": float(fit.score_estimate)}
     return noise, scaler, record
 
 

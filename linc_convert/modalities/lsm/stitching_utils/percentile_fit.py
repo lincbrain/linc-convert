@@ -1,41 +1,42 @@
-"""Shared background offset and zy multipliers from two tissue percentiles.
+"""Shared background offset and zy multipliers from full-chunk row percentiles.
 
-Every (z, y) row of a tile is one line of x values. Per row and tile this
-module keeps
+Every (z, y) row of a reference tile (a whole chunk, after the stitching crop) is one
+line of x values. Per row and tile this module keeps
 
 * ``b``  -- the row's background (median of its trailing background columns),
-* ``q30``, ``q70`` -- the 30th and 70th percentile (configurable) over x of the
-  RAW values of the row's tissue pixels (raw value >= ``median(b) *
-  threshold_multiplier``),
-* ``w``  -- the row's tissue fraction (share of sampled x columns that are
-  tissue).
+* ``q_p`` -- percentiles ``p`` (default 10 15 20 30 40 50 60 70 80 90 95) over x of the
+  RAW values of the row's tissue pixels (the same x columns for every row of the tile),
+* ``w``  -- the row's tissue fraction.
 
-A corrected row is ``(value - (b - offset)) * m`` with ONE ``offset`` shared by
-every row and one multiplier ``m`` per (z, y) shared by every tile. With
-``a = max(q - b + offset, 0)`` the corrected percentile of tile ``c`` is
-``a * m``, and it should equal a level ``T[c, p]`` that is the same for all
-rows of the tile, i.e. ``a[c, p, z, y] = T[c, p] * g[z, y]`` with ``g = 1 / m``.
-For a given ``offset`` the fit minimises the weighted squared residual of that
-rank-1 model
+A corrected row is ``(value - (b - offset)) * m`` with ONE ``offset`` shared by every
+row and one multiplier ``m`` per (z, y) shared by every tile. With
+``a = q_p - b + offset`` the corrected percentile is ``a * m`` and it should be the same
+for all rows of a tile: ``a[c, p, z, y] * m[z, y] = T[c, p]``.
 
-    sum over tiles c, rows (z, y), percentiles p of
-        w[c, z, y] * ((a[c, p, z, y] - T[c, p] * g[z, y]) / s[c]) ** 2
+The offset and the multipliers are found by ALTERNATING (no nested search):
 
-by alternating closed-form updates of ``g`` and ``T``; ``w`` is the row's
-tissue fraction and ``s[c]`` the tile's median ``q_high - q_low`` (independent
-of the offset). The residual is in raw counts, so it does not shrink when the
-offset gets large (a relative residual would) or small. The offset is found by
-a 1-D search of the resulting objective, and ``m = 1 / g`` is scaled to a
-median of 1 over the rows with tissue.
+1. Multipliers for the current offset (alternating least squares on the relative
+   residual ``a * m / T - 1``), with the HIGH percentiles weighted heavily
+   (``weight_p = (p / 100) ** multiplier_weight_power``). The high percentiles are
+   bright tissue, where an offset error is a small share of the value, so they tell
+   the row gains almost independently of the offset.
+2. Offset for the current multipliers: the value that minimises, over all tiles and
+   percentiles, the differences between the rows' corrected percentiles (the same
+   score as above, with ``m`` held fixed), with the LOW percentiles weighted heavily
+   (``weight_p = (1 - p / 100) ** offset_weight_power``). The low percentiles are dim
+   tissue, where an offset error is a large share of the value, so they tell the
+   offset best.
 
-Why two percentiles can tell the offset: ``m`` multiplies the signal, so a row
-with a larger gain has both percentiles scaled the same way, but an offset
-shifts both by the same amount. If the offset is wrong, the ratio of the
-corrected percentiles changes with the row's gain; the right offset makes the
-ratio the same for all rows of a tile. Anatomy also changes that ratio from row
-to row; averaging over rows and tiles and the tissue weights keep it small, and
-the delete-one-tile jackknife standard error says whether what is left is
-noise. The offset is only applied if it is significantly non-zero.
+Steps 1 and 2 repeat until the offset changes by less than ``offset_tol`` counts or
+``max_iterations`` rounds are made. The score is the negative log-likelihood of a model
+whose noise is proportional to the predicted value (relative noise level profiled out),
+so neither a large nor a small offset is favoured for its scale alone:
+
+    0.5 * log(weighted mean of residual ** 2) + weighted mean of log(T / m).
+
+``m`` is scaled to a median of 1 over the rows with tissue. An estimate at the edge of
+the search range (+- ``max_offset_fraction`` of the typical low percentile above the
+background) means the score had no minimum inside it; it is then not applied.
 """
 
 import warnings
@@ -75,9 +76,7 @@ class PercentileSettings:
         A row needs at least this many tissue pixels among them.
     max_offset_fraction : float
         The offset is searched within +- this fraction of the typical corrected
-        high percentile.
-    min_significance : float
-        Standard errors the estimate must differ from 0 to be applied.
+        low percentile.
     column_mask_fraction : float, optional
         If given, every row of a tile is measured on the same x columns: a column
         is left out for all rows if more than this share of the tile's rows are
@@ -85,27 +84,29 @@ class PercentileSettings:
         ``corrections.keep_columns``). The percentiles are then plain percentiles
         of the kept columns. None: judge every pixel on its own, with the percentile
         ranks adjusted for each tile's tissue fraction (the older method).
-    exclude_outlier_levels : bool
-        Leave out percentile levels whose values do not follow the same row
-        multipliers as the other levels (see ``outlier_levels``).
-    outlier_k : float
-        A level is an outlier if its residual is more than this many robust standard
-        deviations (1.4826 * MAD) above the median residual of the levels, at least
-        twice that median and above 0.01.
-    min_levels : int
-        Outlier exclusion never leaves fewer levels than this.
+    multiplier_weight_power : float
+        Weight of percentile ``p`` in the multiplier fit is ``(p / 100) ** power``:
+        higher percentiles count more.
+    offset_weight_power : float
+        Weight of percentile ``p`` in the offset search is ``(1 - p / 100) ** power``:
+        lower percentiles count more.
+    max_iterations : int
+        Rounds of (multipliers, offset) at most.
+    offset_tol : float
+        The offset is stable when it changes by less than this many counts in a round
+        (or flips between two values that close).
     """
     low: float = 30.0
     high: float = 70.0
     max_columns: int = 512
     min_pixels: int = 8
     max_offset_fraction: float = 0.5
-    min_significance: float = 2.0
     percentiles: Optional[Tuple[float, ...]] = None
     column_mask_fraction: Optional[float] = None
-    exclude_outlier_levels: bool = True
-    outlier_k: float = 4.0
-    min_levels: int = 5
+    multiplier_weight_power: float = 3.0
+    offset_weight_power: float = 3.0
+    max_iterations: int = 8
+    offset_tol: float = 0.1
 
     def levels(self) -> Tuple[float, ...]:
         """The percentiles used: ``percentiles`` if given, else ``(low, high)``."""
@@ -137,26 +138,30 @@ class TileStats:
 class PercentileFit:
     """Result of ``fit_offset``.
 
-    ``offset`` is the applied value (0 if not significant); ``estimate`` and
-    ``standard_error`` describe the fit; ``tile_estimates`` are the
-    delete-one-tile estimates; ``multiplier`` is (Z, Y), NaN where no tile has
-    usable tissue in the row; ``objective_*`` are the row-effect F statistic of the
-    percentile log-ratio at offset 0 and at the estimate (about 1 when no row
-    effect is left).
+    ``offset`` is the applied value (0 if the estimate was not inside the search
+    range); ``estimate`` is what the alternation converged to; ``multiplier`` is
+    (Z, Y), NaN where no tile has usable tissue in the row. ``offset_history`` is
+    the offset after every round, ``converged`` whether the last round moved it by
+    less than ``offset_tol``. ``score_zero`` / ``score_estimate`` are the offset
+    score (see the module docstring, low percentiles weighted) of the final
+    multipliers at offset 0 and at the estimate. ``standard_error`` and
+    ``tile_estimates`` are not computed (NaN / empty).
     """
     offset: float
     estimate: float
     standard_error: float
     multiplier: np.ndarray
     tile_estimates: List[float] = field(default_factory=list)
-    objective_zero: float = float("nan")
-    objective_estimate: float = float("nan")
+    score_zero: float = float("nan")
+    score_estimate: float = float("nan")
     rows_used: List[int] = field(default_factory=list)
     rows_total: int = 0
     search_limit: float = float("nan")
     levels: List[float] = field(default_factory=list)
-    excluded_levels: List[float] = field(default_factory=list)
-    level_residuals: List[float] = field(default_factory=list)
+    offset_history: List[float] = field(default_factory=list)
+    converged: bool = False
+    multiplier_level_weights: List[float] = field(default_factory=list)
+    offset_level_weights: List[float] = field(default_factory=list)
 
 
 def sample_tile(vol: da.Array, background_length: int, threshold_multiplier: float,
@@ -333,253 +338,193 @@ def _solve(lines: np.ndarray, weights: np.ndarray, offset: float,
     return np.where(rows, m, np.nan).astype(np.float32), float(score)
 
 
-def _row_effect_f(y: np.ndarray, used: np.ndarray, weights: np.ndarray) -> float:
-    """Weighted between-row over within-row mean square of ``y`` (C, Z, Y)."""
-    w = np.where(used, weights, 0.0).astype(np.float64)
-    y = np.where(used, y, 0.0)
-    tile_w = w.sum(axis=(1, 2))
-    if not np.all(tile_w > 0):
-        return float("inf")
-    y = y - ((w * y).sum(axis=(1, 2)) / tile_w)[:, None, None]
-    y = np.where(used, y, 0.0)
-    n_seen = used.sum(axis=0)
-    row_w = w.sum(axis=0)
-    multi = n_seen >= 2
-    if multi.sum() < 3:
-        return float("inf")
-    row_mean = np.where(multi, (w * y).sum(axis=0) / np.maximum(row_w, 1e-12), 0.0)
-    between = float((row_w * row_mean ** 2)[multi].sum()) / (multi.sum() - 1)
-    within_ss = float((w * (y - row_mean[None]) ** 2)[:, multi].sum())
-    within_df = float((n_seen[multi] - 1).sum())
-    if within_df <= 0 or within_ss <= 0:
-        return float("inf")
-    return between / (within_ss / within_df)
 
 
-def _ratio_f(lines: np.ndarray, weights: np.ndarray, offset: float) -> float:
-    """Row-effect F statistic of the percentile log-ratios at a given offset.
+def level_weights(levels: Tuple[float, ...], power: float, high: bool) -> np.ndarray:
+    """Weight of every percentile level, scaled to a mean of 1.
 
-    For tile ``c``, row ``(z, y)`` and every percentile ``k`` above the lowest let
-    ``y_k = log((q_k - b + offset) / (q_0 - b + offset))``. Anatomy that
-    brightens or darkens all percentiles alike cancels in ``y_k``. With the right
-    offset ``y_k`` has no dependence on the row's gain, so after taking out each
-    tile's mean, a row's tiles scatter around zero by the anatomy noise only;
-    with a wrong offset the gain (shared by all tiles of the row) moves ``y_k``
-    of all its tiles the same way, which shows up as a row effect. For each
-    ``k`` the statistic is the weighted between-row mean square (of the
-    tile-averaged ``y_k``) over the weighted within-row mean square, a ratio that
-    stays scale-free as the offset changes: about 1 at the right offset, larger
-    otherwise. The result is the mean over ``k``.
+    ``(p / 100) ** power`` if ``high`` (higher percentiles count more), else
+    ``(1 - p / 100) ** power`` (lower percentiles count more).
+    """
+    p = np.asarray(levels, dtype=np.float64) / 100.0
+    w = p ** power if high else (1.0 - p) ** power
+    return (w / w.mean()).astype(np.float32)
 
-    Parameters
-    ----------
-    lines : numpy.ndarray
-        ``q - b`` (C, K, Z, Y).
-    weights : numpy.ndarray
-        Weight per tile and row (C, Z, Y), or per value (C, K, Z, Y) of which
-        the smallest is used; 0 for values left out. All percentiles must stay
-        positive after adding ``offset``.
-    offset : float
-        The offset.
+
+def _offset_score(lines: np.ndarray, weights: np.ndarray, multiplier: np.ndarray,
+                  offset: float) -> float:
+    """Score of an offset for FIXED multipliers: how far the corrected percentiles
+    of the rows are from the tile's level, relative, low percentiles heavy.
+
+    ``a = q - b + offset``; the tile level of percentile ``p`` is the weighted mean
+    ``T[c, p]`` of ``a * m`` over the rows, and the score is
+
+        0.5 * log(weighted mean of (a * m / T - 1) ** 2) + weighted mean of log(T / m)
+
+    (see the module docstring). ``weights`` (C, K, Z, Y) carry the row tissue weights
+    times the level weights; the offset must keep every weighted ``a`` positive.
 
     Returns
     -------
     float
-        ``inf`` if there are too few rows seen in at least two tiles.
+        ``inf`` if a weighted value is not positive or a tile has no weight.
     """
-    if weights.ndim == 4:
-        weights = weights.min(axis=1)
-    base = lines[:, 0] + offset
-    scores = []
-    for k in range(1, lines.shape[1]):
-        with np.errstate(invalid="ignore", divide="ignore"):
-            y = np.log((lines[:, k] + offset) / base)
-        scores.append(_row_effect_f(y, (weights > 0) & np.isfinite(y), weights))
-    return float(np.mean(scores))
+    used = np.isfinite(lines) & (weights > 0)
+    w = np.where(used, weights, 0.0).astype(np.float32)
+    a = np.where(used, lines + np.float32(offset), 1.0).astype(np.float32)
+    if np.any(a[used] <= 0) or not np.all(w.sum(axis=(1, 2, 3)) > 0):
+        return float("inf")
+    m = np.where(np.isfinite(multiplier) & (multiplier > 0), multiplier, 1.0
+                 ).astype(np.float32)
+    w_ck = w.sum(axis=(2, 3))
+    am = a * m[None, None]
+    target = (w * am).sum(axis=(2, 3)) / np.maximum(w_ck, 1e-12)
+    target = np.where(w_ck > 0, target, 1.0)
+    if np.any(target <= 0):
+        return float("inf")
+    resid = am / target[:, :, None, None] - 1.0
+    total = float(w.sum())
+    mean_sq = float((w * resid ** 2).sum() / total)
+    log_term = float((w * (np.log(target)[:, :, None, None]
+                           - np.log(np.maximum(m, 1e-12))[None, None])).sum() / total)
+    return float(0.5 * np.log(max(mean_sq, 1e-30)) + log_term)
 
 
-def _search(lines: np.ndarray, weights: np.ndarray, low: float, high: float) -> float:
-    """Offset in ``[low, high]`` that minimises the objective.
+def _search(objective, low: float, high: float) -> float:
+    """Offset in ``[low, high]`` that minimises ``objective``.
 
-    Coarse grid, then golden-section refinement around the best grid point.
+    Coarse grid, then golden-section refinement around the best grid point; returns
+    the best point evaluated.
     """
-    def objective(o: float) -> float:
-        return _ratio_f(lines, weights, o)
+    tried = []
+
+    def evaluate(o: float) -> float:
+        value = objective(o)
+        tried.append((float(o), value))
+        return value
 
     grid = np.linspace(low, high, GRID_POINTS)
-    values = [objective(o) for o in grid]
+    values = [evaluate(o) for o in grid]
     best = int(np.argmin(values))
     lo = grid[max(best - 1, 0)]
     hi = grid[min(best + 1, GRID_POINTS - 1)]
     phi = (np.sqrt(5.0) - 1.0) / 2.0
     c, d = hi - phi * (hi - lo), lo + phi * (hi - lo)
-    fc, fd = objective(c), objective(d)
+    fc, fd = evaluate(c), evaluate(d)
     for _ in range(REFINE_STEPS):
         if fc < fd:
             hi, d, fd = d, c, fc
             c = hi - phi * (hi - lo)
-            fc = objective(c)
+            fc = evaluate(c)
         else:
             lo, c, fc = c, d, fd
             d = lo + phi * (hi - lo)
-            fd = objective(d)
-    return float(0.5 * (lo + hi))
-
-
-def level_residuals(lines: np.ndarray, weights: np.ndarray, offset: float,
-                    multiplier: np.ndarray) -> np.ndarray:
-    """Weighted mean ``|a * m / T - 1|`` of every percentile level, shape (K,).
-
-    ``a = q - b + offset``; ``T`` is the weighted tile level of each percentile for the
-    given multipliers. A level whose rows do not follow the same multipliers as the
-    others (for example one that still contains background) has a large value.
-    NaN for a level with no weight.
-    """
-    used = np.isfinite(lines) & (weights > 0)
-    w = np.where(used, weights, 0.0).astype(np.float64)
-    a = np.where(used, lines + offset, 1.0).astype(np.float64)
-    m = np.where(np.isfinite(multiplier), multiplier, 1.0).astype(np.float64)
-    wm = w * m[None, None]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        target = (wm * a).sum(axis=(2, 3)) / w.sum(axis=(2, 3))
-        resid = np.abs(a * m[None, None] / target[:, :, None, None] - 1.0)
-        out = (w * resid).sum(axis=(0, 2, 3)) / w.sum(axis=(0, 2, 3))
-    return out
-
-
-def outlier_levels(lines: np.ndarray, weights: np.ndarray, offset: float,
-                   k: float = 4.0, min_levels: int = 5
-                   ) -> Tuple[List[int], np.ndarray, np.ndarray]:
-    """Find percentile levels that disagree with the others about the multipliers.
-
-    For every active level the multipliers are fitted with the OTHER active levels and
-    the level's own residual (``level_residuals``) is measured; the level with the
-    largest one is dropped if it is more than ``k`` robust standard deviations
-    (1.4826 * MAD, over the active levels) above their median, at least twice the
-    median and above 0.01 (relative). Then the fit is repeated, until nothing is flagged or only
-    ``min_levels`` are left.
-
-    Returns
-    -------
-    (excluded, weights, residuals)
-        Indices of the excluded levels, the weights with those levels set to 0, and
-        the residuals of all levels at the last fit (NaN for excluded ones after
-        they were dropped is not applied; they keep the value they had when dropped).
-    """
-    weights = weights.copy()
-    active = [i for i in range(lines.shape[1]) if (weights[:, i] > 0).any()]
-    excluded: List[int] = []
-    shown = np.full(lines.shape[1], np.nan)
-    while True:
-        # Residual of every level when the multipliers are fitted WITHOUT it: a level
-        # that is itself bad cannot pull the multipliers towards itself.
-        res = np.full(lines.shape[1], np.nan)
-        for i in active:
-            w_i = weights.copy()
-            w_i[:, i] = 0.0
-            m, _ = _solve(lines, w_i, offset)
-            only = np.zeros_like(weights)
-            only[:, i] = weights[:, i]
-            res[i] = level_residuals(lines, only, offset, m)[i]
-        for i in active:
-            shown[i] = res[i]
-        if len(active) <= min_levels:
-            break
-        r = res[active]
-        med = float(np.nanmedian(r))
-        mad = float(np.nanmedian(np.abs(r - med)))
-        worst = active[int(np.nanargmax(r))]
-        if not (res[worst] > med + k * 1.4826 * mad and res[worst] > 2.0 * med
-                and res[worst] > 0.01):
-            break
-        excluded.append(worst)
-        active.remove(worst)
-        weights[:, worst] = 0.0
-    return excluded, weights, shown
+            fd = evaluate(d)
+    evaluate(0.5 * (lo + hi))
+    finite = [t for t in tried if np.isfinite(t[1])]
+    return float(min(finite, key=lambda t: t[1])[0]) if finite else float("nan")
 
 
 def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = None,
                fixed_offset: Optional[float] = None) -> PercentileFit:
-    """Fit the shared offset and the (z, y) multipliers.
+    """Fit the shared offset and the (z, y) multipliers by alternating.
 
     Parameters
     ----------
     tiles : list of TileStats
-        The reference tiles of one channel (at least 2; 3 or more give a
-        standard error).
+        The reference tiles of one channel (full chunks after the stitching crop).
     settings : PercentileSettings, optional
         Fit settings.
     fixed_offset : float, optional
-        Skip the search and the significance test and solve the multipliers at
-        this offset (used to compare offsets); ``estimate`` is then this value
-        and the standard error is NaN.
+        Skip the alternation and solve the multipliers at this offset;
+        ``estimate`` is then this value.
 
     Returns
     -------
     PercentileFit
-        The offset is applied (``offset``) only if ``|estimate| >=
-        min_significance * standard_error``; the multipliers are always solved
-        at the applied offset.
+        Round by round: multipliers for the current offset (high percentiles
+        heavy), then the offset for those multipliers (low percentiles heavy), see
+        the module docstring. The offset is applied (``offset``) when the estimate
+        lies inside the search range; the multipliers are always solved at the applied
+        offset.
     """
     settings = settings or PercentileSettings()
     lines, tissue = _stack(tiles)
     n_tiles = len(tiles)
     _, n_z, n_y = tissue.shape
+    levels = settings.levels()
+    mult_levels = level_weights(levels, settings.multiplier_weight_power, True)
+    off_levels = level_weights(levels, settings.offset_weight_power, False)
+
+    def failed() -> PercentileFit:
+        nan_m = np.full((n_z, n_y), np.nan, dtype=np.float32)
+        return PercentileFit(0.0, float("nan"), float("nan"), nan_m, levels=list(levels))
 
     valid_high = lines[:, -1][tissue > 0]
     typical = float(np.median(valid_high)) if valid_high.size else float("nan")
     if not np.isfinite(typical) or typical <= 0:
-        nan_m = np.full((n_z, n_y), np.nan, dtype=np.float32)
-        return PercentileFit(0.0, float("nan"), float("nan"), nan_m)
+        return failed()
     valid_low = lines[:, 0][tissue > 0]
     limit = settings.max_offset_fraction * float(np.median(valid_low))
     if not limit > 0:
-        nan_m = np.full((n_z, n_y), np.nan, dtype=np.float32)
-        return PercentileFit(0.0, float("nan"), float("nan"), nan_m)
+        return failed()
     # Values that would be clipped at the most negative offset of the search are
-    # left out, so the objective does not gain from the clipping itself.
+    # left out, so the score does not gain from the clipping itself.
     weights = np.where(lines > limit, tissue[:, None], 0.0).astype(np.float32)
+    w_mult = weights * mult_levels[None, :, None, None]
+    w_off = weights * off_levels[None, :, None, None]
 
-    estimate = (float(fixed_offset) if fixed_offset is not None
-                else _search(lines, weights, -limit, limit))
-    excluded: List[int] = []
-    shown = np.full(lines.shape[1], np.nan)
-    if settings.exclude_outlier_levels:
-        excluded, weights, shown = outlier_levels(
-            lines, weights, estimate, settings.outlier_k, settings.min_levels)
-        if excluded and fixed_offset is None:
-            estimate = _search(lines, weights, -limit, limit)
-    objective_zero = _ratio_f(lines, weights, 0.0)
-    objective_estimate = _ratio_f(lines, weights, estimate)
+    history: List[float] = []
+    converged = False
+    if fixed_offset is not None:
+        estimate = float(fixed_offset)
+        history.append(estimate)
+        converged = True
+    else:
+        offset = 0.0
+        for _ in range(settings.max_iterations):
+            m, _ = _solve(lines, w_mult, offset)
+            if not np.isfinite(m).any():
+                return failed()
+            new = _search(lambda o: _offset_score(lines, w_off, m, o), -limit, limit)
+            if not np.isfinite(new):
+                return failed()
+            seq = [0.0] + history + [new]
+            if len(seq) >= 4:
+                # the rounds approach the answer geometrically (the multipliers absorb
+                # part of an offset error each round): extrapolate (Aitken)
+                d1, d2 = seq[-2] - seq[-3], seq[-1] - seq[-2]
+                if d1 != 0 and 0.1 < d2 / d1 < 0.9:
+                    new = float(np.clip(seq[-1] + d2 * (d2 / d1) / (1.0 - d2 / d1),
+                                        -0.99 * limit, 0.99 * limit))
+            history.append(new)
+            step = abs(new - offset)
+            offset = new
+            if step < settings.offset_tol:
+                converged = True
+                break
+            if len(history) >= 3 and abs(history[-1] - history[-3]) < settings.offset_tol:
+                # flip-flop between two values closer than the tolerance: stable
+                offset = 0.5 * (history[-1] + history[-2])
+                converged = True
+                break
+        estimate = float(offset)
 
-    tile_estimates: List[float] = []
-    se = float("nan")
-    if n_tiles >= 3 and fixed_offset is None:
-        for leave in range(n_tiles):
-            keep = [i for i in range(n_tiles) if i != leave]
-            tile_estimates.append(_search(lines[keep], weights[keep], -limit, limit))
-        e = np.asarray(tile_estimates)
-        se = float(np.sqrt((n_tiles - 1) / n_tiles * np.sum((e - e.mean()) ** 2)))
-
-    # An estimate at the end of the search range means the objective had no
-    # minimum inside it (not identified), and a zero spread of the delete-one
-    # estimates is the same boundary hit; neither is applied.
     interior = abs(estimate) < BOUNDARY_FRACTION * limit
-    significant = (interior and np.isfinite(se) and se > 0
-                   and abs(estimate) >= settings.min_significance * se)
-    applied = (float(fixed_offset) if fixed_offset is not None
-               else float(estimate) if significant else 0.0)
-    final_weights = np.where(lines + applied > MIN_SCALER, tissue[:, None], 0.0)
-    if excluded:
-        final_weights[:, excluded] = 0.0
-    multiplier, _ = _solve(lines, final_weights.astype(np.float32), applied)
-    rows_used = [int((final_weights[i].min(axis=0) > 0).sum()) for i in range(n_tiles)]
+    applied = float(fixed_offset) if fixed_offset is not None else (
+        float(estimate) if interior else 0.0)
+    final_tissue = np.where(lines + applied > MIN_SCALER, tissue[:, None], 0.0)
+    multiplier, _ = _solve(
+        lines, (final_tissue * mult_levels[None, :, None, None]).astype(np.float32),
+        applied)
+    score_zero = _offset_score(lines, w_off, multiplier, 0.0)
+    score_estimate = _offset_score(lines, w_off, multiplier, estimate)
+    rows_used = [int((final_tissue[i].min(axis=0) > 0).sum()) for i in range(n_tiles)]
     return PercentileFit(
-        applied, float(estimate), se, multiplier, tile_estimates,
-        float(objective_zero), float(objective_estimate),
-        rows_used, n_z * n_y, float(limit), list(settings.levels()),
-        [float(settings.levels()[i]) for i in excluded],
-        [float(v) for v in shown])
+        applied, estimate, float("nan"), multiplier, [],
+        score_zero, score_estimate, rows_used, n_z * n_y, float(limit), list(levels),
+        history, converged, [float(v) for v in mult_levels],
+        [float(v) for v in off_levels])
 
 
 def multiplier_to_scaler(multiplier: np.ndarray) -> np.ndarray:
