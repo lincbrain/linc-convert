@@ -2,6 +2,9 @@
 
 The `linc-convert` package converts dark-field microscopy, light-sheet microscopy, and polarization-sensitive optical coherence tomography (PS-OCT) files to the OME-Zarr file format.
 
+!!! note "HiP-CT data"
+    Hierarchical Phase-Contrast Tomography (HiP-CT) data is not converted with `linc-convert`.  HiP-CT data is converted to OME-Zarr using [stack-to-chunk](https://github.com/HiPCTProject/stack-to-chunk).
+
 ![diagram](./img/linc-convert.png)
 
 ## Quick Links
