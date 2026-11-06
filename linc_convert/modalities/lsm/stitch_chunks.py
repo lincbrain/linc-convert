@@ -458,7 +458,7 @@ def stitch_channel(
     y_range: Tuple[Optional[int], Optional[int]] = (None, None),
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
     memory_gb: int = 128, parallel_chunks: int = 2, bands: bool = True,
-    parallel_bands: int = 2,
+    parallel_bands: int = 2, x_tolerance: int = 64,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -513,6 +513,12 @@ def stitch_channel(
         (see the module docstring).
     parallel_bands : int, default=2
         Band mode only: how many bands are computed and written at the same time.
+    x_tolerance : int, default=64
+        A chunk whose x length differs from the first chunk's by at most this many
+        full-resolution pixels (scaled to ``layer``, at least 1) and whose z and y
+        lengths agree is made as long as the first chunk: zeros are appended at the
+        end of x if it is shorter, the extra columns are cut if it is longer, and a
+        warning is printed. 0 requires identical shapes.
 
     Notes
     -----
@@ -538,11 +544,32 @@ def stitch_channel(
     if n > 1 and steps.min() <= 0:
         raise ValueError("chunk positions must increase")
 
-    def open_tile(path: str) -> da.Array:
+    def open_tile_exact(path: str) -> da.Array:
         return crop_and_flip(open_tile_array(path, layer, block=DASK_BLOCK), crop,
                              vertical_flip, layer)
 
-    raw_shape = open_tile(tile_paths[0]).shape
+    raw_shape = open_tile_exact(tile_paths[0]).shape
+    x_tol = (max(1, int(x_tolerance) >> layer) if x_tolerance > 0 else 0)
+    warned_x: set = set()
+
+    def open_tile(path: str) -> da.Array:
+        """Chunk as stitched; its x length is matched to the first chunk's if the
+        difference is within ``x_tol`` (z and y must agree)."""
+        arr = open_tile_exact(path)
+        dx = arr.shape[2] - raw_shape[2]
+        if dx != 0 and arr.shape[:2] == raw_shape[:2] and abs(dx) <= x_tol:
+            if path not in warned_x:
+                warned_x.add(path)
+                print(f"  WARNING: {os.path.basename(path)} has x length "
+                      f"{arr.shape[2]}, the first chunk {raw_shape[2]}: "
+                      + ("zeros added at the end of x" if dx < 0
+                         else "the last x columns are cut"), flush=True)
+            if dx < 0:
+                arr = da.pad(arr, ((0, 0), (0, 0), (0, -dx)), mode="constant",
+                             constant_values=0)
+            else:
+                arr = arr[:, :, :raw_shape[2]]
+        return arr
     sz, sy, sx = raw_shape
     z_out, _, x_out = sheared_shape(raw_shape, shear_x, abs(shear_z))
     if per_chunk_corrections:
@@ -790,6 +817,7 @@ def stitch_chunks(
     parallel_chunks: int = 2,
     bands: bool = True,
     parallel_bands: int = 2,
+    x_tolerance: int = 64,
     projections: bool = True,
     projections_dir: Optional[str] = None,
     layer: int = 0,
@@ -833,6 +861,11 @@ def stitch_chunks(
         instead of chunk by chunk. See the module docstring.
     parallel_bands : int, default=2
         With ``bands``: how many bands are computed and written at the same time.
+    x_tolerance : int, default=64
+        A chunk whose x length differs from the first chunk's by at most this many
+        full-resolution pixels (and whose z and y lengths agree) is padded with zeros
+        at the end of x, or cut, to the first chunk's length, with a warning
+        (e.g. 45198 instead of 45204 columns). 0 requires identical shapes.
     parallel_chunks : int, default=2
         Without ``bands``: how many chunks are computed and written at the same
         time, only when they write to different shard rows (1 = one chunk after
@@ -944,7 +977,7 @@ def stitch_chunks(
                        os.path.join(general_config.out, channel),
                        voxel_size, zarr_config, per_chunk_corrections, layer,
                        y_range, x_range, memory_gb, parallel_chunks, bands,
-                       parallel_bands)
+                       parallel_bands, x_tolerance)
         if projections:
             write_projections(
                 os.path.join(general_config.out, channel),
