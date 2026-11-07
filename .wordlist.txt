@@ -37,3 +37,5 @@ tensorstore
 voxel
 yaml
 YAML
+HiP
+microtomography
