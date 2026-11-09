@@ -4,9 +4,9 @@ Used by ``stitch_chunks`` to write a quick-look TIFF pair next to every stitched
 channel. The definitions follow the standalone export script: the maximum
 projection is the plain max over z; the minimum projection ignores zeros (the
 empty padding of the shear) and is then inverted against the 99th percentile of
-the whole image, so that dim structures show up bright. The min projection can leave
-out the first and the last z planes of the array (``min_z_start`` / ``min_z_end``),
-for example empty planes of the shear; the max projection always uses every plane.
+the whole image, so that dim structures show up bright. Both projections can leave
+out the first and the last z planes of the array (``z_start`` / ``z_end``), for
+example empty planes of the shear.
 
 Memory is kept low on purpose, since the mosaic can be tens of thousands of pixels
 on a side: the stored array is read in blocks of a few hundred MB (aligned to the
@@ -66,7 +66,7 @@ def percentile_from_counts(counts: np.ndarray, q: float) -> float:
 
 def project_zarr(zarr_dir: str, want_max: bool = True, want_min: bool = True,
                  group: str = "0", memory_gb: int = 32,
-                 min_z_start: int = 0, min_z_end: int = 0
+                 z_start: int = 0, z_end: int = 0
                  ) -> Tuple[Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray,
                                                                  float]]]:
     """Max and/or min projection over z of one stitched array.
@@ -74,8 +74,8 @@ def project_zarr(zarr_dir: str, want_max: bool = True, want_min: bool = True,
     Starts (and closes) its own dask cluster, limited to ``memory_gb`` in total
     together with the arrays this process keeps.
 
-    ``min_z_start`` / ``min_z_end`` are numbers of z planes (of this array) left out
-    of the MIN projection only: planes ``min_z_start`` to ``nz - min_z_end`` are used.
+    ``z_start`` / ``z_end`` are numbers of z planes (of this array) left out of BOTH
+    projections: planes ``z_start`` to ``nz - z_end`` are used.
 
     Returns
     -------
@@ -89,11 +89,11 @@ def project_zarr(zarr_dir: str, want_max: bool = True, want_min: bool = True,
     """
     stored = zarr.open_group(str(zarr_dir), mode="r")[group]
     nz, ny, nx = stored.shape
-    if min_z_start < 0 or min_z_end < 0 or (want_min and min_z_start + min_z_end >= nz):
-        raise ValueError(f"min projection z crop (first {min_z_start}, last "
-                         f"{min_z_end}) leaves no plane of the {nz} z planes")
+    if z_start < 0 or z_end < 0 or z_start + z_end >= nz:
+        raise ValueError(f"projection z crop (first {z_start}, last {z_end}) "
+                         f"leaves no plane of the {nz} z planes")
     bz, by, bx = block_shape(stored.shape, stored.chunks)
-    arr = da.from_array(stored, chunks=(bz, by, bx))
+    arr = da.from_array(stored, chunks=(bz, by, bx))[z_start:nz - z_end]
 
     # what this process keeps: max (2 B), raw_min (2 B), has_data (1 B) per pixel,
     # plus working copies of a strip; the rest goes to the workers
@@ -106,10 +106,9 @@ def project_zarr(zarr_dir: str, want_max: bool = True, want_min: bool = True,
         if want_max:
             todo["max"] = arr.max(axis=0)
         if want_min:
-            arr_min = arr[min_z_start:nz - min_z_end]
-            valid = arr_min != 0
+            valid = arr != 0
             todo["has_data"] = valid.any(axis=0)
-            todo["raw_min"] = da.where(valid, arr_min, np.uint16(65535)).min(axis=0)
+            todo["raw_min"] = da.where(valid, arr, np.uint16(65535)).min(axis=0)
         futures = client.compute(list(todo.values()))
         progress(futures, notebook=False)
         print(flush=True)
@@ -175,13 +174,13 @@ def save_projection(shape: Tuple[int, int], piece, path: Path) -> None:
 
 def write_projections(zarr_dir: str, out_dir: str, slice_number: int,
                       channel: str, memory_gb: int = 32,
-                      min_z_start: int = 0, min_z_end: int = 0) -> None:
+                      z_start: int = 0, z_end: int = 0) -> None:
     """Write ``slice{NNN}_{channel}_max.tiff`` and ``_min.tiff`` into ``out_dir``.
 
     A projection that already exists is not recomputed, so a rerun (or a resumed
     job) only fills in what is missing. ``memory_gb`` bounds this process and its
-    dask workers together. ``min_z_start`` / ``min_z_end`` (z planes of the stored
-    array) are left out of the min projection only.
+    dask workers together. ``z_start`` / ``z_end`` (z planes of the stored array)
+    are left out of both projections.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -194,7 +193,7 @@ def write_projections(zarr_dir: str, out_dir: str, slice_number: int,
         return
     print(f"channel {channel}: max/min projections -> {out}", flush=True)
     mx, mn = project_zarr(zarr_dir, want_max, want_min, memory_gb=memory_gb,
-                          min_z_start=min_z_start, min_z_end=min_z_end)
+                          z_start=z_start, z_end=z_end)
     if want_max:
         save_projection(mx.shape, lambda r, c: mx[r, c].astype(np.float32), f_max)
         print(f"  {f_max.name}: done", flush=True)
