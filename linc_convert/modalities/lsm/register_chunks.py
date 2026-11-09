@@ -13,7 +13,10 @@ Reads existing local files only (never contacts DANDI).
   YAML; all z) and then flipped in z per the camera's ``verticalFlip``.
 * Starting offset: ``overlap`` is your estimate of how many y rows (full-res
   pixels, after the splitCrop) the end of chunk A shares with the start of
-  chunk B. The starting y offset is then (cropped chunk height - overlap); z = 0.
+  chunk B. ``overlap_factor`` (default 1.5) scales it: the rows registered are
+  overlap x overlap_factor, so an overlap larger than estimated is still inside the
+  window. The starting y offset is then (cropped chunk height - exposed overlap);
+  z = 0. The returned y offset is absolute, so it does not depend on the factor.
 * ``z_trim_end`` (full-res pixels, default 0) removes that many z planes from the END
   of every cropped, flipped chunk before registering, e.g. an empty region that
   would mislead the correlation. Only the registration volumes are cut: the
@@ -275,7 +278,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         corrections_dir: Optional[PathLike] = None,
                         per_chunk_corrections: bool = False,
                         corrections_layer: int = 0,
-                        z_trim_end: float = 0) -> Pair:
+                        z_trim_end: float = 0,
+                        overlap_factor: float = 1.5) -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
     Parameters
@@ -316,6 +320,13 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     z_trim_end : float, default=0
         z planes (full-resolution pixels) removed from the end of each cropped,
         flipped chunk before registering; the correction maps are cut the same way.
+    overlap_factor : float, default=1.5
+        The overlap that is registered is ``overlap_factor`` times the estimated
+        ``overlap``: the last ``overlap * overlap_factor`` rows of A and the first
+        ``overlap * overlap_factor`` rows of B are read, and B starts at the cropped
+        chunk height minus that. Use a factor above 1 when the true overlap may be
+        larger than the estimate; 1 registers exactly the estimated overlap. The
+        result is an absolute y offset, so it does not depend on the factor.
 
     Returns
     -------
@@ -357,17 +368,26 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     Za, sy, sx = vol_a.shape
     if vol_b.shape != vol_a.shape:
         print(f"WARNING: chunk shapes differ: {vol_a.shape} vs {vol_b.shape}")
-    # starting y offset = cropped chunk height - estimated overlap
-    init_y = sy - overlap / scale
-    init_y_full = init_y * scale
-    iy = int(round(init_y))
-    print(f"estimated overlap {overlap:g} px full-res -> starting y offset "
-          f"{init_y_full:g} px full-res ({init_y:g} at this layer; chunk is "
-          f"{sy} rows tall at this layer), z = 0")
-    if not 0 < iy < sy:
+    # starting y offset = cropped chunk height - exposed overlap, the exposed
+    # overlap being the estimate times overlap_factor
+    if overlap_factor <= 0:
+        raise ValueError(f"overlap_factor must be positive, got {overlap_factor}")
+    if not 0 < overlap / scale < sy:
         raise ValueError(f"overlap {overlap:g} (full-res px) is outside the chunk "
                          f"(height {sy * scale} full-res px); it must be between "
                          "0 and the height")
+    exposed = overlap * overlap_factor
+    init_y = sy - exposed / scale
+    iy = int(round(init_y))
+    if iy < 1:
+        iy = 1
+        print(f"  overlap x {overlap_factor:g} = {exposed:g} px is more than the "
+              f"chunk; using all but one row")
+    init_y_full = iy * scale
+    print(f"estimated overlap {overlap:g} px full-res x {overlap_factor:g} = "
+          f"{exposed:g} px exposed -> starting y offset "
+          f"{init_y_full:g} px full-res ({iy} at this layer; chunk is "
+          f"{sy} rows tall at this layer), z = 0")
     # nominal overlap: A's rows [iy, sy) and B's rows [0, sy - iy)
     a_y0, b_rows = iy, min(vol_b.shape[1], sy - iy)
     bg_len = max(1, background_length // scale)
@@ -429,7 +449,8 @@ def register_chunks(chunks: list[str],
                     smooth_sigma: float = 1.0, force: bool = False,
                     corrections_dir: Optional[str] = None,
                     per_chunk_corrections: bool = False,
-                    corrections_layer: int = 0, z_trim_end: float = 0) -> None:
+                    corrections_layer: int = 0, z_trim_end: float = 0,
+                    overlap_factor: float = 1.5) -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -493,6 +514,13 @@ def register_chunks(chunks: list[str],
         200 for an empty region of that depth). The correction maps are cut the same
         way for registration only; the maps, the stitching crops and the stitched
         output are not changed, and the registered ``dz`` keeps its meaning.
+    overlap_factor : float, default=1.5
+        The overlap that is registered is ``overlap_factor`` times the estimated
+        ``overlap``: the last ``overlap * overlap_factor`` rows of A and the first
+        ``overlap * overlap_factor`` rows of B are read, and B starts at the cropped
+        chunk height minus that. Use a factor above 1 when the true overlap may be
+        larger than the estimate; 1 registers exactly the estimated overlap. The
+        result is an absolute y offset, so it does not depend on the factor.
 
     Raises
     ------
@@ -521,7 +549,8 @@ def register_chunks(chunks: list[str],
                                   corrections_dir=corrections_dir,
                                   per_chunk_corrections=per_chunk_corrections,
                                   corrections_layer=corrections_layer,
-                                  z_trim_end=z_trim_end)
+                                  z_trim_end=z_trim_end,
+                                  overlap_factor=overlap_factor)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
     avg = average_pairs(pairs)
@@ -539,6 +568,7 @@ def register_chunks(chunks: list[str],
         "camera": int(camera_numb),
         "layer": int(layer),
         "estimated_overlap_full_res": float(overlap),
+        "overlap_factor": float(overlap_factor),
         "units": "full-resolution pixels",
         "weighted_average": {
             "dz": mean_dz,
