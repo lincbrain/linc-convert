@@ -14,6 +14,12 @@ Reads existing local files only (never contacts DANDI).
 * Starting offset: ``overlap`` is your estimate of how many y rows (full-res
   pixels, after the splitCrop) the end of chunk A shares with the start of
   chunk B. The starting y offset is then (cropped chunk height - overlap); z = 0.
+* ``z_trim_end`` (full-res pixels, default 0) removes that many z planes from the END
+  of every cropped, flipped chunk before registering, e.g. an empty region that
+  would mislead the correlation. Only the registration volumes are cut: the
+  correction maps are cut the same way for this step, and neither the maps nor the
+  stitching crops change. z positions start at the first plane, so the registered
+  ``dz`` keeps its meaning.
 * The per-row background (median of the last ``background_length`` x columns) is
   subtracted, then the whole overlap volume (all x) is registered with
   phase correlation in 3-D. x is never translated: its fitted component is
@@ -108,6 +114,39 @@ def load_chunk(path: PathLike, slice_numb: int, camera_numb: int, channel: str,
     print(f"  {Path(path).name}: splitCrop y {crop[2]}:{crop[3]} "
           f"(layer {layer}, array {arr.shape})")
     return vol
+
+
+def z_trim_planes(z_trim_end: float, layer: int, depth: int) -> int:
+    """z planes at ``layer`` that ``z_trim_end`` (full-resolution pixels) removes.
+
+    Rounded up so a requested empty region is fully removed.
+
+    Parameters
+    ----------
+    z_trim_end : float
+        Planes to remove from the end of z, in full-resolution pixels (>= 0).
+    layer : int
+        Pyramid level of the volume.
+    depth : int
+        Number of z planes of the volume at ``layer``.
+
+    Returns
+    -------
+    int
+        Planes to cut at ``layer``.
+
+    Raises
+    ------
+    ValueError
+        If ``z_trim_end`` is negative or would remove every plane.
+    """
+    if z_trim_end < 0:
+        raise ValueError("z_trim_end must be >= 0")
+    planes = int(-(-float(z_trim_end) // (2 ** layer)))
+    if planes >= depth:
+        raise ValueError(f"z_trim_end {z_trim_end:g} full-res px removes {planes} of "
+                         f"the {depth} z planes at layer {layer}")
+    return planes
 
 
 def _block_mean(frame: np.ndarray, factor: int) -> np.ndarray:
@@ -235,7 +274,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         smooth_sigma: float = 1.0,
                         corrections_dir: Optional[PathLike] = None,
                         per_chunk_corrections: bool = False,
-                        corrections_layer: int = 0) -> Pair:
+                        corrections_layer: int = 0,
+                        z_trim_end: float = 0) -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
     Parameters
@@ -273,6 +313,9 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     corrections_layer : int, default=0
         Pyramid level ``create_corrections`` was run at; its maps are averaged
         down to ``layer``.
+    z_trim_end : float, default=0
+        z planes (full-resolution pixels) removed from the end of each cropped,
+        flipped chunk before registering; the correction maps are cut the same way.
 
     Returns
     -------
@@ -303,6 +346,14 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                        channel, layer, params)
     vol_b = load_chunk(chunk_b, slice_numb, camera_numb,
                        channel, layer, params)
+    trim_a = trim_b = 0
+    if z_trim_end > 0:
+        trim_a = z_trim_planes(z_trim_end, layer, vol_a.shape[0])
+        trim_b = z_trim_planes(z_trim_end, layer, vol_b.shape[0])
+        vol_a = vol_a[:vol_a.shape[0] - trim_a]
+        vol_b = vol_b[:vol_b.shape[0] - trim_b]
+        print(f"  z_trim_end {z_trim_end:g} px full-res: last {trim_a} z planes of "
+              f"each chunk are not used for registration (layer {layer})")
     Za, sy, sx = vol_a.shape
     if vol_b.shape != vol_a.shape:
         print(f"WARNING: chunk shapes differ: {vol_a.shape} vs {vol_b.shape}")
@@ -333,6 +384,9 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
         noise_b, scaler_b = registration_corrections(
             chunk_b, slice_numb, camera_numb, channel, layer, params,
             corrections_dir, per_chunk_corrections, corrections_layer)
+        # the maps are laid out on the full (cropped, flipped) volume: cut them too
+        noise_a, scaler_a = noise_a[:vol_a.shape[0]], scaler_a[:vol_a.shape[0]]
+        noise_b, scaler_b = noise_b[:vol_b.shape[0]], scaler_b[:vol_b.shape[0]]
 
     t0 = time.time()
     sub_a = read_volume_rows(vol_a, a_y0, sy, 0, sx,
@@ -375,7 +429,7 @@ def register_chunks(chunks: list[str],
                     smooth_sigma: float = 1.0, force: bool = False,
                     corrections_dir: Optional[str] = None,
                     per_chunk_corrections: bool = False,
-                    corrections_layer: int = 0) -> None:
+                    corrections_layer: int = 0, z_trim_end: float = 0) -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -433,6 +487,12 @@ def register_chunks(chunks: list[str],
         0 = full resolution). The maps are averaged down to ``layer``, so
         registering at a lower resolution than the corrections is fine; it
         cannot be above ``layer``.
+    z_trim_end : float, default=0
+        Remove this many z planes (full-resolution pixels) from the END of every
+        chunk, after the crop and the vertical flip, before registering (for example
+        200 for an empty region of that depth). The correction maps are cut the same
+        way for registration only; the maps, the stitching crops and the stitched
+        output are not changed, and the registered ``dz`` keeps its meaning.
 
     Raises
     ------
@@ -460,7 +520,8 @@ def register_chunks(chunks: list[str],
                                   smooth_sigma=smooth_sigma,
                                   corrections_dir=corrections_dir,
                                   per_chunk_corrections=per_chunk_corrections,
-                                  corrections_layer=corrections_layer)
+                                  corrections_layer=corrections_layer,
+                                  z_trim_end=z_trim_end)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
     avg = average_pairs(pairs)
@@ -499,7 +560,8 @@ def register_chunks(chunks: list[str],
                      "corrections_dir": (None if corrections_dir is None
                                          else str(corrections_dir)),
                      "per_chunk_corrections": bool(per_chunk_corrections),
-                     "corrections_layer": int(corrections_layer)},
+                     "corrections_layer": int(corrections_layer),
+                     "z_trim_end": float(z_trim_end)},
         "chunks": [str(c) for c in chunks],
     }
     write_yaml(out_path, result)
