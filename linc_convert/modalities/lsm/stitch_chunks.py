@@ -67,7 +67,8 @@ by every chunk that crosses it and chunks run together only if they share no sha
 Projections (default on): when a channel is stitched, its maximum and minimum
 intensity projections over z are written as float32 TIFFs
 ``{out}/projections/slice{NNN}_{channel}_max.tiff`` and ``..._min.tiff`` (the min
-projection ignores zeros and is inverted against its 99th percentile). Existing
+projection ignores zeros and is inverted against its 99th percentile, and can leave
+out the first and last z planes: ``min_proj_z_start`` / ``min_proj_z_end``). Existing
 files are not recomputed. They stay in ``out``, next to the channel's zarr folder.
 
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
@@ -820,6 +821,8 @@ def stitch_chunks(
     x_tolerance: int = 64,
     projections: bool = True,
     projections_dir: Optional[str] = None,
+    min_proj_z_start: float = 0,
+    min_proj_z_end: float = 0,
     layer: int = 0,
     min_x: Optional[int] = None,
     max_x: Optional[int] = None,
@@ -900,6 +903,11 @@ def stitch_chunks(
         already exist are skipped, also when the stitch itself was already done.
     projections_dir : str, optional
         Where the projection TIFFs go; default ``{out}/projections``.
+    min_proj_z_start, min_proj_z_end : float, default=0
+        z planes (full-resolution pixels, scaled to ``layer`` and rounded up) left
+        out of the MIN projection at the beginning / end of z. The max projection
+        and the stitched data are not affected. An existing ``_min.tiff`` is not
+        recomputed, so delete it to apply a new crop.
     layer : int, default=0
         Pyramid level of the raw chunks to stitch (0 = full resolution), for
         quick low-resolution test runs. Everything is scaled to the level: the
@@ -982,4 +990,6 @@ def stitch_chunks(
             write_projections(
                 os.path.join(general_config.out, channel),
                 projections_dir or os.path.join(general_config.out, "projections"),
-                slice_number, channel, memory_gb)
+                slice_number, channel, memory_gb,
+                min_z_start=int(-(-float(min_proj_z_start) // (2 ** layer))),
+                min_z_end=int(-(-float(min_proj_z_end) // (2 ** layer))))
