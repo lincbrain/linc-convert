@@ -17,6 +17,7 @@ Reads existing local files only (never contacts DANDI).
   overlap x overlap_factor, so an overlap larger than estimated is still inside the
   window. The starting y offset is then (cropped chunk height - exposed overlap);
   z = 0. The returned y offset is absolute, so it does not depend on the factor.
+* ``z_trim_start`` is the same for the BEGINNING of z (full-res pixels, default 0).
 * ``z_trim_end`` (full-res pixels, default 0) removes that many z planes from the END
   of every cropped, flipped chunk before registering, e.g. an empty region that
   would mislead the correlation. Only the registration volumes are cut: the
@@ -119,7 +120,8 @@ def load_chunk(path: PathLike, slice_numb: int, camera_numb: int, channel: str,
     return vol
 
 
-def z_trim_planes(z_trim_end: float, layer: int, depth: int) -> int:
+def z_trim_planes(z_trim_end: float, layer: int, depth: int,
+                  name: str = "z_trim_end") -> int:
     """z planes at ``layer`` that ``z_trim_end`` (full-resolution pixels) removes.
 
     Rounded up so a requested empty region is fully removed.
@@ -144,10 +146,10 @@ def z_trim_planes(z_trim_end: float, layer: int, depth: int) -> int:
         If ``z_trim_end`` is negative or would remove every plane.
     """
     if z_trim_end < 0:
-        raise ValueError("z_trim_end must be >= 0")
+        raise ValueError(f"{name} must be >= 0")
     planes = int(-(-float(z_trim_end) // (2 ** layer)))
     if planes >= depth:
-        raise ValueError(f"z_trim_end {z_trim_end:g} full-res px removes {planes} of "
+        raise ValueError(f"{name} {z_trim_end:g} full-res px removes {planes} of "
                          f"the {depth} z planes at layer {layer}")
     return planes
 
@@ -278,7 +280,7 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         corrections_dir: Optional[PathLike] = None,
                         per_chunk_corrections: bool = False,
                         corrections_layer: int = 0,
-                        z_trim_end: float = 0,
+                        z_trim_end: float = 0, z_trim_start: float = 0,
                         overlap_factor: float = 1.5) -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
@@ -320,6 +322,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     z_trim_end : float, default=0
         z planes (full-resolution pixels) removed from the end of each cropped,
         flipped chunk before registering; the correction maps are cut the same way.
+    z_trim_start : float, default=0
+        Same, from the beginning of z.
     overlap_factor : float, default=1.5
         The overlap that is registered is ``overlap_factor`` times the estimated
         ``overlap``: the last ``overlap * overlap_factor`` rows of A and the first
@@ -357,14 +361,24 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                        channel, layer, params)
     vol_b = load_chunk(chunk_b, slice_numb, camera_numb,
                        channel, layer, params)
-    trim_a = trim_b = 0
+    trim_a = trim_b = 0                    # planes removed from the end
+    start_a = start_b = 0                  # planes removed from the beginning
+    if z_trim_start > 0:
+        start_a = z_trim_planes(z_trim_start, layer, vol_a.shape[0], "z_trim_start")
+        start_b = z_trim_planes(z_trim_start, layer, vol_b.shape[0], "z_trim_start")
     if z_trim_end > 0:
         trim_a = z_trim_planes(z_trim_end, layer, vol_a.shape[0])
         trim_b = z_trim_planes(z_trim_end, layer, vol_b.shape[0])
-        vol_a = vol_a[:vol_a.shape[0] - trim_a]
-        vol_b = vol_b[:vol_b.shape[0] - trim_b]
-        print(f"  z_trim_end {z_trim_end:g} px full-res: last {trim_a} z planes of "
-              f"each chunk are not used for registration (layer {layer})")
+    if z_trim_start > 0 or z_trim_end > 0:
+        if start_a + trim_a >= vol_a.shape[0] or start_b + trim_b >= vol_b.shape[0]:
+            raise ValueError(f"z_trim_start {z_trim_start:g} + z_trim_end "
+                             f"{z_trim_end:g} full-res px remove every z plane at "
+                             f"layer {layer}")
+        vol_a = vol_a[start_a:vol_a.shape[0] - trim_a]
+        vol_b = vol_b[start_b:vol_b.shape[0] - trim_b]
+        print(f"  z trim (full-res px): first {z_trim_start:g} / last {z_trim_end:g}: "
+              f"first {start_a} and last {trim_a} z planes of each chunk are not used "
+              f"for registration (layer {layer})")
     Za, sy, sx = vol_a.shape
     if vol_b.shape != vol_a.shape:
         print(f"WARNING: chunk shapes differ: {vol_a.shape} vs {vol_b.shape}")
@@ -405,8 +419,10 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
             chunk_b, slice_numb, camera_numb, channel, layer, params,
             corrections_dir, per_chunk_corrections, corrections_layer)
         # the maps are laid out on the full (cropped, flipped) volume: cut them too
-        noise_a, scaler_a = noise_a[:vol_a.shape[0]], scaler_a[:vol_a.shape[0]]
-        noise_b, scaler_b = noise_b[:vol_b.shape[0]], scaler_b[:vol_b.shape[0]]
+        za = slice(start_a, start_a + vol_a.shape[0])
+        zb = slice(start_b, start_b + vol_b.shape[0])
+        noise_a, scaler_a = noise_a[za], scaler_a[za]
+        noise_b, scaler_b = noise_b[zb], scaler_b[zb]
 
     t0 = time.time()
     sub_a = read_volume_rows(vol_a, a_y0, sy, 0, sx,
@@ -450,7 +466,7 @@ def register_chunks(chunks: list[str],
                     corrections_dir: Optional[str] = None,
                     per_chunk_corrections: bool = False,
                     corrections_layer: int = 0, z_trim_end: float = 0,
-                    overlap_factor: float = 1.5) -> None:
+                    z_trim_start: float = 0, overlap_factor: float = 1.5) -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -514,6 +530,11 @@ def register_chunks(chunks: list[str],
         200 for an empty region of that depth). The correction maps are cut the same
         way for registration only; the maps, the stitching crops and the stitched
         output are not changed, and the registered ``dz`` keeps its meaning.
+    z_trim_start : float, default=0
+        The same from the BEGINNING of z (full-resolution pixels), for an empty
+        region at the first planes. It can be combined with ``z_trim_end``. Both
+        chunks lose the same planes, so the registered ``dz`` (B relative to A) keeps
+        its meaning.
     overlap_factor : float, default=1.5
         The overlap that is registered is ``overlap_factor`` times the estimated
         ``overlap``: the last ``overlap * overlap_factor`` rows of A and the first
@@ -550,6 +571,7 @@ def register_chunks(chunks: list[str],
                                   per_chunk_corrections=per_chunk_corrections,
                                   corrections_layer=corrections_layer,
                                   z_trim_end=z_trim_end,
+                                  z_trim_start=z_trim_start,
                                   overlap_factor=overlap_factor)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
@@ -591,7 +613,8 @@ def register_chunks(chunks: list[str],
                                          else str(corrections_dir)),
                      "per_chunk_corrections": bool(per_chunk_corrections),
                      "corrections_layer": int(corrections_layer),
-                     "z_trim_end": float(z_trim_end)},
+                     "z_trim_end": float(z_trim_end),
+                     "z_trim_start": float(z_trim_start)},
         "chunks": [str(c) for c in chunks],
     }
     write_yaml(out_path, result)
