@@ -257,3 +257,56 @@ def load_pair_registration(
     print(f"  per-chunk registration: {own} of {max(n - 1, 0)} pairs have their own "
           "values, the rest use the average")
     return y, dz, y_avg, dz_avg
+
+
+def register_volumes_3d(fixed: np.ndarray, moving: np.ndarray,
+                        transform_key: str = "stage_metadata",
+                        ) -> tuple[np.ndarray, float]:
+    """Register ``moving`` to ``fixed`` with a 3-D translation (z, y and x).
+
+    Both volumes are (z, y, x), on the same voxel grid and each starting at its
+    own origin (0, 0, 0). The registration is multiview-stitcher's phase
+    correlation, with a translation model.
+
+    Parameters
+    ----------
+    fixed, moving : numpy.ndarray
+        Volumes, shape (Z, Y, X) (shapes may differ).
+    transform_key : str, default="stage_metadata"
+        Name of the input transform in multiview-stitcher.
+
+    Returns
+    -------
+    affine : numpy.ndarray
+        4 x 4 homogeneous matrix, ``moving`` voxel (z, y, x) -> ``fixed`` voxel
+        (rotation part: identity), in this level's voxels.
+    quality : float
+        Registration quality (NaN if none was reported).
+    """
+    from multiview_stitcher import msi_utils, registration
+    from multiview_stitcher import spatial_image_utils as si_utils
+
+    def msim(vol: np.ndarray) -> Any:
+        sim = si_utils.get_sim_from_array(
+            vol, dims=["z", "y", "x"], scale={"z": 1.0, "y": 1.0, "x": 1.0},
+            translation={"z": 0.0, "y": 0.0, "x": 0.0},
+            transform_key=transform_key)
+        return msi_utils.get_msim_from_sim(sim, scale_factors=[])
+
+    def pairwise(fixed_data, moving_data, **kw) -> dict[str, Any]:
+        kw.setdefault("upsample_factor", 10)
+        return registration.phase_correlation_registration(
+            fixed_data, moving_data, **kw)
+
+    out = registration.register(
+        [msim(fixed), msim(moving)], transform_key=transform_key,
+        new_transform_key="registered", reg_channel_index=0,
+        pairwise_reg_func=pairwise,
+        groupwise_resolution_kwargs={"transform": "translation"},
+        pre_registration_pruning_method=None, overlap_tolerance=0.0,
+        return_dict=True)
+    affine = np.asarray(out["params"][1], dtype=float).reshape(-1, 4, 4)[0]
+    quals = out["pairwise_registration"]["metrics"]["qualities"]
+    quality = (float(np.mean(np.asarray(next(iter(quals.values())), dtype=float)))
+               if quals else float("nan"))
+    return affine, quality

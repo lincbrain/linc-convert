@@ -78,6 +78,9 @@ class PercentileSettings:
         high percentile.
     min_significance : float
         Standard errors the estimate must differ from 0 to be applied.
+    max_offset : float, optional
+        The offset is searched at or below this value (for example 0: only negative
+        offsets; a positive optimum then ends at 0 and is not applied). None: no bound.
     column_mask_fraction : float, optional
         If given, every row of a tile is measured on the same x columns: a column
         is left out for all rows if more than this share of the tile's rows are
@@ -101,6 +104,7 @@ class PercentileSettings:
     min_pixels: int = 8
     max_offset_fraction: float = 0.5
     min_significance: float = 2.0
+    max_offset: Optional[float] = None
     percentiles: Optional[Tuple[float, ...]] = None
     column_mask_fraction: Optional[float] = None
     exclude_outlier_levels: bool = True
@@ -540,15 +544,18 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     # left out, so the objective does not gain from the clipping itself.
     weights = np.where(lines > limit, tissue[:, None], 0.0).astype(np.float32)
 
+    # search range: [-limit, top]; top is lowered by settings.max_offset
+    top = limit if settings.max_offset is None else min(limit, float(settings.max_offset))
+    bottom = -limit if top > -limit else top - limit
     estimate = (float(fixed_offset) if fixed_offset is not None
-                else _search(lines, weights, -limit, limit))
+                else _search(lines, weights, bottom, top))
     excluded: List[int] = []
     shown = np.full(lines.shape[1], np.nan)
     if settings.exclude_outlier_levels:
         excluded, weights, shown = outlier_levels(
             lines, weights, estimate, settings.outlier_k, settings.min_levels)
         if excluded and fixed_offset is None:
-            estimate = _search(lines, weights, -limit, limit)
+            estimate = _search(lines, weights, bottom, top)
     objective_zero = _ratio_f(lines, weights, 0.0)
     objective_estimate = _ratio_f(lines, weights, estimate)
 
@@ -557,14 +564,15 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     if n_tiles >= 3 and fixed_offset is None:
         for leave in range(n_tiles):
             keep = [i for i in range(n_tiles) if i != leave]
-            tile_estimates.append(_search(lines[keep], weights[keep], -limit, limit))
+            tile_estimates.append(_search(lines[keep], weights[keep], bottom, top))
         e = np.asarray(tile_estimates)
         se = float(np.sqrt((n_tiles - 1) / n_tiles * np.sum((e - e.mean()) ** 2)))
 
     # An estimate at the end of the search range means the objective had no
     # minimum inside it (not identified), and a zero spread of the delete-one
     # estimates is the same boundary hit; neither is applied.
-    interior = abs(estimate) < BOUNDARY_FRACTION * limit
+    interior = (estimate > -BOUNDARY_FRACTION * limit
+                and (estimate < BOUNDARY_FRACTION * limit or top < limit))
     significant = (interior and np.isfinite(se) and se > 0
                    and abs(estimate) >= settings.min_significance * se)
     applied = (float(fixed_offset) if fixed_offset is not None

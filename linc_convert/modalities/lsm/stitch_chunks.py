@@ -13,7 +13,9 @@ single correction. Needs ``linc_convert`` only for its zarr output and config
         voxel_size=[1.0, 1.0, 1.0],
         general_config=GeneralConfig(out="…/stitched"), zarr_config=ZarrConfig(...))
 
-For each channel of the camera, and each chunk (level 0 only):
+Optionally (``channel_registration``) every channel is registered to a reference
+channel (488) while it is stitched, in the same resample as the skew correction;
+see the parameter. Otherwise, for each channel of the camera and each chunk:
 
 1. Crop with the channel's ``stitchingCrop`` (y, and z if defined) and flip z
    if the camera's ``verticalFlip`` is set.
@@ -82,6 +84,7 @@ inputs, or ``restart=True``, start over.
 import json
 import os
 import shutil
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import cyclopts
@@ -95,6 +98,15 @@ from linc_convert.modalities.lsm.stitching_utils.blending import (
     blend_overlap,
     sheared_weights,
 )
+from linc_convert.modalities.lsm.stitching_utils.channel_registration import (
+    ChannelRegistration,
+    describe,
+    load_channel_registration,
+    reference_origin,
+    register_tile,
+    registered_weights,
+    scale_translation,
+)
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     apply_corrections,
     correction_paths,
@@ -106,6 +118,7 @@ from linc_convert.modalities.lsm.stitching_utils.io import (
     atomic_write,
     crop_and_flip,
     discover_tile_paths,
+    level_range,
     open_tile_array,
     start_dask,
 )
@@ -127,6 +140,19 @@ from linc_convert.utils.zarr_config import GeneralConfig, ZarrConfig, autoconfig
 # --------------------------------------------------------------------------
 # One channel
 # --------------------------------------------------------------------------
+
+
+@dataclass
+class RegisteredChannel:
+    """A channel that is registered to the reference channel while it is stitched.
+
+    ``reg`` is the registration (layer units, with the origin of the reference
+    stitching crop in the reference's split frame); ``ref_shape`` is the shape
+    (Z, Y, X) of the reference's stitching-cropped chunk, i.e. the geometry every
+    channel is stitched in.
+    """
+    reg: ChannelRegistration
+    ref_shape: Tuple[int, int, int]
 
 
 def _resolve_tile_paths(input_path: str, camera_id: int, coords_path: str,
@@ -339,7 +365,7 @@ def _stitch_bands(first_band: int, n: int, sy: int, z_out: int,
                   positions_y: List[int], z_origin: List[int], tile_paths: List[str],
                   open_tile, raw_shape: Tuple[int, int, int], chunk_maps,
                   shear_x: float, shear_z: float, ckpt: str, signature: dict,
-                  parallel_bands: int) -> None:
+                  parallel_bands: int, build_tile=None) -> None:
     """Write the mosaic band by band, a band being one row of shards.
 
     Every band is the lazy join (along y) of the mosaic rows it covers: for each
@@ -374,6 +400,9 @@ def _stitch_bands(first_band: int, n: int, sy: int, z_out: int,
     def tile(k: int) -> Tuple[da.Array, np.ndarray]:
         """Corrected, sheared chunk ``k`` (lazy) and its blend weights."""
         if k not in tiles:
+            if build_tile is not None:
+                tiles[k] = build_tile(k)
+                return tiles[k]
             raw = open_tile(tile_paths[k])
             if raw.shape != raw_shape:
                 raise ValueError(f"{os.path.basename(tile_paths[k])} has shape "
@@ -460,6 +489,7 @@ def stitch_channel(
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
     memory_gb: int = 128, parallel_chunks: int = 2, bands: bool = True,
     parallel_bands: int = 2, x_tolerance: int = 64,
+    registered: Optional[RegisteredChannel] = None,
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -470,7 +500,8 @@ def stitch_channel(
     channel : str
         Channel name.
     crop : tuple
-        ``(z_start, z_end, y_start, y_end)`` stitching crop.
+        ``(z_start, z_end, y_start, y_end)`` stitching crop. With ``registered``:
+        the channel's split crop (y range, z None = all z).
     vertical_flip : bool
         Flip each chunk along z.
     shear_x : float
@@ -519,7 +550,14 @@ def stitch_channel(
         full-resolution pixels (scaled to ``layer``, at least 1) and whose z and y
         lengths agree is made as long as the first chunk: zeros are appended at the
         end of x if it is shorter, the extra columns are cut if it is longer, and a
-        warning is printed. 0 requires identical shapes.
+        warning is printed. 0 requires identical shapes. (Not used with
+        ``registered``: the affine resample takes care of the x length.)
+    registered : RegisteredChannel, optional
+        Register the channel to the reference channel: each chunk is split (``crop``)
+        and flipped, corrected with this channel's maps (made with
+        ``create_corrections --crop_kind splitCrop``), then resampled ONCE by the
+        registration combined with the skew shears into the reference's
+        stitching-cropped geometry (``registered.ref_shape``). Needs ``bands``.
 
     Notes
     -----
@@ -550,6 +588,11 @@ def stitch_channel(
                              vertical_flip, layer)
 
     raw_shape = open_tile_exact(tile_paths[0]).shape
+    split_shape = raw_shape
+    if registered is not None:
+        if not bands:
+            raise ValueError("registering channels needs bands=True")
+        raw_shape = registered.ref_shape        # the geometry of the reference channel
     x_tol = (max(1, int(x_tolerance) >> layer) if x_tolerance > 0 else 0)
     warned_x: set = set()
 
@@ -586,12 +629,35 @@ def stitch_channel(
         """Noise map, scaler map and blend confidence of one chunk."""
         noise, scaler = load_corrections(
             corrections_dir, channel, index + 1 if per_chunk_corrections else None)
+        if registered is not None:
+            if noise.shape != split_shape[:2] or scaler.shape != split_shape[:2]:
+                raise ValueError(
+                    f"corrections for channel {channel} have shape {noise.shape}, "
+                    f"but the split chunks at layer {layer} are (Z, Y)="
+                    f"{split_shape[:2]}; run create_corrections with "
+                    f"layer={layer} and crop_kind=splitCrop")
+            return noise, scaler, registered_weights(
+                sheared_weights(scaler, 0.0, scaler.shape[0]), registered.reg,
+                shear_x, shear_z, raw_shape, (z_out, sy, x_out))
         if noise.shape != (sz, sy) or scaler.shape != (sz, sy):
             raise ValueError(
                 f"corrections for channel {channel} have shape {noise.shape}, "
                 f"but chunks at layer {layer} are (Z, Y)=({sz}, {sy}); run "
                 f"create_corrections with layer={layer}")
         return noise, scaler, _weights(scaler, shear_z, z_out)
+
+    def build_registered(index: int) -> Tuple[da.Array, np.ndarray]:
+        """Registered, sheared chunk ``index`` (lazy) and its blend weights."""
+        raw = open_tile_exact(tile_paths[index])
+        if raw.shape[:2] != split_shape[:2]:
+            raise ValueError(f"{os.path.basename(tile_paths[index])} has shape "
+                             f"{raw.shape}, expected (Z, Y) = {split_shape[:2]}")
+        noise, scaler, weights = chunk_maps(index)
+        data = register_tile(
+            apply_corrections(raw, noise, scaler), registered.reg, shear_x, shear_z,
+            raw_shape, (z_out, sy, x_out),
+            (min(z_out, DASK_BLOCK[0]), sy, min(x_out, DASK_BLOCK[2])))
+        return data, weights
 
     if n > 1 and steps.max() > sy:
         print(f"  WARNING: gap between chunks ({steps.max()} > chunk height {sy}); "
@@ -611,6 +677,15 @@ def stitch_channel(
                  "z_origin": z_origin, "shape": list(fullshape),
                  "shear": [float(shear_x), float(shear_z)],
                  "per_chunk_corrections": bool(per_chunk_corrections)}
+    if registered is not None:
+        signature["registration"] = {
+            "matrix": registered.reg.matrix.round(9).tolist(),
+            "translation": registered.reg.translation.round(6).tolist(),
+            "origin": [round(float(v), 6) for v in registered.reg.origin],
+            "order": int(registered.reg.order), "ref_shape": list(raw_shape),
+            "split_shape": list(split_shape)}
+        print(f"channel {channel}: {describe(registered.reg)}; split chunk "
+              f"{split_shape} -> reference geometry {raw_shape}")
     if windowed:
         signature["window"] = [y0, y1, x0, x1]
     if bands:
@@ -670,7 +745,8 @@ def stitch_channel(
             _stitch_bands(
                 start, n, sy, z_out, mosaic, (y0, y1, x0, x1), grid, target, client,
                 positions_y, z_origin, tile_paths, open_tile, raw_shape, chunk_maps,
-                shear_x, shear_z, ckpt, signature, parallel_bands)
+                shear_x, shear_z, ckpt, signature, parallel_bands,
+                build_registered if registered is not None else None)
             group.generate_pyramid(levels=zarr_config.levels)
             group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
             _write_checkpoint(ckpt, signature, -(-(y1 - y0) // grid[1]) - 1,
@@ -822,6 +898,10 @@ def stitch_chunks(
     projections: bool = True,
     projections_dir: Optional[str] = None,
     projection_z_crop: str = "0,0",
+    channel_registration: Optional[str] = None,
+    reference_channel: str = "488",
+    reference_camera_id: int = 2,
+    registration_order: int = 1,
     layer: int = 0,
     min_x: Optional[int] = None,
     max_x: Optional[int] = None,
@@ -908,6 +988,31 @@ def stitch_chunks(
         and the min projection (for example ``"150,50"``). The stitched data is not
         affected. Existing projection TIFFs are not recomputed, so delete them to
         apply a new crop.
+    channel_registration : str, optional
+        Register every channel to ``reference_channel`` while stitching. A path with
+        ``{channel}`` (replaced by each channel's name) of YAML files giving the
+        channel -> reference registration in (z, y, x) order and full-resolution
+        voxels: ``affine`` (4 x 4, last row 0 0 0 1), or ``matrix`` (3 x 3) and
+        ``translation`` (3). The coordinates are voxels of the channel's split,
+        flipped chunk and of the reference's split, flipped chunk (first voxel =
+        0). Each channel is then made like this, in one resample: split with its own
+        ``splitCrop`` (y range, all z) and flipped for its camera; corrected with its
+        own maps (``create_corrections --crop_kind splitCrop``); resampled by the
+        registration combined with the skew shears into the reference channel's
+        stitching crop. Chunk positions, overlaps, ``dz`` shear and the output size
+        are the reference channel's: ``coords_path`` is read for
+        ``reference_channel`` for every channel, all chunks of the camera are
+        stitched, and the reference itself needs no file. Needs ``bands``; not
+        combined with the per-chunk options. Weights for blending are resampled
+        with the (z, y) part of the same transform, evaluated at the middle of x.
+    reference_channel : str, default="488"
+        Channel the others are registered to; it keeps its place (identity).
+    reference_camera_id : int, default=2
+        Camera of ``reference_channel``.
+    registration_order : int, default=1
+        Interpolation order (0 nearest, 1 linear) of the registered data. A
+        registration that is only an integer translation (the reference channel)
+        always uses nearest neighbour, which is exact.
     layer : int, default=0
         Pyramid level of the raw chunks to stitch (0 = full resolution), for
         quick low-resolution test runs. Everything is scaled to the level: the
@@ -972,31 +1077,76 @@ def stitch_chunks(
     flip = get_vertical_flip(scan_parameters, camera_id)
     shear_x = get_skew_shear(scan_parameters)
     channels = get_channel_names(scan_parameters, camera_id)
+
+    registered: dict = {}
+    split_crops: dict = {}
+    if channel_registration:
+        if not bands:
+            raise ValueError("channel_registration needs bands=True")
+        if per_chunk_registration or per_chunk_corrections:
+            raise ValueError("channel_registration cannot be combined with "
+                             "per_chunk_registration or per_chunk_corrections")
+        if registration_order not in (0, 1):
+            raise ValueError("registration_order must be 0 or 1")
+        ref_stitch = get_crops(scan_parameters, reference_camera_id,
+                               slice_number)[reference_channel]
+        ref_split = get_crops(scan_parameters, reference_camera_id, slice_number,
+                              kind="splitCrop", include_z=False)[reference_channel]
+        ref_flip = get_vertical_flip(scan_parameters, reference_camera_id)
+        ref_tiles = discover_tile_paths(input_path, reference_camera_id)
+        ref_arr = open_tile_array(ref_tiles[0], layer)
+        ref_shape = crop_and_flip(ref_arr, ref_stitch, ref_flip, layer).shape
+        ref_z = (level_range(ref_stitch[:2], ref_arr.shape[0], layer)
+                 if ref_stitch[0] is not None and ref_stitch[1] is not None
+                 else (None, None))
+        origin = reference_origin(
+            level_range(ref_split[2:], ref_arr.shape[1], layer),
+            level_range(ref_stitch[2:], ref_arr.shape[1], layer),
+            ref_z, ref_arr.shape[0], ref_flip, layer)
+        print(f"registering to channel {reference_channel} (camera "
+              f"{reference_camera_id}): geometry {ref_shape}, crop corner in its "
+              f"split frame (z, y, x) = {origin}")
+        split_crops = get_crops(scan_parameters, camera_id, slice_number,
+                                kind="splitCrop", include_z=False)
+        for channel in channels:
+            if channel == reference_channel and camera_id == reference_camera_id:
+                matrix, translation = np.eye(3), np.zeros(3)
+            else:
+                matrix, translation = load_channel_registration(
+                    channel_registration.format(channel=channel))
+            registered[channel] = RegisteredChannel(
+                ChannelRegistration(matrix, scale_translation(translation, layer),
+                                    origin, registration_order), ref_shape)
+        all_chunks = True            # the chunk list of the reference camera does not apply
     for channel in channels:
         if channel not in crops:
             raise KeyError(f"No stitchingCrop for channel '{channel}'")
-        if not os.path.exists(coords_path.format(channel=channel)):
+        layout_channel = reference_channel if channel_registration else channel
+        if not os.path.exists(coords_path.format(channel=layout_channel)):
             raise FileNotFoundError(
-                f"No register_chunks result for channel '{channel}': "
-                f"{coords_path.format(channel=channel)}")
+                f"No register_chunks result for channel '{layout_channel}': "
+                f"{coords_path.format(channel=layout_channel)}")
 
     for channel in channels:
         if restart:
             ckpt = _checkpoint_path(os.path.join(general_config.out, channel))
             if os.path.exists(ckpt):
                 os.remove(ckpt)
-        coords = coords_path.format(channel=channel)
+        coords = coords_path.format(
+            channel=reference_channel if channel_registration else channel)
         tile_paths = _resolve_tile_paths(input_path, camera_id, coords,
                                          all_chunks)
         positions_y, positions_z, shear_z = _layout(
             coords, tile_paths, channel, dz_as_shear_z,
             per_chunk_registration, layer)
-        stitch_channel(tile_paths, channel, crops[channel], flip, shear_x,
+        stitch_channel(tile_paths, channel,
+                       split_crops[channel] if channel_registration else crops[channel],
+                       flip, shear_x,
                        shear_z, positions_y, positions_z, corrections_dir,
                        os.path.join(general_config.out, channel),
                        voxel_size, zarr_config, per_chunk_corrections, layer,
                        y_range, x_range, memory_gb, parallel_chunks, bands,
-                       parallel_bands, x_tolerance)
+                       parallel_bands, x_tolerance, registered.get(channel))
         if projections:
             write_projections(
                 os.path.join(general_config.out, channel),

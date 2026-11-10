@@ -153,8 +153,13 @@ def mismatch(delta: float, pa: np.ndarray, pb: np.ndarray, weight: np.ndarray,
 
 
 def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: int = 60,
-                  precision: float = 0.005) -> Tuple[float, bool, List[Tuple[float, float]]]:
+                  precision: float = 0.005, upper: Optional[float] = None
+                  ) -> Tuple[float, bool, List[Tuple[float, float]]]:
     """Minimise ``evaluate(delta)`` over ``[-limit, limit]``.
+
+    ``upper`` (optional) lowers the top of the range, so ``delta`` never exceeds it
+    (used to keep the total offset at or below a maximum). The best point at that
+    constraint counts as interior: the search cannot go further by design.
 
     A grid first, then golden-section steps between the neighbours of the best grid
     point, until the bracket is narrower than ``precision`` counts. Returns
@@ -162,13 +167,18 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
     grid point is at an end of the range, and ``curve`` lists the grid
     ``(delta, value)``.
     """
-    grid = np.linspace(-limit, limit, grid_points)
+    top = limit if upper is None else min(limit, float(upper))
+    constrained = top < limit
+    bottom = -limit if top >= -limit else top - limit
+    grid = np.linspace(bottom, top, grid_points)
     values = [evaluate(float(g)) for g in grid]
     curve = list(zip(grid.tolist(), values))
     finite = [i for i, v in enumerate(values) if np.isfinite(v)]
     if not finite:
         return 0.0, False, curve
     best = min(finite, key=lambda i: values[i])
+    if best == grid_points - 1 and constrained:
+        return float(grid[best]), True, curve
     if best in (0, grid_points - 1):
         return float(grid[best]), False, curve
     lo, hi = float(grid[best - 1]), float(grid[best + 1])
@@ -190,7 +200,7 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
 
 
 def level_outliers(pa, pb, wt, na, nb, active: List[int], limit: float, k: float,
-                   floor: float, min_levels: int) -> Tuple[List[int], Dict[int, float]]:
+                   floor: float, min_levels: int, upper: Optional[float] = None) -> Tuple[List[int], Dict[int, float]]:
     """Percentile levels whose offset recommendation or residual differs wildly.
 
     Two checks, repeated (worst level first) while levels remain above ``min_levels``:
@@ -217,7 +227,8 @@ def level_outliers(pa, pb, wt, na, nb, active: List[int], limit: float, k: float
     def best(levels):
         sel = np.asarray(levels)
         d, interior, _ = search_offset(
-            lambda x: mismatch(x, pa[:, sel], pb[:, sel], wt, na, nb)[0], limit, **quick)
+            lambda x: mismatch(x, pa[:, sel], pb[:, sel], wt, na, nb)[0], limit,
+            upper=upper, **quick)
         return d if interior else float("nan")
 
     while len(active) > min_levels:
@@ -321,6 +332,9 @@ def main() -> None:
                         "percentile above the background")
     p.add_argument("--offset_limit", type=float,
                    help="search range in counts (replaces --offset_range)")
+    p.add_argument("--max_offset", type=float,
+                   help="the total offset never goes above this (for example 0: only "
+                        "negative offsets). Default: no bound")
     p.add_argument("--offset_tol", type=float, default=0.05,
                    help="the offset is stable when |delta| of a round is below this many "
                         "counts")
@@ -341,6 +355,9 @@ def main() -> None:
                    help="never keep fewer levels than this")
     p.add_argument("--no_level_exclusion", action="store_true",
                    help="use every level, whatever they recommend")
+    p.add_argument("--crop_kind", default="stitchingCrop",
+                   choices=["stitchingCrop", "splitCrop"],
+                   help="crop the maps are made for (create_corrections --crop_kind)")
     p.add_argument("--dry_run", action="store_true",
                    help="measure and report, change nothing")
     p.add_argument("--restore", action="store_true",
@@ -412,7 +429,8 @@ def main() -> None:
     scale = 2 ** args.layer
     with open(args.yaml_path) as f:
         scan = yaml.safe_load(f)
-    crop = get_crops(scan, args.camera_id, args.slice_number)[args.channel]
+    crop = get_crops(scan, args.camera_id, args.slice_number, kind=args.crop_kind,
+                     include_z=args.crop_kind == "stitchingCrop")[args.channel]
     flip = get_vertical_flip(scan, args.camera_id)
     with open(args.coords) as f:
         reg = yaml.safe_load(f)["weighted_average"]
@@ -530,10 +548,11 @@ def main() -> None:
             low = (pa[:, near] - na[None])[np.isfinite(pa[:, near])]
             level = float(np.median(low[low > 0])) if (low > 0).any() else 0.0
             limit = max(args.offset_range * level, 1.0)
+        upper = None if args.max_offset is None else float(args.max_offset) - offset
         if not args.no_level_exclusion:
             new, first = level_outliers(pa, pb, wt, na, nb, active_levels(), limit,
                                         args.outlier_k, args.outlier_floor,
-                                        args.min_levels)
+                                        args.min_levels, upper=upper)
             if first:
                 print("  offset without each level: " + " ".join(
                     f"{levels[i]:g}:{d:+.2f}" for i, d in first.items()))
@@ -545,8 +564,11 @@ def main() -> None:
         pa_a, pb_a = pa[:, act], pb[:, act]
         ev = lambda x: mismatch(x, pa_a, pb_a, wt, na, nb)[0]  # noqa: E731
         before = ev(0.0)
-        delta, interior, curve = search_offset(ev, limit)
+        delta, interior, curve = search_offset(ev, limit, upper=upper)
         after = ev(delta)
+        if upper is not None:
+            print(f"  total offset limited to at most {args.max_offset:+g} "
+                  f"(delta at most {upper:+.2f})")
         print(f"\n{label}: search range +-{limit:.1f} counts; mismatch "
               f"{before:.5f} at delta 0 -> {after:.5f} at delta {delta:+.2f}"
               + ("" if interior else "  (at the EDGE of the range)"))
@@ -603,7 +625,8 @@ def main() -> None:
             only_channel=args.channel, force=True, layer=args.layer, fit_offset=True,
             fixed_offset=float(offset),
             offset_percentiles=[levels[i] for i in active_levels()],
-            column_mask=True, column_mask_fraction=args.column_mask_fraction)
+            column_mask=True, column_mask_fraction=args.column_mask_fraction,
+            crop_kind=args.crop_kind)
         noise, scaler = load_corrections(args.corrections_dir, args.channel)
         merge_create_exclusions()
     else:

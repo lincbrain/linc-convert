@@ -283,6 +283,7 @@ def _create_per_chunk(
     channels: List[str], chunk_numbers: Optional[List[int]], output_dir: str,
     background_length: int, zy_threshold_multiplier: float, force: bool,
     layer: int = 0, column_mask_fraction: Optional[float] = None,
+    crop_kind: str = "stitchingCrop",
 ) -> Dict[str, Any]:
     """Calibrate each chunk on its own; see ``create_corrections(per_chunk)``."""
     tile_paths = discover_tile_paths(input_path, camera_id)
@@ -292,7 +293,8 @@ def _create_per_chunk(
     if bad:
         raise ValueError(f"chunks {bad} out of range: camera {camera_id} has "
                          f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
-    crops = get_crops(scan_parameters, camera_id, slice_number)
+    crops = get_crops(scan_parameters, camera_id, slice_number, kind=crop_kind,
+                      include_z=crop_kind == "stitchingCrop")
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
 
     bg_len, x_stride = _level_settings(background_length, layer)
@@ -354,6 +356,8 @@ def create_corrections(
     fixed_offset: Optional[float] = None,
     offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
+    offset_max: Optional[float] = None,
+    crop_kind: str = "stitchingCrop",
     column_mask: bool = True,
     column_mask_fraction: float = 0.2,
 ) -> None:
@@ -456,6 +460,16 @@ def create_corrections(
         offset is not worth estimating (``evaluate_corrections`` can show that).
     offset_max_columns : int, default=512
         At most this many x columns (evenly strided) are read per row.
+    crop_kind : {"stitchingCrop", "splitCrop"}, default="stitchingCrop"
+        The region the maps cover. ``stitchingCrop``: the channel's stitching crop
+        (y and z), as ``stitch_chunks`` uses it by default. ``splitCrop``: the
+        channel's whole split region (its y range, all z), flipped like the camera;
+        needed when ``stitch_chunks`` registers the channels to a reference channel
+        (``channel_registration``), because the registration pulls data from beyond
+        the channel's own stitching crop.
+    offset_max : float, optional
+        Upper bound of the offset search (for example 0: only negative offsets are
+        found; if the data prefer a positive one, 0 is used). Default: no bound.
     offset_min_significance : float, default=2.0
         Standard errors the offset must differ from 0 to be applied (0 applies
         any estimate that has one).
@@ -504,6 +518,9 @@ def create_corrections(
             "reference_tiles must contain at least one tile index "
             "(or set auto_reference_tiles)")
 
+    if crop_kind not in ("stitchingCrop", "splitCrop"):
+        raise ValueError(f"crop_kind must be 'stitchingCrop' or 'splitCrop', got "
+                         f"{crop_kind!r}")
     with open(yaml_path) as f:
         scan_parameters = yaml.safe_load(f)
     channels = get_channel_names(scan_parameters, camera_id)
@@ -518,7 +535,7 @@ def create_corrections(
             input_path, camera_id, slice_number, scan_parameters, channels,
             reference_tiles, output_dir, background_length,
             zy_threshold_multiplier, force, layer,
-            column_mask_fraction if column_mask else None)
+            column_mask_fraction if column_mask else None, crop_kind)
         return
 
     results: Dict[str, Dict[str, str]] = {}
@@ -540,7 +557,8 @@ def create_corrections(
         raise ValueError(f"reference_tiles {bad} out of range: camera {camera_id} has "
                          f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
 
-    crops = get_crops(scan_parameters, camera_id, slice_number)
+    crops = get_crops(scan_parameters, camera_id, slice_number, kind=crop_kind,
+                      include_z=crop_kind == "stitchingCrop")
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
     if auto_reference_tiles:
         reference_tiles = _auto_reference_tiles(
@@ -563,7 +581,7 @@ def create_corrections(
             low=offset_low_percentile, high=offset_high_percentile,
             percentiles=tuple(offset_percentiles) if offset_percentiles else None,
             max_columns=offset_max_columns,
-            min_significance=offset_min_significance,
+            min_significance=offset_min_significance, max_offset=offset_max,
             column_mask_fraction=column_mask_fraction if column_mask else None)
         settings.levels()      # validates the percentiles
         maps = _offset_corrections(

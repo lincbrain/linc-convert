@@ -172,6 +172,7 @@ def registration_corrections(
         path: PathLike, slice_numb: int, camera_numb: int, channel: str,
         layer: int, params: dict[str, Any], corrections_dir: PathLike,
         per_chunk_corrections: bool = False, corrections_layer: int = 0,
+        corrections_crop: str = "stitchingCrop",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load the noise and scaler maps of a chunk, laid out on the registration volume.
 
@@ -202,6 +203,8 @@ def registration_corrections(
         name (``..._chunk-0023_...`` is chunk 23).
     corrections_layer : int, default=0
         Pyramid level ``create_corrections`` was run at (``--layer`` there).
+    corrections_crop : {"stitchingCrop", "splitCrop"}, default="stitchingCrop"
+        Crop the maps were made for (``create_corrections --crop_kind``).
 
     Returns
     -------
@@ -231,15 +234,19 @@ def registration_corrections(
     # 1. maps -> the raw chunk's frame at corrections_layer (unflipped, uncropped)
     c_scale = 2 ** corrections_layer
     raw_zc, raw_yc, _ = open_tile_array(path, corrections_layer).shape
+    if corrections_crop not in ("stitchingCrop", "splitCrop"):
+        raise ValueError("corrections_crop must be 'stitchingCrop' or 'splitCrop', "
+                         f"got {corrections_crop!r}")
     z0, z1, t0, t1 = get_crop(params, camera_numb, slice_numb, channel,
-                              kind="stitchingCrop", include_z=True)
+                              kind=corrections_crop,
+                              include_z=corrections_crop == "stitchingCrop")
     t0, t1 = t0 // c_scale, min(t1 // c_scale, raw_yc)
     zc0, zc1 = (0, raw_zc) if z0 is None or z1 is None else (
         max(z0 // c_scale, 0), min(z1 // c_scale, raw_zc))
     if scaler.shape != (zc1 - zc0, t1 - t0):
         raise ValueError(
             f"corrections for channel {channel} have shape {scaler.shape} but "
-            f"the stitching crop at layer {corrections_layer} is (Z, Y)="
+            f"the {corrections_crop} at layer {corrections_layer} is (Z, Y)="
             f"({zc1 - zc0}, {t1 - t0}); pass the layer create_corrections was "
             "run at as corrections_layer")
     flip = get_vertical_flip(params, camera_numb)
@@ -281,7 +288,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
                         per_chunk_corrections: bool = False,
                         corrections_layer: int = 0,
                         z_trim_end: float = 0, z_trim_start: float = 0,
-                        overlap_factor: float = 1.5) -> Pair:
+                        overlap_factor: float = 1.5,
+                        corrections_crop: str = "stitchingCrop") -> Pair:
     """Register chunk B against chunk A (translation in z and y only).
 
     Parameters
@@ -331,6 +339,8 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
         chunk height minus that. Use a factor above 1 when the true overlap may be
         larger than the estimate; 1 registers exactly the estimated overlap. The
         result is an absolute y offset, so it does not depend on the factor.
+    corrections_crop : {"stitchingCrop", "splitCrop"}, default="stitchingCrop"
+        Crop the correction maps were made for (``create_corrections --crop_kind``).
 
     Returns
     -------
@@ -414,10 +424,12 @@ def register_two_chunks(chunk_a: PathLike, chunk_b: PathLike, channel: str,
     if corrections_dir is not None:
         noise_a, scaler_a = registration_corrections(
             chunk_a, slice_numb, camera_numb, channel, layer, params,
-            corrections_dir, per_chunk_corrections, corrections_layer)
+            corrections_dir, per_chunk_corrections, corrections_layer,
+            corrections_crop)
         noise_b, scaler_b = registration_corrections(
             chunk_b, slice_numb, camera_numb, channel, layer, params,
-            corrections_dir, per_chunk_corrections, corrections_layer)
+            corrections_dir, per_chunk_corrections, corrections_layer,
+            corrections_crop)
         # the maps are laid out on the full (cropped, flipped) volume: cut them too
         za = slice(start_a, start_a + vol_a.shape[0])
         zb = slice(start_b, start_b + vol_b.shape[0])
@@ -466,7 +478,8 @@ def register_chunks(chunks: list[str],
                     corrections_dir: Optional[str] = None,
                     per_chunk_corrections: bool = False,
                     corrections_layer: int = 0, z_trim_end: float = 0,
-                    z_trim_start: float = 0, overlap_factor: float = 1.5) -> None:
+                    z_trim_start: float = 0, overlap_factor: float = 1.5,
+                    corrections_crop: str = "stitchingCrop") -> None:
     """Register every pair of consecutive chunks and average by registration quality.
 
     Each pair ``(chunks[i], chunks[i+1])`` is run through
@@ -542,6 +555,9 @@ def register_chunks(chunks: list[str],
         chunk height minus that. Use a factor above 1 when the true overlap may be
         larger than the estimate; 1 registers exactly the estimated overlap. The
         result is an absolute y offset, so it does not depend on the factor.
+    corrections_crop : {"stitchingCrop", "splitCrop"}, default="stitchingCrop"
+        Crop the correction maps were made for (``create_corrections --crop_kind``;
+        ``splitCrop`` when the stitch registers the channels to 488).
 
     Raises
     ------
@@ -572,7 +588,8 @@ def register_chunks(chunks: list[str],
                                   corrections_layer=corrections_layer,
                                   z_trim_end=z_trim_end,
                                   z_trim_start=z_trim_start,
-                                  overlap_factor=overlap_factor)
+                                  overlap_factor=overlap_factor,
+                                  corrections_crop=corrections_crop)
         pairs.append((float(res[0]), float(res[1]), float(res[2])))
 
     avg = average_pairs(pairs)
