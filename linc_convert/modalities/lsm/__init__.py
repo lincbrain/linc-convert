@@ -14,6 +14,7 @@ try:
         "stitch_strips",
         "create_corrections",
         "register_chunks",
+        "register_channels",
         "stitch_chunks"
     ]
 
@@ -23,6 +24,7 @@ try:
         mosaic,
         multi_slice,
         prd,
+        register_channels,
         register_chunks,
         single_volume,
         spool,
