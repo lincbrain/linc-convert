@@ -147,8 +147,8 @@ def _orientation_wheel(size: int, inner: float = 0.35) -> tuple[np.ndarray, np.n
     c = (size - 1) / 2
     dy, dx = np.mgrid[0:size, 0:size] - c
     r = np.hypot(dx, dy) / c
-    # 0° = +x (right), positive angles toward +y (down), matching the preview axes
-    phi = np.degrees(np.arctan2(dy, dx))
+    # 0° = +x (right), positive angles toward -y (up), so +90 lands at the top
+    phi = np.degrees(np.arctan2(-dy, dx))
     outside = (r > 1) | (r < inner)
     return _angle_to_rgb(phi, background=outside), ~outside
 
@@ -174,10 +174,11 @@ def _add_orientation_wheel(
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default(size=max(10, margin // 2))
     cx, cy, rad = x0 + box / 2, y0 + box / 2, size / 2 + margin / 2
-    for a in (0, 45, 90, 135):
+    for a in (-90, -45, 0, 45, 90):
         t = np.radians(a)
-        pos = (cx + rad * np.cos(t), cy + rad * np.sin(t))
-        draw.text(pos, f"{a}°", font=font, anchor="mm", fill="white")
+        pos = (cx + rad * np.cos(t), cy - rad * np.sin(t))
+        label = f"{a:+d}°" if a != 0 else "0°"
+        draw.text(pos, label, font=font, anchor="mm", fill="white")
     return np.asarray(img)
 
 def _save_tile_grid(
@@ -627,18 +628,19 @@ def mosaic2d(
         if mask_array is not None:
             background |= np.asarray(mask_array).T == 0
         preview = _angle_to_rgb(result, background=background)
-        if color_wheel:
-            preview = _add_orientation_wheel(preview)
+
+    # Save TIFF if requested (no color wheel overlay)
+    if tiff_output:
+        logger.info(f"Saving TIFF: {tiff_output}")
+        _save_tiff(preview, tiff_output)
 
     # Save JPEG if requested
     if jpeg_output:
         logger.info(f"Saving JPEG preview: {jpeg_output}")
-        _save_jpeg(preview, jpeg_output)
-
-    # Save TIFF if requested
-    if tiff_output:
-        logger.info(f"Saving TIFF: {tiff_output}")
-        _save_tiff(preview, tiff_output)
+        jpeg_preview = preview
+        if angle_to_rgb and color_wheel:
+            jpeg_preview = _add_orientation_wheel(jpeg_preview)
+        _save_jpeg(jpeg_preview, jpeg_output)
 
 
     # Save to Zarr if output is specified
