@@ -1,5 +1,6 @@
 """Read overlap volumes and register them with multiview-stitcher (z and y only)."""
 
+from functools import partial
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -319,4 +320,127 @@ def register_volumes_3d(fixed: np.ndarray, moving: np.ndarray,
     quals = out["pairwise_registration"]["metrics"]["qualities"]
     quality = (float(np.mean(np.asarray(next(iter(quals.values())), dtype=float)))
                if quals else float("nan"))
+    return affine, quality
+
+
+ANTS_STAGES = {
+    "rigid": ["Translation", "Rigid"],
+    "similarity": ["Translation", "Rigid", "Similarity"],
+    "affine": ["Translation", "Rigid", "Similarity", "Affine"],
+}
+# volumes at a very small layer are small: use every voxel in the metric, and a 3-level pyramid
+ANTS_DEFAULTS: Dict[str, Any] = {"aff_random_sampling_rate": 1.0,
+                                 "aff_iterations": (1000, 500, 250),
+                                 "aff_smoothing_sigmas": (2, 1, 0),
+                                 "aff_shrink_factors": (4, 2, 1)}
+MODELS = ("translation",) + tuple(ANTS_STAGES)
+
+
+def register_volumes_model(fixed: np.ndarray, moving: np.ndarray,
+                           model: str = "translation", fit_x: bool = False,
+                           transform_key: str = "stage_metadata",
+                           ants_kwargs: Optional[Dict[str, Any]] = None,
+                           ) -> tuple[np.ndarray, float]:
+    """Register ``moving`` to ``fixed`` with a translation, rigid, similarity or affine model.
+
+    ``translation`` is phase correlation (``register_volumes_3d``). The other models
+    run ANTsPy through multiview-stitcher (needs ``antspyx``), in stages
+    (translation, rigid, ... up to ``model``), starting from the phase-correlation
+    translation in z and y. The translation is then refined by phase correlation
+    of the warped volume (mutual information is only about a voxel accurate there).
+
+    Without ``fit_x`` the transform acts in the (z, y) plane only (rotation about x,
+    scaling and shear of z and y; x is left alone). It is found on the mean
+    projections of the two volumes along x, which is exact for such a transform.
+    With ``fit_x`` it is a full 3-D fit.
+
+    Parameters
+    ----------
+    fixed, moving : numpy.ndarray
+        Volumes (Z, Y, X) on the same voxel grid, each with its origin at (0, 0, 0).
+    model : {"translation", "rigid", "similarity", "affine"}
+        Transform family.
+    fit_x : bool, default=False
+        Include x (3-D fit).
+    transform_key : str, default="stage_metadata"
+        Name of the input transform in multiview-stitcher.
+    ants_kwargs : dict, optional
+        Overrides for the ANTsPy registration (``ANTS_DEFAULTS``).
+
+    Returns
+    -------
+    affine : numpy.ndarray
+        4 x 4 homogeneous matrix (z, y, x), ``moving`` voxel -> ``fixed`` voxel, in
+        this level's voxels.
+    quality : float
+        Registration quality (NaN if none was reported).
+
+    Raises
+    ------
+    ValueError
+        If ``model`` is unknown.
+    ImportError
+        If a model other than ``translation`` is used without ``antspyx``.
+    """
+    if model not in MODELS:
+        raise ValueError(f"model must be one of {MODELS}, got {model!r}")
+    start, quality = register_volumes_3d(fixed, moving, transform_key, fit_x=fit_x)
+    if model == "translation":
+        return start, quality
+    try:
+        import ants  # noqa: F401
+    except ImportError:
+        raise ImportError(f"model {model!r} needs the antspyx package "
+                          "(pip install antspyx)") from None
+    from multiview_stitcher import msi_utils, registration
+    from multiview_stitcher import spatial_image_utils as si_utils
+
+    if fit_x:
+        dims, fix_v, mov_v, axes = ["z", "y", "x"], fixed, moving, [0, 1, 2]
+    else:                               # (z, y) as the two axes of a 2-D image
+        dims, fix_v, mov_v, axes = ["y", "x"], fixed.mean(axis=2), moving.mean(axis=2), [0, 1]
+    t0 = start[:3, 3][axes]
+
+    def msim(vol: np.ndarray, shift: np.ndarray) -> Any:
+        sim = si_utils.get_sim_from_array(
+            vol, dims=dims, scale={d: 1.0 for d in dims},
+            translation={d: float(v) for d, v in zip(dims, shift)},
+            transform_key=transform_key)
+        return msi_utils.get_msim_from_sim(sim, scale_factors=[])
+
+    pairwise = partial(registration.registration_ANTsPy,
+                       transform_types=ANTS_STAGES[model],
+                       **{**ANTS_DEFAULTS, **(ants_kwargs or {})})
+
+    out = registration.register(
+        [msim(fix_v, np.zeros(len(dims))), msim(mov_v, t0)],
+        transform_key=transform_key, new_transform_key="registered",
+        reg_channel_index=0, pairwise_reg_func=pairwise,
+        groupwise_resolution_kwargs={
+            "transform": "rigid" if model == "rigid" else "affine"},
+        pre_registration_pruning_method=None, overlap_tolerance=0.0,
+        return_dict=True)
+    n = len(dims)
+    residual = np.asarray(out["params"][1], dtype=float).reshape(-1, n + 1, n + 1)[0]
+    place = np.eye(n + 1)
+    place[:n, n] = t0                   # moving voxel -> where phase correlation put it
+    local = residual @ place            # moving voxel -> fixed voxel (axes fitted)
+    affine = np.eye(4)
+    idx = np.array(axes)
+    affine[np.ix_(idx, idx)] = local[:n, :n]
+    affine[idx, 3] = local[:n, n]
+    quals = out["pairwise_registration"]["metrics"]["qualities"]
+    quality = (float(np.mean(np.asarray(next(iter(quals.values())), dtype=float)))
+               if quals else float("nan"))
+    # the mutual-information fit is good for rotation / scale but only about a voxel
+    # accurate in translation: finish with phase correlation of the warped volume
+    # (a pure shift), which is exact for that part
+    import scipy.ndimage
+    for _ in range(2):
+        inv = np.linalg.inv(affine)
+        warped = scipy.ndimage.affine_transform(
+            moving, inv[:3, :3], offset=inv[:3, 3], output_shape=fixed.shape,
+            order=1, mode="constant", cval=0.0)
+        delta, _q = register_volumes_3d(fixed, warped, transform_key, fit_x=fit_x)
+        affine = delta @ affine
     return affine, quality
