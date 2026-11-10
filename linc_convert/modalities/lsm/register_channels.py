@@ -34,8 +34,12 @@ from linc_convert.modalities.lsm.register_chunks import (
     registration_corrections,
     z_trim_planes,
 )
+from linc_convert.modalities.lsm.stitching_utils.channel_registration import (
+    reference_origin,
+)
 from linc_convert.modalities.lsm.stitching_utils.io import (
     crop_and_flip,
+    level_range,
     discover_tile_paths,
     open_tile_array,
     write_yaml,
@@ -93,34 +97,64 @@ def load_registration_volume(path: str, slice_number: int, camera: int, channel:
                              corrections_dir: Optional[str],
                              corrections_layer: int,
                              corrections_crop: str = "stitchingCrop",
-                             dark_gamma: float = 0.5) -> tuple[np.ndarray, int]:
-    """One chunk of one channel: split crop, flip, z trim, background, smoothing.
+                             dark_gamma: float = 0.5,
+                             crop_kind: str = "stitchingCrop",
+                             ) -> tuple[np.ndarray, np.ndarray]:
+    """One chunk of one channel: crop, flip, z trim, background, smoothing.
+
+    With ``crop_kind="stitchingCrop"`` the volume is the region the stitch uses
+    (the stitching crop in y and z), cut out of the split, flipped chunk; with
+    ``"splitCrop"`` it is the whole split, flipped chunk.
 
     Returns
     -------
     volume : numpy.ndarray
         float32 (Z, Y, X) at ``layer``.
-    start : int
-        z planes removed from the beginning (the volume's origin is that far into
-        the chunk).
+    origin : numpy.ndarray
+        (z, y, x) position, in voxels of ``layer``, of the volume's first voxel in
+        the channel's split, flipped chunk frame (the frame the registration file
+        is in).
     """
+    if crop_kind not in ("stitchingCrop", "splitCrop"):
+        raise ValueError(f"crop_kind must be 'stitchingCrop' or 'splitCrop', got "
+                         f"{crop_kind!r}")
     arr = open_tile_array(path, layer)
     crop = get_crop(params, camera, slice_number, channel,
                     kind="splitCrop", include_z=False)
-    vol = crop_and_flip(arr, crop, get_vertical_flip(params, camera), layer)
+    flip = get_vertical_flip(params, camera)
+    vol = crop_and_flip(arr, crop, flip, layer)
+    full_vol = vol
+    origin = np.zeros(3)
+    noise = scaler = None
+    if corrections_dir is not None:
+        noise, scaler = registration_corrections(
+            path, slice_number, camera, channel, layer, params, corrections_dir,
+            False, corrections_layer, corrections_crop)
+    if crop_kind == "stitchingCrop":
+        z0, z1, y0, y1 = get_crop(params, camera, slice_number, channel,
+                                  kind="stitchingCrop", include_z=True)
+        raw_z, raw_y, _ = arr.shape
+        sy = level_range((y0, y1), raw_y, layer)
+        split_y = level_range((crop[2], crop[3]), raw_y, layer)
+        sz = (None, None) if z0 is None or z1 is None else level_range(
+            (z0, z1), raw_z, layer)
+        oz, oy, _ = reference_origin(split_y, sy, sz, raw_z, flip, layer)
+        hz = raw_z if sz[0] is None else sz[1] - sz[0]
+        oz, oy, hz, hy = int(oz), int(oy), int(hz), int(sy[1] - sy[0])
+        vol = vol[oz:oz + hz, oy:oy + hy]
+        if noise is not None:
+            noise, scaler = noise[oz:oz + hz, oy:oy + hy], scaler[oz:oz + hz, oy:oy + hy]
+        origin = np.array([oz, oy, 0], dtype=float)
     depth = vol.shape[0]
     start = z_trim_planes(z_trim_start, layer, depth, "z_trim_start") if z_trim_start > 0 else 0
     end = z_trim_planes(z_trim_end, layer, depth) if z_trim_end > 0 else 0
     if start + end >= depth:
         raise ValueError(f"z_trim_start {z_trim_start:g} + z_trim_end {z_trim_end:g} "
                          f"full-res px remove every z plane at layer {layer}")
-    noise = scaler = None
-    if corrections_dir is not None:
-        noise, scaler = registration_corrections(
-            path, slice_number, camera, channel, layer, params, corrections_dir,
-            False, corrections_layer, corrections_crop)
+    if noise is not None:
         noise, scaler = noise[start:depth - end], scaler[start:depth - end]
     vol = vol[start:depth - end]
+    origin[0] += start
     out = read_volume_rows(vol, 0, vol.shape[1], 0, vol.shape[2],
                            max(1, background_length // 2 ** layer),
                            subtract_background, scaler=scaler, noise=noise)
@@ -129,8 +163,9 @@ def load_registration_volume(path: str, slice_number: int, camera: int, channel:
         out = gaussian_filter(out, smooth_sigma)
     out = dark_weighted(out, dark_gamma)
     print(f"  {Path(path).name} ({channel}, camera {camera}): {out.shape} at layer "
-          f"{layer}, z trim first {start} / last {end} planes")
-    return out, start
+          f"{layer} ({crop_kind}, starts at (z,y)=({origin[0]:g},{origin[1]:g}) of the "
+          f"split chunk), z trim first {start} / last {end} planes")
+    return out, origin
 
 
 register_channels = cyclopts.App(name="register_channels", help_format="markdown")
@@ -147,6 +182,7 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                       corrections_dir: Optional[str] = None,
                       corrections_layer: int = 0,
                       corrections_crop: str = "splitCrop",
+                      crop_kind: str = "stitchingCrop",
                       dark_gamma: float = 0.5, fit_x: bool = False,
                       model: str = "translation",
                       force: bool = False) -> None:
@@ -185,6 +221,12 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
     corrections_crop : {"splitCrop", "stitchingCrop"}, default="splitCrop"
         Crop the maps were made for (``create_corrections --crop_kind``); the
         channel registration of ``stitch_chunks`` needs ``splitCrop`` maps.
+    crop_kind : {"stitchingCrop", "splitCrop"}, default="stitchingCrop"
+        Region that is registered: ``stitchingCrop`` = the stitching crop (y and z),
+        i.e. the data that ends up in the stitched image; ``splitCrop`` = the whole
+        split chunk. Either way the YAML is in the split, flipped chunk frames
+        (what ``stitch_chunks --channel_registration`` reads); the stitching-crop
+        corner is folded into the translation.
     dark_gamma : float, default=0.5
         Each volume is scaled by its 99.5th percentile and raised to this power
         before registering: below 1 the dim tissue counts more than bright spots,
@@ -222,7 +264,8 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                    smooth_sigma=smooth_sigma, subtract_background=subtract_background,
                    background_length=background_length, corrections_dir=corrections_dir,
                    corrections_layer=corrections_layer,
-                   corrections_crop=corrections_crop, dark_gamma=dark_gamma)
+                   corrections_crop=corrections_crop, dark_gamma=dark_gamma,
+                   crop_kind=crop_kind)
 
     for channel in channels:
         target = Path(out.format(channel=channel))
@@ -240,16 +283,17 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                 if n not in chunks or n not in ref_chunks:
                     raise ValueError(f"chunk {n} is missing for camera {cam} or "
                                      f"camera {ref_cam} in {input_path}")
-                fixed, s_fix = load_registration_volume(
+                fixed, o_fix = load_registration_volume(
                     ref_chunks[n], camera=ref_cam, channel=reference_channel, **load_kw)
-                moving, s_mov = load_registration_volume(
+                moving, o_mov = load_registration_volume(
                     chunks[n], camera=cam, channel=channel, **load_kw)
                 aff, quality = register_volumes_model(fixed, moving, model, fit_x=fit_x)
-                # the volumes start s planes into their chunks (z_trim_start): a
-                # rotation / scale about the trimmed corner becomes, about the chunk
-                # corner, a translation t + s_fixed - A s_moving
+                # the volumes start at o (stitching crop and/or z trim) inside their
+                # split chunks, and the registration is found about their own corners:
+                # q - o_fix = A (p - o_mov) + t   =>   q = A p + t + o_fix - A o_mov,
+                # the registration in the split frames (what stitch_chunks reads)
                 aff = aff.copy()
-                aff[:3, 3] += (np.array([s_fix, 0, 0]) - aff[:3, :3] @ np.array([s_mov, 0, 0]))
+                aff[:3, 3] += o_fix - aff[:3, :3] @ o_mov
                 full = aff.copy()
                 full[:3, 3] = aff[:3, 3] * scale     # the matrix part is unitless
                 t = full[:3, 3]
@@ -279,5 +323,5 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                        for n, t, qq, full in results],
             "settings": {"z_trim_end": float(z_trim_end),
                          "z_trim_start": float(z_trim_start),
-                         "smooth_sigma": float(smooth_sigma), "crop": "splitCrop",
+                         "smooth_sigma": float(smooth_sigma), "crop": crop_kind, "frame": "split, flipped chunk",
                          "model": model, "axes": "z,y,x" if fit_x else "z,y", "dark_gamma": float(dark_gamma)}})

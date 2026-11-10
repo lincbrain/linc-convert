@@ -81,6 +81,10 @@ class PercentileSettings:
     max_offset : float, optional
         The offset is searched at or below this value (for example 0: only negative
         offsets; a positive optimum then ends at 0 and is not applied). None: no bound.
+    min_offset : float, optional
+        The offset is searched at or above this value (for example 0: only positive
+        offsets; a negative optimum then ends at 0 and is not applied). None: no bound.
+        A positive offset takes LESS background off (brighter), a negative one more.
     column_mask_fraction : float, optional
         If given, every row of a tile is measured on the same x columns: a column
         is left out for all rows if more than this share of the tile's rows are
@@ -105,6 +109,7 @@ class PercentileSettings:
     max_offset_fraction: float = 0.5
     min_significance: float = 2.0
     max_offset: Optional[float] = None
+    min_offset: Optional[float] = None
     percentiles: Optional[Tuple[float, ...]] = None
     column_mask_fraction: Optional[float] = None
     exclude_outlier_levels: bool = True
@@ -544,9 +549,9 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     # left out, so the objective does not gain from the clipping itself.
     weights = np.where(lines > limit, tissue[:, None], 0.0).astype(np.float32)
 
-    # search range: [-limit, top]; top is lowered by settings.max_offset
-    top = limit if settings.max_offset is None else min(limit, float(settings.max_offset))
-    bottom = -limit if top > -limit else top - limit
+    # search range [bottom, top] within +-limit; max_offset lowers the top, min_offset
+    # raises the bottom
+    bottom, top = offset_range(limit, settings.min_offset, settings.max_offset)
     estimate = (float(fixed_offset) if fixed_offset is not None
                 else _search(lines, weights, bottom, top))
     excluded: List[int] = []
@@ -571,7 +576,7 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
     # An estimate at the end of the search range means the objective had no
     # minimum inside it (not identified), and a zero spread of the delete-one
     # estimates is the same boundary hit; neither is applied.
-    interior = (estimate > -BOUNDARY_FRACTION * limit
+    interior = ((estimate > -BOUNDARY_FRACTION * limit or bottom > -limit)
                 and (estimate < BOUNDARY_FRACTION * limit or top < limit))
     significant = (interior and np.isfinite(se) and se > 0
                    and abs(estimate) >= settings.min_significance * se)
@@ -588,6 +593,29 @@ def fit_offset(tiles: List[TileStats], settings: Optional[PercentileSettings] = 
         rows_used, n_z * n_y, float(limit), list(settings.levels()),
         [float(settings.levels()[i]) for i in excluded],
         [float(v) for v in shown])
+
+
+def offset_range(limit: float, lower: Optional[float] = None,
+                 upper: Optional[float] = None) -> Tuple[float, float]:
+    """Search range ``(bottom, top)``: ``[-limit, limit]`` cut to ``[lower, upper]``.
+
+    If the bound lies outside the usual range (``upper < -limit`` or
+    ``lower > limit``) the range is the ``limit``-wide interval next to the bound.
+
+    Raises
+    ------
+    ValueError
+        If ``lower > upper``.
+    """
+    if lower is not None and upper is not None and lower > upper:
+        raise ValueError(f"min offset {lower:g} is above max offset {upper:g}")
+    top = limit if upper is None else min(limit, float(upper))
+    bottom = -limit if lower is None else max(-limit, float(lower))
+    if upper is not None and top < bottom:         # the whole usual range is above the bound
+        bottom = top - limit
+    if lower is not None and bottom > top:         # ... or below it
+        top = bottom + limit
+    return bottom, top
 
 
 def multiplier_to_scaler(multiplier: np.ndarray) -> np.ndarray:

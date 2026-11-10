@@ -357,6 +357,7 @@ def create_corrections(
     offset_max_columns: int = 512,
     offset_min_significance: float = 2.0,
     offset_max: Optional[float] = None,
+    offset_min: Optional[float] = None,
     crop_kind: str = "stitchingCrop",
     column_mask: bool = True,
     column_mask_fraction: float = 0.2,
@@ -470,6 +471,10 @@ def create_corrections(
     offset_max : float, optional
         Upper bound of the offset search (for example 0: only negative offsets are
         found; if the data prefer a positive one, 0 is used). Default: no bound.
+    offset_min : float, optional
+        Lower bound of the offset search (for example 0: only POSITIVE offsets are
+        found; if the data prefer a negative one, 0 is used). A positive offset takes
+        less background off (brighter), a negative one more. Default: no bound.
     offset_min_significance : float, default=2.0
         Standard errors the offset must differ from 0 to be applied (0 applies
         any estimate that has one).
@@ -582,6 +587,7 @@ def create_corrections(
             percentiles=tuple(offset_percentiles) if offset_percentiles else None,
             max_columns=offset_max_columns,
             min_significance=offset_min_significance, max_offset=offset_max,
+            min_offset=offset_min,
             column_mask_fraction=column_mask_fraction if column_mask else None)
         settings.levels()      # validates the percentiles
         maps = _offset_corrections(

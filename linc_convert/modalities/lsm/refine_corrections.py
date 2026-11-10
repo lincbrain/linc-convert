@@ -153,13 +153,15 @@ def mismatch(delta: float, pa: np.ndarray, pb: np.ndarray, weight: np.ndarray,
 
 
 def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: int = 60,
-                  precision: float = 0.005, upper: Optional[float] = None
+                  precision: float = 0.005, upper: Optional[float] = None,
+                  lower: Optional[float] = None
                   ) -> Tuple[float, bool, List[Tuple[float, float]]]:
     """Minimise ``evaluate(delta)`` over ``[-limit, limit]``.
 
-    ``upper`` (optional) lowers the top of the range, so ``delta`` never exceeds it
-    (used to keep the total offset at or below a maximum). The best point at that
-    constraint counts as interior: the search cannot go further by design.
+    ``upper`` / ``lower`` (optional) lower the top / raise the bottom of the range,
+    so ``delta`` never goes beyond them (used to keep the total offset within a
+    minimum and maximum). The best point at such a constraint counts as interior:
+    the search cannot go further by design.
 
     A grid first, then golden-section steps between the neighbours of the best grid
     point, until the bracket is narrower than ``precision`` counts. Returns
@@ -167,9 +169,10 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
     grid point is at an end of the range, and ``curve`` lists the grid
     ``(delta, value)``.
     """
-    top = limit if upper is None else min(limit, float(upper))
+    from linc_convert.modalities.lsm.stitching_utils.percentile_fit import offset_range
+    bottom, top = offset_range(limit, lower, upper)
     constrained = top < limit
-    bottom = -limit if top >= -limit else top - limit
+    constrained_low = bottom > -limit
     grid = np.linspace(bottom, top, grid_points)
     values = [evaluate(float(g)) for g in grid]
     curve = list(zip(grid.tolist(), values))
@@ -177,7 +180,7 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
     if not finite:
         return 0.0, False, curve
     best = min(finite, key=lambda i: values[i])
-    if best == grid_points - 1 and constrained:
+    if (best == grid_points - 1 and constrained) or (best == 0 and constrained_low):
         return float(grid[best]), True, curve
     if best in (0, grid_points - 1):
         return float(grid[best]), False, curve
@@ -200,7 +203,8 @@ def search_offset(evaluate, limit: float, grid_points: int = 21, golden_steps: i
 
 
 def level_outliers(pa, pb, wt, na, nb, active: List[int], limit: float, k: float,
-                   floor: float, min_levels: int, upper: Optional[float] = None) -> Tuple[List[int], Dict[int, float]]:
+                   floor: float, min_levels: int, upper: Optional[float] = None,
+                   lower: Optional[float] = None) -> Tuple[List[int], Dict[int, float]]:
     """Percentile levels whose offset recommendation or residual differs wildly.
 
     Two checks, repeated (worst level first) while levels remain above ``min_levels``:
@@ -228,7 +232,7 @@ def level_outliers(pa, pb, wt, na, nb, active: List[int], limit: float, k: float
         sel = np.asarray(levels)
         d, interior, _ = search_offset(
             lambda x: mismatch(x, pa[:, sel], pb[:, sel], wt, na, nb)[0], limit,
-            upper=upper, **quick)
+            upper=upper, lower=lower, **quick)
         return d if interior else float("nan")
 
     while len(active) > min_levels:
@@ -335,6 +339,10 @@ def main() -> None:
     p.add_argument("--max_offset", type=float,
                    help="the total offset never goes above this (for example 0: only "
                         "negative offsets). Default: no bound")
+    p.add_argument("--min_offset", type=float,
+                   help="the total offset never goes below this (for example 0: only "
+                        "POSITIVE offsets; a positive offset takes less background off). "
+                        "Default: no bound")
     p.add_argument("--offset_tol", type=float, default=0.05,
                    help="the offset is stable when |delta| of a round is below this many "
                         "counts")
@@ -549,10 +557,11 @@ def main() -> None:
             level = float(np.median(low[low > 0])) if (low > 0).any() else 0.0
             limit = max(args.offset_range * level, 1.0)
         upper = None if args.max_offset is None else float(args.max_offset) - offset
+        lower = None if args.min_offset is None else float(args.min_offset) - offset
         if not args.no_level_exclusion:
             new, first = level_outliers(pa, pb, wt, na, nb, active_levels(), limit,
                                         args.outlier_k, args.outlier_floor,
-                                        args.min_levels, upper=upper)
+                                        args.min_levels, upper=upper, lower=lower)
             if first:
                 print("  offset without each level: " + " ".join(
                     f"{levels[i]:g}:{d:+.2f}" for i, d in first.items()))
@@ -564,8 +573,11 @@ def main() -> None:
         pa_a, pb_a = pa[:, act], pb[:, act]
         ev = lambda x: mismatch(x, pa_a, pb_a, wt, na, nb)[0]  # noqa: E731
         before = ev(0.0)
-        delta, interior, curve = search_offset(ev, limit, upper=upper)
+        delta, interior, curve = search_offset(ev, limit, upper=upper, lower=lower)
         after = ev(delta)
+        if lower is not None:
+            print(f"  total offset limited to at least {args.min_offset:+g} "
+                  f"(delta at least {lower:+.2f})")
         if upper is not None:
             print(f"  total offset limited to at most {args.max_offset:+g} "
                   f"(delta at most {upper:+.2f})")
