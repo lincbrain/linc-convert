@@ -260,9 +260,12 @@ def load_pair_registration(
 
 
 def register_volumes_3d(fixed: np.ndarray, moving: np.ndarray,
-                        transform_key: str = "stage_metadata",
+                        transform_key: str = "stage_metadata", fit_x: bool = False,
                         ) -> tuple[np.ndarray, float]:
-    """Register ``moving`` to ``fixed`` with a 3-D translation (z, y and x).
+    """Register ``moving`` to ``fixed`` with a translation (z and y; x if ``fit_x``).
+
+    The phase correlation always runs on the full 3-D data (every x column
+    contributes); unless ``fit_x`` the x component of its result is dropped.
 
     Both volumes are (z, y, x), on the same voxel grid and each starting at its
     own origin (0, 0, 0). The registration is multiview-stitcher's phase
@@ -274,6 +277,8 @@ def register_volumes_3d(fixed: np.ndarray, moving: np.ndarray,
         Volumes, shape (Z, Y, X) (shapes may differ).
     transform_key : str, default="stage_metadata"
         Name of the input transform in multiview-stitcher.
+    fit_x : bool, default=False
+        Also fit the x translation.
 
     Returns
     -------
@@ -295,8 +300,13 @@ def register_volumes_3d(fixed: np.ndarray, moving: np.ndarray,
 
     def pairwise(fixed_data, moving_data, **kw) -> dict[str, Any]:
         kw.setdefault("upsample_factor", 10)
-        return registration.phase_correlation_registration(
-            fixed_data, moving_data, **kw)
+        res = dict(registration.phase_correlation_registration(
+            fixed_data, moving_data, **kw))
+        if not fit_x:
+            aff = np.array(res["affine_matrix"], dtype=float)
+            aff[2, 3] = 0.0
+            res["affine_matrix"] = aff
+        return res
 
     out = registration.register(
         [msim(fixed), msim(moving)], transform_key=transform_key,

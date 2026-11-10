@@ -9,7 +9,7 @@ z) and flipped in z if its camera flips.
 The same chunk number of the channel's camera and of the reference's camera is
 compared (the two cameras record the same place at the same time). Several chunks
 can be used; the translations are averaged, weighted by the registration quality.
-Registration is a 3-D translation (phase correlation) and is best done on a very
+Registration is a translation (phase correlation; z and y by default) and is best done on a very
 small pyramid layer (4 or 5): the file holds full-resolution values.
 
 Usage::
@@ -69,13 +69,30 @@ def _chunks_by_number(input_path: str, camera: int) -> dict[int, str]:
     return {_chunk_number(p): p for p in discover_tile_paths(input_path, camera)}
 
 
+def dark_weighted(vol: np.ndarray, gamma: float) -> np.ndarray:
+    """Give dim structure more weight than bright structure.
+
+    The volume is scaled by its 99.5th percentile (so channels of different
+    brightness become comparable) and raised to ``gamma``: with ``gamma < 1`` the
+    bright values are compressed and the dim ones relatively stretched, so bright
+    spots no longer decide the correlation. ``gamma = 1`` only scales.
+    """
+    if gamma <= 0:
+        raise ValueError(f"dark_gamma must be positive, got {gamma}")
+    top = float(np.percentile(vol, 99.5))
+    if top <= 0:
+        return vol.astype(np.float32)
+    return (np.clip(vol / top, 0, 1) ** gamma).astype(np.float32)
+
+
 def load_registration_volume(path: str, slice_number: int, camera: int, channel: str,
                              layer: int, params: dict[str, Any], z_trim_start: float,
                              z_trim_end: float, smooth_sigma: float,
                              subtract_background: bool, background_length: int,
                              corrections_dir: Optional[str],
                              corrections_layer: int,
-                             corrections_crop: str = "stitchingCrop") -> np.ndarray:
+                             corrections_crop: str = "stitchingCrop",
+                             dark_gamma: float = 0.5) -> np.ndarray:
     """One chunk of one channel: split crop, flip, z trim, background, smoothing.
 
     Returns
@@ -106,6 +123,7 @@ def load_registration_volume(path: str, slice_number: int, camera: int, channel:
     if smooth_sigma > 0:
         from scipy.ndimage import gaussian_filter
         out = gaussian_filter(out, smooth_sigma)
+    out = dark_weighted(out, dark_gamma)
     print(f"  {Path(path).name} ({channel}, camera {camera}): {out.shape} at layer "
           f"{layer}, z trim first {start} / last {end} planes")
     return out
@@ -125,6 +143,7 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                       corrections_dir: Optional[str] = None,
                       corrections_layer: int = 0,
                       corrections_crop: str = "splitCrop",
+                      dark_gamma: float = 0.5, fit_x: bool = False,
                       force: bool = False) -> None:
     """Register each channel to the reference channel and write one YAML per channel.
 
@@ -161,6 +180,12 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
     corrections_crop : {"splitCrop", "stitchingCrop"}, default="splitCrop"
         Crop the maps were made for (``create_corrections --crop_kind``); the
         channel registration of ``stitch_chunks`` needs ``splitCrop`` maps.
+    dark_gamma : float, default=0.5
+        Each volume is scaled by its 99.5th percentile and raised to this power
+        before registering: below 1 the dim tissue counts more than bright spots,
+        and channels of different brightness are made comparable. 1 = only scaled.
+    fit_x : bool, default=False
+        Also register x. By default only z and y are registered (x translation 0).
     force : bool, default=False
         Recompute files that already exist.
 
@@ -186,7 +211,7 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                    smooth_sigma=smooth_sigma, subtract_background=subtract_background,
                    background_length=background_length, corrections_dir=corrections_dir,
                    corrections_layer=corrections_layer,
-                   corrections_crop=corrections_crop)
+                   corrections_crop=corrections_crop, dark_gamma=dark_gamma)
 
     for channel in channels:
         target = Path(out.format(channel=channel))
@@ -208,7 +233,7 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
                     ref_chunks[n], camera=ref_cam, channel=reference_channel, **load_kw)
                 moving = load_registration_volume(
                     chunks[n], camera=cam, channel=channel, **load_kw)
-                aff, quality = register_volumes_3d(fixed, moving)
+                aff, quality = register_volumes_3d(fixed, moving, fit_x=fit_x)
                 t = aff[:3, 3] * scale
                 print(f"  chunk {n}: translation (z,y,x) = "
                       f"({t[0]:+.2f}, {t[1]:+.2f}, {t[2]:+.2f}) full-res px, "
@@ -236,4 +261,4 @@ def register_channels(input_path: str, *, yaml_path: str, slice_number: int,
             "settings": {"z_trim_end": float(z_trim_end),
                          "z_trim_start": float(z_trim_start),
                          "smooth_sigma": float(smooth_sigma), "crop": "splitCrop",
-                         "model": "translation (phase correlation)"}})
+                         "model": "translation z,y,x (phase correlation)" if fit_x else "translation z,y (phase correlation)", "dark_gamma": float(dark_gamma)}})
