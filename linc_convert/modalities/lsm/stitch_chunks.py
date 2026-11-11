@@ -26,8 +26,8 @@ see the parameter. Otherwise, for each channel of the camera and each chunk:
    skew angle and raw voxel sizes in the metadata YAML, and optionally z as a
    function of y (``z += shear_z * y``, from register_chunks' ``dz`` when
    ``dz_as_shear_z`` is set). The chunk grows so nothing is cut off.
-4. Blend the overlap with the previous chunk (power ramp times 1/scaler
-   confidence) and write everything lazily, chunk by chunk, into one uint16
+4. Blend the overlap with the previous chunk (cosine ramp, or linear with
+   ``blend_ramp="linear"``, times 1/scaler confidence) and write everything lazily, chunk by chunk, into one uint16
    array.
 
 Chunk positions come from the register_chunks YAML: chunk ``i`` starts at
@@ -95,6 +95,7 @@ from dask.distributed import progress
 
 from linc_convert.modalities.lsm.cli import lsm
 from linc_convert.modalities.lsm.stitching_utils.blending import (
+    RAMP_SHAPES,
     blend_overlap,
     sheared_weights,
 )
@@ -365,7 +366,7 @@ def _stitch_bands(first_band: int, n: int, sy: int, z_out: int,
                   positions_y: List[int], z_origin: List[int], tile_paths: List[str],
                   open_tile, raw_shape: Tuple[int, int, int], chunk_maps,
                   shear_x: float, shear_z: float, ckpt: str, signature: dict,
-                  parallel_bands: int, build_tile=None) -> None:
+                  parallel_bands: int, build_tile=None, ramp: str = "cosine") -> None:
     """Write the mosaic band by band, a band being one row of shards.
 
     Every band is the lazy join (along y) of the mosaic rows it covers: for each
@@ -430,7 +431,7 @@ def _stitch_bands(first_band: int, n: int, sy: int, z_out: int,
             if kind == "blend":
                 prev, prev_w = tile(k - 1)
                 blended = blend_overlap(prev, cur, prev_w, cur_w, z_origin[k - 1],
-                                        zstart, mosaic[0], overlap_prev)
+                                        zstart, mosaic[0], overlap_prev, ramp)
                 pieces.append(blended[:, a - ystart:b - ystart, x0:x1])
             else:
                 own = cur[:, a - ystart:b - ystart, x0:x1]
@@ -489,7 +490,7 @@ def stitch_channel(
     x_range: Tuple[Optional[int], Optional[int]] = (None, None),
     memory_gb: int = 128, parallel_chunks: int = 2, bands: bool = True,
     parallel_bands: int = 2, x_tolerance: int = 64,
-    registered: Optional[RegisteredChannel] = None,
+    registered: Optional[RegisteredChannel] = None, blend_ramp: str = "cosine",
 ) -> None:
     """Stitch all chunks of one channel into an OME-Zarr mosaic, lazily.
 
@@ -552,6 +553,8 @@ def stitch_channel(
         end of x if it is shorter, the extra columns are cut if it is longer, and a
         warning is printed. 0 requires identical shapes. (Not used with
         ``registered``: the affine resample takes care of the x length.)
+    blend_ramp : {"cosine", "linear"}, default="cosine"
+        Shape of the blend across each overlap (see ``blending.ramp_weights``).
     registered : RegisteredChannel, optional
         Register the channel to the reference channel: each chunk is split (``crop``)
         and flipped, corrected with this channel's maps (made with
@@ -690,6 +693,8 @@ def stitch_channel(
         signature["window"] = [y0, y1, x0, x1]
     if bands:
         signature["mode"] = "bands"
+    if blend_ramp != "linear":       # the linear mosaics of earlier runs keep their checkpoints
+        signature["blend_ramp"] = blend_ramp
     ckpt = _checkpoint_path(out_dir)
     state = _read_checkpoint(ckpt, signature)
     if state is not None and not os.path.isdir(out_dir):
@@ -746,7 +751,7 @@ def stitch_channel(
                 start, n, sy, z_out, mosaic, (y0, y1, x0, x1), grid, target, client,
                 positions_y, z_origin, tile_paths, open_tile, raw_shape, chunk_maps,
                 shear_x, shear_z, ckpt, signature, parallel_bands,
-                build_registered if registered is not None else None)
+                build_registered if registered is not None else None, blend_ramp)
             group.generate_pyramid(levels=zarr_config.levels)
             group.write_ome_metadata(axes=["z", "y", "x"], space_scale=voxel_size)
             _write_checkpoint(ckpt, signature, -(-(y1 - y0) // grid[1]) - 1,
@@ -813,7 +818,7 @@ def stitch_channel(
                     assert prev is not None and prev_weights is not None
                     blended = blend_overlap(prev, cur, prev_weights, cur_weights,
                                             z_origin[index - 1],
-                                            zstart, mosaic[0], overlap_prev)
+                                            zstart, mosaic[0], overlap_prev, blend_ramp)
                     parts.append(blended[:, r0 - ystart:r1 - ystart, x0:x1])
                     rows_written, full_z = (r0, r1), True
             first_row, last_row = overlap_prev, sy - overlap_next
@@ -898,6 +903,7 @@ def stitch_chunks(
     projections: bool = True,
     projections_dir: Optional[str] = None,
     projection_z_crop: str = "0,0",
+    blend_ramp: str = "cosine",
     channel_registration: Optional[str] = None,
     reference_channel: str = "488",
     reference_camera_id: int = 2,
@@ -988,6 +994,11 @@ def stitch_chunks(
         and the min projection (for example ``"150,50"``). The stitched data is not
         affected. Existing projection TIFFs are not recomputed, so delete them to
         apply a new crop.
+    blend_ramp : {"cosine", "linear"}, default="cosine"
+        How the two chunks are mixed across an overlap: ``cosine`` (a raised cosine,
+        ``0.5 - 0.5 cos(pi t)``: flat at both ends, so no kink where the blend
+        starts and stops) or ``linear``. A stitch that is resumed with another
+        ramp starts again (the checkpoint signature differs).
     channel_registration : str, optional
         Register every channel to ``reference_channel`` while stitching. A path with
         ``{channel}`` (replaced by each channel's name) of YAML files giving the
@@ -1053,6 +1064,9 @@ def stitch_chunks(
         if lo is not None and hi is not None and hi <= lo:
             raise ValueError(f"max_{name} ({hi}) must be greater than min_{name} "
                              f"({lo})")
+
+    if blend_ramp not in RAMP_SHAPES:
+        raise ValueError(f"blend_ramp must be one of {RAMP_SHAPES}, got {blend_ramp!r}")
 
     def at_layer(value: Optional[int]) -> Optional[int]:
         return None if value is None else int(round(value / 2 ** layer))
@@ -1146,7 +1160,7 @@ def stitch_chunks(
                        os.path.join(general_config.out, channel),
                        voxel_size, zarr_config, per_chunk_corrections, layer,
                        y_range, x_range, memory_gb, parallel_chunks, bands,
-                       parallel_bands, x_tolerance, registered.get(channel))
+                       parallel_bands, x_tolerance, registered.get(channel), blend_ramp)
         if projections:
             write_projections(
                 os.path.join(general_config.out, channel),
