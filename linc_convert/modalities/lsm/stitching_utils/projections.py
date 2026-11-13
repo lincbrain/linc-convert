@@ -2,8 +2,7 @@
 
 Used by ``stitch_chunks`` to write quick-look images next to every stitched channel,
 one ``slice{NNN}_{channel}_{kind}.ome.zarr`` (a 2-D float32 image with a small pyramid)
-per kind. Both kinds work on the 3-D high-pass filtered volume and on every (y, x)
-pixel separately, over its z column:
+per kind. Both kinds work on every (y, x) pixel separately, over its z column:
 
 ``max``
     mean of the brightest ``top_fraction`` (default 10%) of the voxels
@@ -13,16 +12,17 @@ pixel separately, over its z column:
     (so dim structures come out positive, i.e. bright).
 
 The mean of the extreme tenth averages noise out (a plain maximum picks the noisiest
-voxel), the median over depth is the homogeneous background that is present at all
-depths, and the high-pass filter (``v - G(v)``, a Gaussian of ``highpass_sigma`` voxels
-in z, y and x, normalised so that the empty shear padding does not drag the background
-down at the tissue border) removes the slowly varying background before that.
-``highpass_sigma=0`` skips the filter. Zero voxels are the padding of the shear and are
-never counted. The first and the last z planes can be left out (``z_start`` / ``z_end``).
+voxel) and the median over depth is the homogeneous background that is present at all
+depths. The slowly varying background of the *image* is then removed with a 2-D high-pass
+filter of the projection (``img - G(img)``, a Gaussian of ``highpass_sigma`` pixels
+normalised so that empty pixels do not drag the background down at the tissue border).
+This is much cheaper than filtering the 3-D volume first. ``highpass_sigma=0`` skips the
+filter. Zero voxels are the padding of the shear and are never counted. The first and the
+last z planes can be left out (``z_start`` / ``z_end``).
 
 Memory is kept low on purpose, since the mosaic can be tens of thousands of pixels on a
 side: the stored array is read in blocks (aligned to the stored chunks, with all of z and
-a halo in y and x for the filter), only 2-D results are kept, and the images are written
+only 2-D results are kept, and the images are written
 tile by tile.
 """
 
@@ -78,6 +78,28 @@ def highpass(vol: np.ndarray, sigma: float) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
         background = np.where(den > 1e-3, num / den, 0.0)
     return ((v - background) * valid).astype(np.float32)
+
+
+def highpass2d(img: np.ndarray, sigma: float, band: int = 2048) -> np.ndarray:
+    """2-D high-pass ``img - G(img)`` of a projection, normalised by the mask ``img != 0``.
+
+    Works in bands of ``band`` rows (plus a halo of ``4 sigma`` rows) so the memory
+    stays small for a very large mosaic. Pixels outside the mask stay 0.
+    """
+    ny = img.shape[0]
+    halo = int(np.ceil(4 * sigma)) + 1
+    out = np.zeros(img.shape, np.float32)
+    for r0 in range(0, ny, band):
+        r1 = min(r0 + band, ny)
+        a, b = max(0, r0 - halo), min(ny, r1 + halo)
+        v = np.asarray(img[a:b], dtype=np.float32)
+        valid = (v != 0).astype(np.float32)
+        num = ndimage.gaussian_filter(v * valid, sigma, mode="nearest")
+        den = ndimage.gaussian_filter(valid, sigma, mode="nearest")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            bg = np.where(den > 1e-3, num / den, 0.0)
+        out[r0:r1] = ((v - bg) * valid)[r0 - a:r1 - a]
+    return out
 
 
 def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
@@ -137,7 +159,8 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
     """Contrast projections over z of one stitched array: ``{kind: float32 (y, x)}``.
 
     Starts (and closes) its own dask cluster, limited to ``memory_gb``.
-    ``highpass_sigma`` is in voxels of the stored array (0 = no filter).
+    ``highpass_sigma`` (pixels, 0 = no filter) is the 2-D high-pass applied to every
+    finished projection.
     """
     kinds = parse_kinds(kinds)
     stored = zarr.open_group(str(zarr_dir), mode="r")[group]
@@ -147,17 +170,11 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
                          f"leaves no plane of the {nz} z planes")
     bz, by, bx = block_shape(stored.shape, stored.chunks)
     arr = da.from_array(stored, chunks=(bz, by, bx))[z_start:nz - z_end]
-    halo = int(np.ceil(3 * highpass_sigma)) if highpass_sigma > 0 else 0
-    if halo:
-        arr = da.overlap.overlap(arr, depth={0: 0, 1: halo, 2: halo}, boundary="reflect")
-    stacked = arr.map_blocks(contrast_block, kinds, fraction, highpass_sigma,
+    stacked = arr.map_blocks(contrast_block, kinds, fraction, 0.0,
                              chunks=((len(kinds),),) + arr.chunks[1:],
                              dtype=np.float32, meta=np.empty((0, 0, 0), np.float32))
-    if halo:
-        stacked = da.overlap.trim_internal(stacked, {0: 0, 1: halo, 2: halo},
-                                           boundary="reflect")
     keep_gb = 4.0 * len(kinds) * ny * nx / 2 ** 30 * 1.2 + 1.0
-    task_gb = BYTES_PER_VOXEL * bz * (by + 2 * halo) * (bx + 2 * halo) / 2 ** 30
+    task_gb = BYTES_PER_VOXEL * bz * by * bx / 2 ** 30
     client = start_dask(memory_gb, task_gb=task_gb, reserve_gb=keep_gb)
     try:
         future = client.compute(stacked)
@@ -166,7 +183,10 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
         result = np.asarray(client.gather(future), dtype=np.float32)
     finally:
         client.close()
-    return {kind: result[i] for i, kind in enumerate(kinds)}
+    images = {kind: result[i] for i, kind in enumerate(kinds)}
+    if highpass_sigma > 0:
+        images = {kind: highpass2d(img, highpass_sigma) for kind, img in images.items()}
+    return images
 
 
 def save_projection(shape: Tuple[int, int], piece, path: Path,
@@ -193,7 +213,7 @@ def save_projection(shape: Tuple[int, int], piece, path: Path,
     ny, nx = shape
     tmp = path.with_name(path.name + ".part")
     shutil.rmtree(tmp, ignore_errors=True)
-    root = zarr.open_group(str(tmp), mode="w", zarr_format=3)
+    root = zarr.open_group(str(tmp), mode="w")
 
     def create(level: int, h: int, w: int):
         return root.create_array(str(level), shape=(h, w),
@@ -258,7 +278,7 @@ def write_projections(zarr_dir: str, out_dir: str, slice_number: int,
     only fills in what is missing. ``memory_gb`` bounds this process and its dask workers
     together. ``z_start`` / ``z_end`` (z planes of the stored array) are left out.
     ``pixel_size`` is the (y, x) size in micrometres of the stored array's pixels and
-    ``highpass_sigma`` is in voxels of the stored array.
+    ``highpass_sigma`` is the 2-D high-pass sigma in pixels of the stored array.
     """
     kinds = parse_kinds(kinds)
     out = Path(out_dir)

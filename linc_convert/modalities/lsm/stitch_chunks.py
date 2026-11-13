@@ -71,7 +71,7 @@ Projections (default on): when a channel is stitched, contrast projections over 
 written as 2-D float32 OME-Zarr images
 ``{out}/projections/slice{NNN}_{channel}_{kind}.ome.zarr`` with kind ``max`` (mean of the
 brightest 10% of a pixel's z column minus its median) and ``min`` (median minus the mean
-of the dimmest 10%), computed on the 3-D high-pass filtered volume (see the
+of the dimmest 10%), computed per (y, x) pixel, then 2-D high-pass filtered (see the
 ``projections`` module and the ``projection_*`` options). They can leave out the first and
 last z planes: ``projection_z_crop="START,END"``. Existing files are not recomputed. They
 stay in ``out``, next to the channel's zarr folder.
@@ -996,13 +996,13 @@ def stitch_chunks(
         Comma separated projections to write (see the ``projections`` module):
         ``max`` = mean of the brightest ``projection_fraction`` of the voxels along z minus
         the median over z, ``min`` = median over z minus the mean of the dimmest
-        ``projection_fraction``; both after a 3-D high-pass filter, per (y, x) pixel. Each
+        ``projection_fraction``; per (y, x) pixel, followed by a 2-D high-pass filter of the projection. Each
         is a 2-D OME-Zarr ``slice{NNN}_{channel}_{kind}.ome.zarr``.
     projection_fraction : float, default=0.1
         Share of the voxels of a z column that the extreme mean uses.
     projection_highpass_sigma : float, default=20.0
-        Gaussian sigma (full-resolution pixels, all axes) of the high-pass filter that is
-        applied before the projections; 0 = no filter.
+        Gaussian sigma (full-resolution pixels, y and x) of the 2-D high-pass filter that is
+        applied to every finished projection; 0 = no filter.
     projection_z_crop : str, default="0,0"
         ``"START,END"``: z planes (full-resolution pixels, scaled to ``layer`` and
         rounded up) left out at the beginning and at the end of z, for BOTH the max
