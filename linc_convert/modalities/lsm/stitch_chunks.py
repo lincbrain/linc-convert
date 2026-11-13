@@ -906,7 +906,7 @@ def stitch_chunks(
     projection_z_crop: str = "0,0",
     projection_kinds: str = "max,min",
     projection_fraction: float = 0.1,
-    projection_highpass_sigma: float = 15.0,
+    projection_highpass_sigma: float = 20.0,
     blend_ramp: str = "cosine",
     channel_registration: Optional[str] = None,
     reference_channel: str = "488",
@@ -1000,7 +1000,7 @@ def stitch_chunks(
         is a 2-D OME-Zarr ``slice{NNN}_{channel}_{kind}.ome.zarr``.
     projection_fraction : float, default=0.1
         Share of the voxels of a z column that the extreme mean uses.
-    projection_highpass_sigma : float, default=15.0
+    projection_highpass_sigma : float, default=20.0
         Gaussian sigma (full-resolution pixels, all axes) of the high-pass filter that is
         applied before the projections; 0 = no filter.
     projection_z_crop : str, default="0,0"
