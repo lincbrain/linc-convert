@@ -22,7 +22,8 @@ see the parameter. Otherwise, for each channel of the camera and each chunk:
 2. Correction: ``(vol - noise).clip(0) * scaler`` using
    ``{corrections_dir}/{ch}/{ch}_alt_zy_noise.tiff`` and ``..._alt_zy_scaler.tiff``,
    cast to uint16.
-3. Skew correction: shear x as a function of z (``x += shear_x * z``) from the
+3. Skew correction: shear x as a function of z (``x += shear_x * z``, ``shear_x`` is
+   negative: the shear runs against +x and the chunk is shifted so x starts at 0) from the
    skew angle and raw voxel sizes in the metadata YAML, and optionally z as a
    function of y (``z += shear_z * y``, from register_chunks' ``dz`` when
    ``dz_as_shear_z`` is set). The chunk grows so nothing is cut off.
@@ -66,12 +67,14 @@ run at the same time. Checkpoints count finished bands (``last_band``) in order.
 ``bands=False`` gives the older chunk-by-chunk writing, where a shard is rewritten
 by every chunk that crosses it and chunks run together only if they share no shards.
 
-Projections (default on): when a channel is stitched, its maximum and minimum
-intensity projections over z are written as float32 TIFFs
-``{out}/projections/slice{NNN}_{channel}_max.tiff`` and ``..._min.tiff`` (the min
-projection ignores zeros and is inverted against its 99th percentile). Both can leave
-out the first and last z planes: ``projection_z_crop="START,END"``. Existing
-files are not recomputed. They stay in ``out``, next to the channel's zarr folder.
+Projections (default on): when a channel is stitched, contrast projections over z are
+written as 2-D float32 OME-Zarr images
+``{out}/projections/slice{NNN}_{channel}_{kind}.ome.zarr`` with kind ``max`` (mean of the
+brightest 10% of a pixel's z column minus its median) and ``min`` (median minus the mean
+of the dimmest 10%), computed on the 3-D high-pass filtered volume (see the
+``projections`` module and the ``projection_*`` options). They can leave out the first and
+last z planes: ``projection_z_crop="START,END"``. Existing files are not recomputed. They
+stay in ``out``, next to the channel's zarr folder.
 
 Checkpoints: after each chunk (its blended overlap and its own rows) is fully
 written, ``{general_config.out}/{channel}.stitch_checkpoint.json`` is updated.
@@ -123,7 +126,7 @@ from linc_convert.modalities.lsm.stitching_utils.io import (
     open_tile_array,
     start_dask,
 )
-from linc_convert.modalities.lsm.stitching_utils.projections import write_projections
+from linc_convert.modalities.lsm.stitching_utils.projections import parse_kinds, write_projections
 from linc_convert.modalities.lsm.stitching_utils.registration import (
     load_pair_registration,
     load_tile_positions,
@@ -580,8 +583,6 @@ def stitch_channel(
     if not (len(positions_y) == len(positions_z) == n):
         raise ValueError(f"{n} tiles but {len(positions_y)} y positions and "
                          f"{len(positions_z)} z positions")
-    if shear_x < 0:
-        raise ValueError("shear_x must be >= 0")
     steps = np.diff(positions_y)
     if n > 1 and steps.min() <= 0:
         raise ValueError("chunk positions must increase")
@@ -903,6 +904,9 @@ def stitch_chunks(
     projections: bool = True,
     projections_dir: Optional[str] = None,
     projection_z_crop: str = "0,0",
+    projection_kinds: str = "max,min",
+    projection_fraction: float = 0.1,
+    projection_highpass_sigma: float = 15.0,
     blend_ramp: str = "cosine",
     channel_registration: Optional[str] = None,
     reference_channel: str = "488",
@@ -988,6 +992,17 @@ def stitch_chunks(
         already exist are skipped, also when the stitch itself was already done.
     projections_dir : str, optional
         Where the projection TIFFs go; default ``{out}/projections``.
+    projection_kinds : str, default="max,min"
+        Comma separated projections to write (see the ``projections`` module):
+        ``max`` = mean of the brightest ``projection_fraction`` of the voxels along z minus
+        the median over z, ``min`` = median over z minus the mean of the dimmest
+        ``projection_fraction``; both after a 3-D high-pass filter, per (y, x) pixel. Each
+        is a 2-D OME-Zarr ``slice{NNN}_{channel}_{kind}.ome.zarr``.
+    projection_fraction : float, default=0.1
+        Share of the voxels of a z column that the extreme mean uses.
+    projection_highpass_sigma : float, default=15.0
+        Gaussian sigma (full-resolution pixels, all axes) of the high-pass filter that is
+        applied before the projections; 0 = no filter.
     projection_z_crop : str, default="0,0"
         ``"START,END"``: z planes (full-resolution pixels, scaled to ``layer`` and
         rounded up) left out at the beginning and at the end of z, for BOTH the max
@@ -1065,6 +1080,9 @@ def stitch_chunks(
             raise ValueError(f"max_{name} ({hi}) must be greater than min_{name} "
                              f"({lo})")
 
+    projection_kinds = ",".join(parse_kinds(projection_kinds))
+    if not 0 < projection_fraction <= 1:
+        raise ValueError(f"projection_fraction must be in (0, 1], got {projection_fraction}")
     if blend_ramp not in RAMP_SHAPES:
         raise ValueError(f"blend_ramp must be one of {RAMP_SHAPES}, got {blend_ramp!r}")
 
@@ -1166,4 +1184,8 @@ def stitch_chunks(
                 os.path.join(general_config.out, channel),
                 projections_dir or os.path.join(general_config.out, "projections"),
                 slice_number, channel, memory_gb,
-                z_start=crop_start, z_end=crop_end)
+                z_start=crop_start, z_end=crop_end, kinds=projection_kinds,
+                fraction=projection_fraction,
+                highpass_sigma=(max(0.5, projection_highpass_sigma / 2 ** layer)
+                                if projection_highpass_sigma > 0 else 0.0),
+                pixel_size=(voxel_size[1], voxel_size[2]))

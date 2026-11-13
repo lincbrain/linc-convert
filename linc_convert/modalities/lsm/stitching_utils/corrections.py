@@ -194,17 +194,27 @@ def load_corrections(
 
 def sheared_shape(shape: Tuple[int, int, int], shear_x: float,
                   shear_z: float) -> Tuple[int, int, int]:
-    """Shape of a chunk after the x-by-z and z-by-y shears."""
+    """Shape of a chunk after the x-by-z and z-by-y shears (either sign of ``shear_x``)."""
     sz, sy, sx = shape
     return (sz + int(math.ceil(shear_z * (sy - 1))), sy,
-            sx + int(math.ceil(shear_x * (sz - 1))))
+            sx + int(math.ceil(abs(shear_x) * (sz - 1))))
+
+
+def x_pad(shear_x: float, z_size: int) -> int:
+    """Shift of x that keeps a *negative* ``shear_x`` inside the array (0 if it is >= 0).
+
+    ``x' = x + shear_x * z + x_pad``: the chunk's z = 0 plane ends up ``x_pad`` columns
+    to the right, the last z plane at x' = x, and nothing leaves the array.
+    """
+    return int(math.ceil(-shear_x * (z_size - 1))) if shear_x < 0 else 0
 
 
 def shear_volume(vol: da.Array, shear_x: float, shear_z: float) -> da.Array:
     """Lazily shear a chunk (nearest neighbour).
 
-    Both shears use the *unsheared* coordinates: ``x' = x + shear_x * z`` and
-    ``z' = z + shear_z * y``.
+    Both shears use the *unsheared* coordinates: ``x' = x + shear_x * z + x_pad`` and
+    ``z' = z + shear_z * y``. ``shear_x`` may be negative (the skew correction in the
+    other direction); ``x_pad`` then shifts the chunk so that x' starts at 0.
 
     Parameters
     ----------
@@ -224,6 +234,8 @@ def shear_volume(vol: da.Array, shear_x: float, shear_z: float) -> da.Array:
         return vol
     forward = np.array([[1, shear_z, 0], [0, 1, 0], [
                        shear_x, 0, 1]], dtype=float)
-    return affine_transform(vol, matrix=np.linalg.inv(forward), offset=0, order=0,
+    inverse = np.linalg.inv(forward)
+    shift = np.array([0.0, 0.0, float(x_pad(shear_x, vol.shape[0]))])
+    return affine_transform(vol, matrix=inverse, offset=-inverse @ shift, order=0,
                             mode="constant", cval=0.0, output_shape=out_shape,
                             output_chunks=vol.chunksize)

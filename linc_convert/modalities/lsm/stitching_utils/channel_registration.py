@@ -28,6 +28,8 @@ import scipy.ndimage
 import yaml
 from dask_image.ndinterp import affine_transform
 
+from linc_convert.modalities.lsm.stitching_utils.corrections import x_pad
+
 
 @dataclass
 class ChannelRegistration:
@@ -115,7 +117,8 @@ def load_channel_registration(path: str) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _shear_matrix(shear_x: float, shear_z: float) -> np.ndarray:
-    """``S`` of ``shear_volume`` in (z, y, x): ``z' = z + shear_z y``, ``x' = x + shear_x z``."""
+    """``S`` of ``shear_volume`` in (z, y, x): ``z' = z + shear_z y``, ``x' = x + shear_x z``
+    (plus the x shift ``x_pad`` of a negative ``shear_x``, which is not part of ``S``)."""
     return np.array([[1.0, shear_z, 0.0], [0.0, 1.0, 0.0], [shear_x, 0.0, 1.0]])
 
 
@@ -141,7 +144,8 @@ def sampling_transform(reg: ChannelRegistration, shear_x: float, shear_z: float,
         3 x 3 and length 3.
     """
     shear = _shear_matrix(shear_x, shear_z)
-    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0, 0.0])
+    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0,
+                    float(x_pad(shear_x, z_in_ref))])
     a_inv = np.linalg.inv(reg.matrix)
     s_inv = np.linalg.inv(shear)
     origin = np.asarray(reg.origin, dtype=float)
@@ -155,7 +159,8 @@ def _crop_box_sampling(shear_x: float, shear_z: float, z_in_ref: int,
     """Sampling transform of the shear alone: output voxel -> voxel of the reference
     stitching crop (before the shear). Used to keep only what lies inside that crop."""
     shear = _shear_matrix(shear_x, shear_z)
-    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0, 0.0])
+    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0,
+                    float(x_pad(shear_x, z_in_ref))])
     s_inv = np.linalg.inv(shear)
     return s_inv, -s_inv @ pad
 

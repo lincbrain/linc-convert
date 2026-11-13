@@ -82,7 +82,11 @@ def get_vertical_flip(scan_parameters: Dict[str, Any], camera_id: int) -> bool:
 
 
 def get_skew_shear(scan_parameters: Dict[str, Any]) -> float:
-    """Compute the x shear per z step that undoes the oblique acquisition."""
+    """Compute the x shear per z step that undoes the oblique acquisition.
+
+    The shear is negative: ``x' = x - |shear| * z`` (the chunk is shifted so that x' starts
+    at 0, see ``corrections.shear_volume``). This is the direction that undoes the skew.
+    """
     delta = scan_parameters["acquisitionSettings"]["skewCorrection"]["delta_deg"]
     umps = scan_parameters["voxelSize_um"]["rawAcquisition"]
-    return float(np.tan(np.deg2rad(delta)) * umps["z"] / umps["x"])
+    return -float(np.tan(np.deg2rad(delta)) * umps["z"] / umps["x"])
