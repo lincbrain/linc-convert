@@ -19,6 +19,31 @@ from linc_convert.modalities.lsm.stitching_utils.scan_metadata import Crop
 PathLike = Union[str, Path]
 
 
+STORED_AXES_ENV = "LINC_LSM_STORED_AXES"
+
+
+def stored_axes_permutation() -> Tuple[int, int, int]:
+    """Permutation that turns the stored raw chunk axes into the code's (z, y, x).
+
+    The code works on chunks whose axes are z = depth, y = lateral axis (the one that
+    holds the two channels of a camera and is stitched) and x = scanning direction
+    (the M2 layout). A dataset that stores its chunks in another order says so with the
+    environment variable ``LINC_LSM_STORED_AXES``: three letters, one per *stored* axis
+    (first to last), naming the code axis it is. The default ``zyx`` is the M2 layout;
+    ``xzy`` means the stored axes are (x, z, y), as in sub-MF283 slice 122 (stored z is
+    the M2 x, stored y the M2 z, stored x the M2 y).
+
+    Returns
+    -------
+    tuple of int
+        ``perm`` such that ``stored.transpose(perm)`` has the axes (z, y, x).
+    """
+    order = os.environ.get(STORED_AXES_ENV, "zyx").strip().lower()
+    if sorted(order) != ["x", "y", "z"]:
+        raise ValueError(f"{STORED_AXES_ENV} must be a permutation of 'zyx', got {order!r}")
+    return tuple(order.index(a) for a in "zyx")  # type: ignore[return-value]
+
+
 def discover_tile_paths(input_path: str, camera_id: int) -> List[str]:
     """List the chunk folders of one camera.
 
@@ -86,7 +111,8 @@ def open_tile_array(path: PathLike, layer: int = 0,
     Returns
     -------
     dask.array.Array
-        Lazy volume, shape (Z, Y, X).
+        Lazy volume, shape (Z, Y, X) (axes reordered if ``LINC_LSM_STORED_AXES`` is set,
+        see ``stored_axes_permutation``; ``chunks`` and ``block`` are then in (Z, Y, X)).
 
     Raises
     ------
@@ -98,9 +124,19 @@ def open_tile_array(path: PathLike, layer: int = 0,
         raise FileNotFoundError(
             f"raw chunk not found: {path} (this code only reads existing files)")
     arr = cast(zarr.Array, zarr.open_group(str(path), mode="r")[str(layer)])
+    perm = stored_axes_permutation()
+    shape = tuple(arr.shape[p] for p in perm)            # (Z, Y, X) of the code
+    stored_chunks = tuple(arr.chunks[p] for p in perm)
     if chunks is None and block is not None:
-        chunks = coarse_chunks(arr.chunks, arr.shape, block)
-    return da.asarray(arr, chunks=chunks or arr.chunks)
+        chunks = coarse_chunks(stored_chunks, shape, block)
+    chunks = tuple(chunks) if chunks else stored_chunks
+    if perm == (0, 1, 2):
+        return da.asarray(arr, chunks=chunks)
+    # dask chunks of the stored array, then reorder the axes
+    chunks_stored = [0, 0, 0]
+    for code_axis, stored_axis in enumerate(perm):
+        chunks_stored[stored_axis] = chunks[code_axis]
+    return da.asarray(arr, chunks=tuple(chunks_stored)).transpose(perm)
 
 
 def level_range(rng: Sequence[int], size: int, layer: int) -> Tuple[int, int]:
