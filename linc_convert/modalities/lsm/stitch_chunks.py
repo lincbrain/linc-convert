@@ -71,7 +71,7 @@ Projections (default on): when a channel is stitched, contrast projections over 
 written as 2-D float32 OME-Zarr images
 ``{out}/projections/slice{NNN}_{channel}_{kind}.ome.zarr`` with kind ``max`` (mean of the
 brightest 10% of a pixel's z column minus its median) and ``min`` (median minus the mean
-of the dimmest 10%), computed per (y, x) pixel, then 2-D high-pass filtered (see the
+of the dimmest 10%), computed per (y, x) pixel on the 3-D high-pass filtered volume (see the
 ``projections`` module and the ``projection_*`` options). They can leave out the first and
 last z planes: ``projection_z_crop="START,END"``. Existing files are not recomputed. They
 stay in ``out``, next to the channel's zarr folder.
@@ -88,7 +88,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import cyclopts
 import dask.array as da
@@ -320,6 +320,20 @@ def _layout(coords: str, tile_paths: List[str], channel: str, dz_as_shear_z: boo
           f"y offsets {y.min():.1f}..{y.max():.1f}, dz {dz_pairs.min():+.2f}.."
           f"{dz_pairs.max():+.2f} px")
     return positions_y, positions_z, shear_z
+
+
+def _parse_sigma_um(text: Union[str, float]) -> Tuple[float, float, float]:
+    """``"Z,Y,X"`` (or one number) in micrometres -> three non-negative floats."""
+    try:
+        v = [float(t) for t in str(text).split(",")]
+    except ValueError:
+        v = []
+    if len(v) == 1:
+        v = v * 3
+    if len(v) != 3 or any(x < 0 for x in v):
+        raise ValueError("projection_highpass_um must be one number or 'Z,Y,X' "
+                         f"(micrometres, >= 0), got {text!r}")
+    return v[0], v[1], v[2]
 
 
 def corrected_tile(vol: da.Array, noise: np.ndarray, scaler: np.ndarray,
@@ -906,7 +920,7 @@ def stitch_chunks(
     projection_z_crop: str = "0,0",
     projection_kinds: str = "max,min",
     projection_fraction: float = 0.1,
-    projection_highpass_sigma: float = 20.0,
+    projection_highpass_um: str = "10,20,20",
     blend_ramp: str = "cosine",
     channel_registration: Optional[str] = None,
     reference_channel: str = "488",
@@ -996,13 +1010,18 @@ def stitch_chunks(
         Comma separated projections to write (see the ``projections`` module):
         ``max`` = mean of the brightest ``projection_fraction`` of the voxels along z minus
         the median over z, ``min`` = median over z minus the mean of the dimmest
-        ``projection_fraction``; per (y, x) pixel, followed by a 2-D high-pass filter of the projection. Each
-        is a 2-D OME-Zarr ``slice{NNN}_{channel}_{kind}.ome.zarr``.
+        ``projection_fraction``, ``minrel`` = like ``min`` on the relative deviation
+        ``(v - background) / background`` (dim structures count the same in bright and dark
+        regions); per (y, x) pixel on the 3-D high-pass filtered volume. Each is a 2-D
+        OME-Zarr ``slice{NNN}_{channel}_{kind}.ome.zarr``.
     projection_fraction : float, default=0.1
         Share of the voxels of a z column that the extreme mean uses.
-    projection_highpass_sigma : float, default=20.0
-        Gaussian sigma (full-resolution pixels, y and x) of the 2-D high-pass filter that is
-        applied to every finished projection; 0 = no filter.
+    projection_highpass_um : str, default="10,20,20"
+        Sigma of the 3-D Gaussian high-pass filter that is applied before the projections,
+        in micrometres, as ``"Z,Y,X"`` (or one number for all axes); ``"0"`` = no filter.
+        It is converted to voxels with the voxel size of ``layer``, so the same filter is
+        applied at every layer; an axis whose sigma is below 0.3 voxel is not filtered.
+        The filter is an FFT convolution (cost independent of sigma).
     projection_z_crop : str, default="0,0"
         ``"START,END"``: z planes (full-resolution pixels, scaled to ``layer`` and
         rounded up) left out at the beginning and at the end of z, for BOTH the max
@@ -1081,6 +1100,9 @@ def stitch_chunks(
                              f"({lo})")
 
     projection_kinds = ",".join(parse_kinds(projection_kinds))
+    highpass_um = _parse_sigma_um(projection_highpass_um)
+    if "minrel" in projection_kinds.split(",") and not any(highpass_um):
+        raise ValueError("the 'minrel' projection needs projection_highpass_um > 0")
     if not 0 < projection_fraction <= 1:
         raise ValueError(f"projection_fraction must be in (0, 1], got {projection_fraction}")
     if blend_ramp not in RAMP_SHAPES:
@@ -1180,12 +1202,13 @@ def stitch_chunks(
                        y_range, x_range, memory_gb, parallel_chunks, bands,
                        parallel_bands, x_tolerance, registered.get(channel), blend_ramp)
         if projections:
+            highpass_voxels = tuple(s_um / vs if s_um / vs >= 0.3 else 0.0
+                                    for s_um, vs in zip(highpass_um, voxel_size))
             write_projections(
                 os.path.join(general_config.out, channel),
                 projections_dir or os.path.join(general_config.out, "projections"),
                 slice_number, channel, memory_gb,
                 z_start=crop_start, z_end=crop_end, kinds=projection_kinds,
                 fraction=projection_fraction,
-                highpass_sigma=(max(0.5, projection_highpass_sigma / 2 ** layer)
-                                if projection_highpass_sigma > 0 else 0.0),
+                highpass_sigma=highpass_voxels,
                 pixel_size=(voxel_size[1], voxel_size[2]))

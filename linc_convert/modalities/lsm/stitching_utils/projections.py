@@ -2,7 +2,8 @@
 
 Used by ``stitch_chunks`` to write quick-look images next to every stitched channel,
 one ``slice{NNN}_{channel}_{kind}.ome.zarr`` (a 2-D float32 image with a small pyramid)
-per kind. Both kinds work on every (y, x) pixel separately, over its z column:
+per kind. All kinds work on the 3-D high-pass filtered volume and on every (y, x) pixel
+separately, over its z column:
 
 ``max``
     mean of the brightest ``top_fraction`` (default 10%) of the voxels
@@ -10,15 +11,20 @@ per kind. Both kinds work on every (y, x) pixel separately, over its z column:
 ``min``
     median of the column minus the mean of the dimmest ``top_fraction`` of its voxels
     (so dim structures come out positive, i.e. bright).
+``minrel``
+    like ``min``, but on the *relative* deviation ``(v - background) / background``
+    (the background being the smooth Gaussian estimate below), so a dim structure counts
+    the same in a bright and in a dark region.
 
 The mean of the extreme tenth averages noise out (a plain maximum picks the noisiest
 voxel) and the median over depth is the homogeneous background that is present at all
-depths. The slowly varying background of the *image* is then removed with a 2-D high-pass
-filter of the projection (``img - G(img)``, a Gaussian of ``highpass_sigma`` pixels
-normalised so that empty pixels do not drag the background down at the tissue border).
-This is much cheaper than filtering the 3-D volume first. ``highpass_sigma=0`` skips the
-filter. Zero voxels are the padding of the shear and are never counted. The first and the
-last z planes can be left out (``z_start`` / ``z_end``).
+depths. Before that the slowly varying background is removed with a 3-D high-pass filter
+(``v - G(v)``, a Gaussian with one sigma per axis, given in micrometres and converted to
+voxels, normalised by the Gaussian of the validity mask so that the empty shear padding
+does not drag the background down at the tissue border). The Gaussian is applied with an
+FFT, so its cost does not grow with sigma. ``highpass_sigma = 0`` skips the filter. Zero
+voxels are the padding of the shear and are never counted. The first and the last z planes
+can be left out (``z_start`` / ``z_end``).
 
 Memory is kept low on purpose, since the mosaic can be tens of thousands of pixels on a
 side: the stored array is read in blocks (aligned to the stored chunks, with all of z and
@@ -35,15 +41,16 @@ import dask.array as da
 import numpy as np
 import zarr
 from dask.distributed import progress
-from scipy import ndimage
+from scipy import fft as sfft
 
 from linc_convert.modalities.lsm.stitching_utils.io import start_dask
 
 TILE = 1024                      # chunk edge of the projection arrays
 STRIP_ROWS = 256                 # rows handled at a time when building the pyramid
-KINDS = ("max", "min")
+KINDS = ("max", "min", "minrel")
 BLOCK_BYTES = 48 * 2 ** 20       # target size of one dask block (uint16 bytes)
-BYTES_PER_VOXEL = 44.0           # working memory per voxel of a block (float32 copies)
+BYTES_PER_VOXEL = 64.0           # working memory per voxel of a block (float32 / complex64 copies)
+FFT_WORKERS = 2                  # threads of one FFT
 
 
 def block_shape(shape: Tuple[int, int, int], chunks: Tuple[int, ...],
@@ -64,104 +71,139 @@ def block_shape(shape: Tuple[int, int, int], chunks: Tuple[int, ...],
     return nz, min(cy * k, ny), min(cx * k, nx)
 
 
-def highpass(vol: np.ndarray, sigma: float) -> np.ndarray:
-    """High-pass filtered float32 copy of ``vol`` (z, y, x): ``v - G(v)``.
+def sigma_halo(sigma: Sequence[float]) -> Tuple[int, int, int]:
+    """Halo (z, y, x) in voxels that a Gaussian of ``sigma`` voxels needs (3 sigma)."""
+    return tuple(int(np.ceil(3.0 * s)) if s > 0 else 0 for s in sigma)  # type: ignore[return-value]
 
-    ``G`` is a Gaussian (``sigma`` voxels, all axes) normalised by the same Gaussian of
-    the validity mask (``vol != 0``), so the padding is not averaged in. Voxels of the
-    padding are returned as 0 (callers use the mask of ``vol`` to ignore them).
+
+def gaussian_fft(a: np.ndarray, sigma: Sequence[float], workers: int = FFT_WORKERS) -> np.ndarray:
+    """Gaussian filter of ``a`` (3-D) with one sigma (voxels) per axis, done with an FFT.
+
+    The array is mirrored by 3 sigma on every filtered axis first, so the borders behave
+    like ``mode="reflect"`` and the periodic wrap of the FFT never reaches the data. An
+    axis with sigma 0 is left alone. The cost does not depend on sigma.
     """
-    v = vol.astype(np.float32)
-    valid = (vol != 0).astype(np.float32)
-    num = ndimage.gaussian_filter(v * valid, sigma, mode="nearest")
-    den = ndimage.gaussian_filter(valid, sigma, mode="nearest")
-    with np.errstate(divide="ignore", invalid="ignore"):
-        background = np.where(den > 1e-3, num / den, 0.0)
-    return ((v - background) * valid).astype(np.float32)
+    a = np.asarray(a, dtype=np.float32)
+    halo = sigma_halo(sigma)
+    padded = np.pad(a, [(h, h) for h in halo], mode="symmetric") if any(halo) else a
+    shape = tuple(sfft.next_fast_len(n, real=True) for n in padded.shape)
+    spec = sfft.rfftn(padded, s=shape, workers=workers)
+    del padded
+    for axis, (n, sg) in enumerate(zip(shape, sigma)):
+        if sg <= 0:
+            continue
+        f = sfft.rfftfreq(n) if axis == len(shape) - 1 else sfft.fftfreq(n)
+        gain = np.exp(-2.0 * (np.pi * sg) ** 2 * f ** 2).astype(np.float32)
+        spec *= gain.reshape([-1 if i == axis else 1 for i in range(len(shape))])
+    out: np.ndarray = np.asarray(sfft.irfftn(spec, s=shape, workers=workers))
+    del spec
+    (hz, hy, hx), (nz, ny, nx) = halo, a.shape
+    return out[hz:hz + nz, hy:hy + ny, hx:hx + nx].astype(np.float32)
 
 
-def highpass2d(img: np.ndarray, sigma: float, band: int = 2048) -> np.ndarray:
-    """2-D high-pass ``img - G(img)`` of a projection, normalised by the mask ``img != 0``.
+def highpass(vol: np.ndarray, sigma: Sequence[float]):
+    """High-pass of ``vol`` (z, y, x): ``v - G(v)`` and the background ``G(v)``.
 
-    Works in bands of ``band`` rows (plus a halo of ``4 sigma`` rows) so the memory
-    stays small for a very large mosaic. Pixels outside the mask stay 0.
-    """
-    ny = img.shape[0]
-    halo = int(np.ceil(4 * sigma)) + 1
-    out = np.zeros(img.shape, np.float32)
-    for r0 in range(0, ny, band):
-        r1 = min(r0 + band, ny)
-        a, b = max(0, r0 - halo), min(ny, r1 + halo)
-        v = np.asarray(img[a:b], dtype=np.float32)
-        valid = (v != 0).astype(np.float32)
-        num = ndimage.gaussian_filter(v * valid, sigma, mode="nearest")
-        den = ndimage.gaussian_filter(valid, sigma, mode="nearest")
-        with np.errstate(divide="ignore", invalid="ignore"):
-            bg = np.where(den > 1e-3, num / den, 0.0)
-        out[r0:r1] = ((v - bg) * valid)[r0 - a:r1 - a]
-    return out
-
-
-def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
-                   sigma: float = 0.0) -> np.ndarray:
-    """``max`` and/or ``min`` contrast of one block ``vol`` (z, y, x), uint16.
-
-    Parameters
-    ----------
-    vol : numpy.ndarray
-        Block of the stitched array; zeros are padding and are ignored.
-    kinds : sequence of str
-        Which of ``"max"`` / ``"min"`` to return, in this order.
-    fraction : float
-        Share of the (non-zero) voxels of a column used for the extreme mean: the
-        ``ceil(fraction * n)`` (at least one) largest / smallest of the ``n`` voxels.
-    sigma : float
-        High-pass Gaussian sigma in voxels (0 = no filter).
+    ``G`` is a Gaussian (``sigma`` voxels per axis) normalised by the same Gaussian of
+    the validity mask (``vol != 0``), so the padding is not averaged in. Padding voxels
+    are returned as 0 in both arrays (callers use the mask of ``vol`` to ignore them).
 
     Returns
     -------
-    numpy.ndarray
-        float32 (len(kinds), y, x); 0 where a column has no data.
+    residual, background : numpy.ndarray
+        float32 arrays of the shape of ``vol``.
     """
-    nz = vol.shape[0]
-    valid = vol != 0
-    n = valid.sum(axis=0)
-    v = highpass(vol, sigma) if sigma > 0 else vol.astype(np.float32)
-    v = np.where(valid, v, -np.inf).astype(np.float32)
+    v = vol.astype(np.float32)
+    valid = (vol != 0).astype(np.float32)
+    num = gaussian_fft(v * valid, sigma)
+    den = gaussian_fft(valid, sigma)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        background = np.where(den > 1e-3, num / den, 0.0).astype(np.float32)
+    return ((v - background) * valid).astype(np.float32), (background * valid).astype(np.float32)
+
+
+def _column_stats(v: np.ndarray, valid: np.ndarray, n: np.ndarray, fraction: float,
+                  kinds: Sequence[str]) -> list:
+    """Extreme-mean minus median (``max``) / median minus extreme-mean (``min``) of every
+    z column of ``v`` over its ``n`` valid voxels. ``v`` is overwritten."""
+    nz = v.shape[0]
+    np.copyto(v, -np.inf, where=~valid)
     v.sort(axis=0)                                   # ascending; the padding comes first
     first = nz - n                                   # index of the first valid value
     k = np.minimum(np.maximum(1, np.ceil(fraction * n).astype(np.int64)), np.maximum(n, 1))
-    # median of every column
     lo = np.clip(first + (n - 1) // 2, 0, nz - 1)
     hi = np.clip(first + n // 2, 0, nz - 1)
     median = (np.take_along_axis(v, lo[None], axis=0)[0]
               + np.take_along_axis(v, hi[None], axis=0)[0]) / 2
     np.copyto(v, 0.0, where=~np.isfinite(v))
     csum = np.cumsum(v, axis=0, dtype=np.float32)    # running sums of the sorted values
-    del v
     out = []
     for kind in kinds:
         if kind == "max":
             below = np.where(nz - k - 1 >= 0,
                              np.take_along_axis(csum, np.clip(nz - k - 1, 0, nz - 1)[None],
                                                 axis=0)[0], 0.0)
-            out.append(csum[-1] - below)             # sum of the k largest
-            out[-1] = out[-1] / k - median
+            out.append((csum[-1] - below) / k - median)          # mean of the k largest
         else:
             out.append(median - np.take_along_axis(
                 csum, np.clip(first + k - 1, 0, nz - 1)[None], axis=0)[0] / k)
-    return np.where(n[None] > 0, np.stack(out), 0.0).astype(np.float32)
+    return out
+
+
+def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
+                   sigma: Union[float, Sequence[float]] = 0.0) -> np.ndarray:
+    """``max`` / ``min`` / ``minrel`` contrast of one block ``vol`` (z, y, x), uint16.
+
+    Parameters
+    ----------
+    vol : numpy.ndarray
+        Block of the stitched array; zeros are padding and are ignored.
+    kinds : sequence of str
+        Which of ``"max"`` / ``"min"`` / ``"minrel"`` to return, in this order.
+    fraction : float
+        Share of the (non-zero) voxels of a column used for the extreme mean: the
+        ``ceil(fraction * n)`` (at least one) largest / smallest of the ``n`` voxels.
+    sigma : float or sequence of 3 floats
+        High-pass Gaussian sigma in voxels, (z, y, x) (a single number is used for all
+        three axes; 0 = no filter). ``minrel`` needs a filter.
+
+    Returns
+    -------
+    numpy.ndarray
+        float32 (len(kinds), y, x); 0 where a column has no data.
+    """
+    sig = (float(sigma),) * 3 if np.isscalar(sigma) else tuple(float(x) for x in sigma)
+    filtered = any(x > 0 for x in sig)
+    if "minrel" in kinds and not filtered:
+        raise ValueError("the 'minrel' projection needs a high-pass sigma > 0")
+    valid = vol != 0
+    n = valid.sum(axis=0)
+    if filtered:
+        residual, background = highpass(vol, sig)
+    else:
+        residual, background = vol.astype(np.float32), None
+    plain = [k for k in kinds if k != "minrel"]
+    got = dict(zip(plain, _column_stats(residual.copy() if "minrel" in kinds else residual,
+                                        valid, n, fraction, plain))) if plain else {}
+    if "minrel" in kinds:
+        positive = background[valid & (background > 0)]
+        floor = max(2.0, 0.03 * float(np.median(positive))) if positive.size else 2.0
+        relative = residual / np.maximum(background, floor)
+        got["minrel"] = _column_stats(relative, valid, n, fraction, ["min"])[0]
+    return np.where(n[None] > 0, np.stack([got[k] for k in kinds]), 0.0).astype(np.float32)
 
 
 def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: int = 32,
             z_start: int = 0, z_end: int = 0, fraction: float = 0.1,
-            highpass_sigma: float = 0.0) -> dict:
+            highpass_sigma: Union[float, Sequence[float]] = 0.0) -> dict:
     """Contrast projections over z of one stitched array: ``{kind: float32 (y, x)}``.
 
     Starts (and closes) its own dask cluster, limited to ``memory_gb``.
-    ``highpass_sigma`` (pixels, 0 = no filter) is the 2-D high-pass applied to every
-    finished projection.
+    ``highpass_sigma`` is the 3-D high-pass sigma in voxels of the stored array, one
+    number or (z, y, x) (0 = no filter).
     """
+    sig = (float(highpass_sigma),) * 3 if np.isscalar(highpass_sigma) \
+        else tuple(float(x) for x in highpass_sigma)
     kinds = parse_kinds(kinds)
     stored = zarr.open_group(str(zarr_dir), mode="r")[group]
     nz, ny, nx = stored.shape
@@ -170,11 +212,17 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
                          f"leaves no plane of the {nz} z planes")
     bz, by, bx = block_shape(stored.shape, stored.chunks)
     arr = da.from_array(stored, chunks=(bz, by, bx))[z_start:nz - z_end]
-    stacked = arr.map_blocks(contrast_block, kinds, fraction, 0.0,
+    halo = sigma_halo(sig)
+    depth = {0: 0, 1: halo[1], 2: halo[2]}
+    if halo[1] or halo[2]:
+        arr = da.overlap.overlap(arr, depth=depth, boundary="reflect")
+    stacked = arr.map_blocks(contrast_block, kinds, fraction, sig,
                              chunks=((len(kinds),),) + arr.chunks[1:],
                              dtype=np.float32, meta=np.empty((0, 0, 0), np.float32))
+    if halo[1] or halo[2]:
+        stacked = da.overlap.trim_internal(stacked, depth, boundary="reflect")
     keep_gb = 4.0 * len(kinds) * ny * nx / 2 ** 30 * 1.2 + 1.0
-    task_gb = BYTES_PER_VOXEL * bz * by * bx / 2 ** 30
+    task_gb = BYTES_PER_VOXEL * bz * (by + 2 * halo[1]) * (bx + 2 * halo[2]) / 2 ** 30
     client = start_dask(memory_gb, task_gb=task_gb, reserve_gb=keep_gb)
     try:
         future = client.compute(stacked)
@@ -183,10 +231,7 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
         result = np.asarray(client.gather(future), dtype=np.float32)
     finally:
         client.close()
-    images = {kind: result[i] for i, kind in enumerate(kinds)}
-    if highpass_sigma > 0:
-        images = {kind: highpass2d(img, highpass_sigma) for kind, img in images.items()}
-    return images
+    return {kind: result[i] for i, kind in enumerate(kinds)}
 
 
 def save_projection(shape: Tuple[int, int], piece, path: Path,
@@ -270,7 +315,8 @@ def write_projections(zarr_dir: str, out_dir: str, slice_number: int,
                       channel: str, memory_gb: int = 32,
                       z_start: int = 0, z_end: int = 0,
                       kinds: Union[str, Sequence[str]] = ("max", "min"),
-                      fraction: float = 0.1, highpass_sigma: float = 0.0,
+                      fraction: float = 0.1,
+                      highpass_sigma: Union[float, Sequence[float]] = 0.0,
                       pixel_size: Tuple[float, float] = (1.0, 1.0)) -> None:
     """Write ``slice{NNN}_{channel}_{kind}.ome.zarr`` into ``out_dir`` for every kind.
 
@@ -278,7 +324,7 @@ def write_projections(zarr_dir: str, out_dir: str, slice_number: int,
     only fills in what is missing. ``memory_gb`` bounds this process and its dask workers
     together. ``z_start`` / ``z_end`` (z planes of the stored array) are left out.
     ``pixel_size`` is the (y, x) size in micrometres of the stored array's pixels and
-    ``highpass_sigma`` is the 2-D high-pass sigma in pixels of the stored array.
+    ``highpass_sigma`` is the 3-D high-pass sigma, (z, y, x) in voxels of the stored array.
     """
     kinds = parse_kinds(kinds)
     out = Path(out_dir)
