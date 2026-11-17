@@ -294,7 +294,7 @@ def _create_per_chunk(
         raise ValueError(f"chunks {bad} out of range: camera {camera_id} has "
                          f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
     crops = get_crops(scan_parameters, camera_id, slice_number, kind=crop_kind,
-                      include_z=crop_kind == "stitchingCrop")
+                      include_z=True)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
 
     bg_len, x_stride = _level_settings(background_length, layer)
@@ -563,7 +563,7 @@ def create_corrections(
                          f"{len(tile_paths)} tiles (valid: 1..{len(tile_paths)})")
 
     crops = get_crops(scan_parameters, camera_id, slice_number, kind=crop_kind,
-                      include_z=crop_kind == "stitchingCrop")
+                      include_z=True)
     vertical_flip = get_vertical_flip(scan_parameters, camera_id)
     if auto_reference_tiles:
         reference_tiles = _auto_reference_tiles(

@@ -1145,7 +1145,7 @@ def stitch_chunks(
         ref_stitch = get_crops(scan_parameters, reference_camera_id,
                                slice_number)[reference_channel]
         ref_split = get_crops(scan_parameters, reference_camera_id, slice_number,
-                              kind="splitCrop", include_z=False)[reference_channel]
+                              kind="splitCrop", include_z=True)[reference_channel]
         ref_flip = get_vertical_flip(scan_parameters, reference_camera_id)
         ref_tiles = discover_tile_paths(input_path, reference_camera_id)
         ref_arr = open_tile_array(ref_tiles[0], layer)
@@ -1153,15 +1153,18 @@ def stitch_chunks(
         ref_z = (level_range(ref_stitch[:2], ref_arr.shape[0], layer)
                  if ref_stitch[0] is not None and ref_stitch[1] is not None
                  else (None, None))
+        ref_split_z = (level_range(ref_split[:2], ref_arr.shape[0], layer)
+                       if ref_split[0] is not None and ref_split[1] is not None
+                       else (None, None))
         origin = reference_origin(
             level_range(ref_split[2:], ref_arr.shape[1], layer),
             level_range(ref_stitch[2:], ref_arr.shape[1], layer),
-            ref_z, ref_arr.shape[0], ref_flip, layer)
+            ref_z, ref_arr.shape[0], ref_flip, layer, ref_split_z)
         print(f"registering to channel {reference_channel} (camera "
               f"{reference_camera_id}): geometry {ref_shape}, crop corner in its "
               f"split frame (z, y, x) = {origin}")
         split_crops = get_crops(scan_parameters, camera_id, slice_number,
-                                kind="splitCrop", include_z=False)
+                                kind="splitCrop", include_z=True)
         for channel in channels:
             if channel == reference_channel and camera_id == reference_camera_id:
                 matrix, translation = np.eye(3), np.zeros(3)

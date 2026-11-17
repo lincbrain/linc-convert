@@ -438,7 +438,7 @@ def main() -> None:
     with open(args.yaml_path) as f:
         scan = yaml.safe_load(f)
     crop = get_crops(scan, args.camera_id, args.slice_number, kind=args.crop_kind,
-                     include_z=args.crop_kind == "stitchingCrop")[args.channel]
+                     include_z=True)[args.channel]
     flip = get_vertical_flip(scan, args.camera_id)
     with open(args.coords) as f:
         reg = yaml.safe_load(f)["weighted_average"]

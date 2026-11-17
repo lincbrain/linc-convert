@@ -112,7 +112,7 @@ def load_chunk(path: PathLike, slice_numb: int, camera_numb: int, channel: str,
     """
     arr = open_tile_array(path, layer)
     crop = get_crop(params, camera_numb, slice_numb, channel,
-                    kind="splitCrop", include_z=False)
+                    kind="splitCrop", include_z=True)
     vol = crop_and_flip(arr, crop, get_vertical_flip(
         params, camera_numb), layer)
     print(f"  {Path(path).name}: splitCrop y {crop[2]}:{crop[3]} "
@@ -239,7 +239,7 @@ def registration_corrections(
                          f"got {corrections_crop!r}")
     z0, z1, t0, t1 = get_crop(params, camera_numb, slice_numb, channel,
                               kind=corrections_crop,
-                              include_z=corrections_crop == "stitchingCrop")
+                              include_z=True)
     t0, t1 = t0 // c_scale, min(t1 // c_scale, raw_yc)
     zc0, zc1 = (0, raw_zc) if z0 is None or z1 is None else (
         max(z0 // c_scale, 0), min(z1 // c_scale, raw_zc))
@@ -257,18 +257,21 @@ def registration_corrections(
         frame[zc0:zc1, t0:t1] = m[::-1] if flip else m
         frames.append(_block_mean(frame, 2 ** (layer - corrections_layer)))
 
-    # 2. cut to the registration volume: splitCrop rows, all z, flipped
+    # 2. cut to the registration volume: splitCrop (y rows, and z planes if the split is
+    #    along z), flipped
     raw_z, raw_y, _ = open_tile_array(path, layer).shape
     scale = 2 ** layer
-    _, _, s0, s1 = get_crop(params, camera_numb, slice_numb, channel,
-                            kind="splitCrop", include_z=False)
+    sz0, sz1, s0, s1 = get_crop(params, camera_numb, slice_numb, channel,
+                                kind="splitCrop", include_z=True)
     s0, s1 = s0 // scale, min(s1 // scale, raw_y)
+    sz0, sz1 = (0, raw_z) if sz0 is None or sz1 is None else (
+        max(sz0 // scale, 0), min(sz1 // scale, raw_z))
     out = []
     for frame in frames:
         full = np.full((raw_z, raw_y), np.nan, dtype=np.float32)
         nz_, ny_ = min(raw_z, frame.shape[0]), min(raw_y, frame.shape[1])
         full[:nz_, :ny_] = frame[:nz_, :ny_]
-        vol = full[:, s0:s1]
+        vol = full[sz0:sz1, s0:s1]
         out.append(vol[::-1] if flip else vol)
     noise_reg, scaler_reg = out
     covered = float(np.isfinite(scaler_reg).mean())

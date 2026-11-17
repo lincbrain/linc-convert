@@ -241,7 +241,9 @@ def registered_weights(weight: np.ndarray, reg: ChannelRegistration, shear_x: fl
 
 def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int],
                      ref_stitch_z: Tuple[Optional[int], Optional[int]], ref_depth: int,
-                     ref_flip: bool, layer: int) -> Tuple[float, float, float]:
+                     ref_flip: bool, layer: int,
+                     ref_split_z: Tuple[Optional[int], Optional[int]] = (None, None)
+                     ) -> Tuple[float, float, float]:
     """Corner (z, y, 0) of the reference stitching crop in its split, flipped frame.
 
     Parameters
@@ -254,6 +256,10 @@ def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int]
         reference, in voxels of the layer; None for the whole depth.
     ref_depth : int
         z size of the reference's raw chunk at the layer.
+    ref_split_z : tuple of int or None, optional
+        ``(lo, hi)`` of the split z range in the RAW z, in voxels of the layer, when the
+        channels are split along z (default: no split in z, the whole depth). The
+        stitching z range lies inside it and defaults to it.
     ref_flip : bool
         Whether the reference's camera flips z.
     layer : int
@@ -264,10 +270,13 @@ def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int]
     tuple of float
         (z, y, 0).
     """
+    s_lo, s_hi = ref_split_z
+    if s_lo is None or s_hi is None:
+        s_lo, s_hi = 0, ref_depth
     z_lo, z_hi = ref_stitch_z
     if z_lo is None or z_hi is None:
-        z_lo, z_hi = 0, ref_depth
-    oz = (ref_depth - z_hi) if ref_flip else z_lo
+        z_lo, z_hi = s_lo, s_hi
+    oz = (s_hi - z_hi) if ref_flip else (z_lo - s_lo)
     return float(oz), float(ref_stitch_y[0] - ref_split_y[0]), 0.0
 
 
