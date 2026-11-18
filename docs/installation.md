@@ -1,6 +1,6 @@
 # Installation
 
-The `linc-convert` package is available on [PyPI](https://pypi.org/project/linc-convert/) and can be installed with pip, pipx, or a container.
+The `linc-convert` package is available on [PyPI](https://pypi.org/project/linc-convert/) and can be installed with pip or pipx.
 
 ## Installation with pip
 
@@ -62,17 +62,3 @@ The `linc-convert` package is available on [PyPI](https://pypi.org/project/linc-
    ```bash
    linc-convert --help
    ```
-
-## Installation with Docker or Apptainer/Singularity
-
-Container images are published to the GitHub Container Registry as `ghcr.io/lincbrain/linc-convert`. Their entry point is `linc-convert`, so pass its arguments after the image name.
-
-- Docker (mount your data with `-v`):
-  ```bash
-  docker run --rm -v /path/to/data:/data ghcr.io/lincbrain/linc-convert:latest --help
-  ```
-- Apptainer or Singularity:
-  ```bash
-  apptainer pull docker://ghcr.io/lincbrain/linc-convert:latest
-  apptainer run linc-convert_latest.sif --help
-  ```
