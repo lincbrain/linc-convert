@@ -15,7 +15,7 @@ license = "Apache-2.0"
 readme = "README.md"
 homepage = "https://connects.mgh.harvard.edu"
 repository = "https://github.com/lincbrain/linc-convert"
-documentation = "https://lincbrain.github.io/linc-convert"
+documentation = "https://convert.lincbrain.org"
 keywords = ["LINC", "neuroimaging", "microscopy", "data conversion", "OME-Zarr", "NIfTI-Zarr", "Zarr"]
 classifiers = [
   "Development Status :: 3 - Alpha",
