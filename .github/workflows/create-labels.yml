@@ -1,7 +1,7 @@
 name: Create release labels
 
-# Run once (and again whenever .autorc changes) to create the labels that
-# auto uses to choose the version bump and the changelog section of each PR.
+# Run once to create the labels that auto uses to choose the version bump
+# and the changelog section of each PR.
 on:
   workflow_dispatch:
 
