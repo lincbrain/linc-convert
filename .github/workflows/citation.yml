@@ -2,9 +2,6 @@ name: Validate CITATION.cff
 
 on:
   pull_request:
-    paths:
-      - CITATION.cff
-      - .github/workflows/citation.yml
   push:
     branches:
       - main
