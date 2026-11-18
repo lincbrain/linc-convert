@@ -25,8 +25,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install cffconvert and idutils
-        run: python -m pip install cffconvert==2.0.0 idutils==1.7.1
+      - name: Install cffconvert, idutils and ruamel.yaml
+        run: python -m pip install cffconvert==2.0.0 idutils==1.7.1 ruamel.yaml==0.19.1
 
       - name: Validate CITATION.cff
         run: cffconvert --validate --infile CITATION.cff
