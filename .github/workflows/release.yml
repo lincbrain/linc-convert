@@ -52,9 +52,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install build & twine
+      - name: Install build tools
         if: steps.auto-version.outputs.version != ''
-        run: python -m pip install build twine
+        run: python -m pip install build==1.6.1 twine==7.0.0 poetry-core==1.9.1 poetry-dynamic-versioning==1.10.1
 
       - name: Create release
         if: steps.auto-version.outputs.version != ''
