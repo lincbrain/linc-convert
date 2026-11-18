@@ -39,9 +39,6 @@ Either:
 
 A release is only made if at least one unreleased pull request has a label that bumps the version (`major`, `minor`, `patch` or `performance`).
 
-!!! warning "First release"
-    Version `0.0.1` of `linc-convert` was uploaded to PyPI before this process was set up, and the repository has no version tags yet. `auto` starts counting from `0.0.0`, so the first release must be labeled `minor` (giving `0.1.0`) or `major`. A `patch` release would be `0.0.1`, which PyPI refuses because that version already exists.
-
 ## One-time setup
 
 This step needs a repository administrator.
