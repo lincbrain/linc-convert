@@ -20,6 +20,7 @@ authors:
     family-names: Gunalan
     orcid: https://orcid.org/0000-0001-6964-4865
     affiliation: "McGovern Institute for Brain Research, Massachusetts Institute of Technology, Cambridge, MA, USA"
+doi: 10.5281/zenodo.24354632
 repository-code: "https://github.com/lincbrain/linc-convert"
 url: "https://convert.lincbrain.org"
 license: Apache-2.0
