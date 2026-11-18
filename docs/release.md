@@ -8,8 +8,6 @@ Releases of `linc-convert` are automated with [auto](https://intuit.github.io/au
 4. Creates a [GitHub release](https://github.com/lincbrain/linc-convert/releases) and comments on the released pull requests.
 5. Zenodo archives the GitHub release and mints a DOI for it, using the title, abstract, authors, keywords and license in `CITATION.cff`.
 
-`CITATION.cff` also gives the repository's "Cite this repository" button on GitHub. To add or change an author, edit `CITATION.cff` (and `authors` in `pyproject.toml` for PyPI). Leave out `version` and `date-released`: releases don't update them, and Zenodo takes the version from the tag.
-
 ## Label pull requests
 
 Every pull request needs one of the labels below. The `Check PR Labels` workflow fails until one is added.
