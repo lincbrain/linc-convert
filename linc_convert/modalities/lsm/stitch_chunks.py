@@ -28,8 +28,9 @@ see the parameter. Otherwise, for each channel of the camera and each chunk:
    function of y (``z += shear_z * y``, from register_chunks' ``dz`` when
    ``dz_as_shear_z`` is set). The chunk grows so nothing is cut off.
 4. Blend the overlap with the previous chunk (cosine ramp, or linear with
-   ``blend_ramp="linear"``, times 1/scaler confidence) and write everything lazily, chunk by chunk, into one uint16
-   array.
+   ``blend_ramp="linear"``, times 1/scaler confidence; ``"step"`` does not blend but cuts
+   at the midpoint of the overlap) and write everything lazily, chunk by chunk, into one
+   uint16 array.
 
 Chunk positions come from the register_chunks YAML: chunk ``i`` starts at
 ``round(i * weighted_average.y_offset)`` (full-resolution pixels, in the
@@ -570,7 +571,7 @@ def stitch_channel(
         end of x if it is shorter, the extra columns are cut if it is longer, and a
         warning is printed. 0 requires identical shapes. (Not used with
         ``registered``: the affine resample takes care of the x length.)
-    blend_ramp : {"cosine", "linear"}, default="cosine"
+    blend_ramp : {"cosine", "linear", "step"}, default="cosine"
         Shape of the blend across each overlap (see ``blending.ramp_weights``).
     registered : RegisteredChannel, optional
         Register the channel to the reference channel: each chunk is split (``crop``)
@@ -1028,10 +1029,11 @@ def stitch_chunks(
         and the min projection (for example ``"150,50"``). The stitched data is not
         affected. Existing projection TIFFs are not recomputed, so delete them to
         apply a new crop.
-    blend_ramp : {"cosine", "linear"}, default="cosine"
+    blend_ramp : {"cosine", "linear", "step"}, default="cosine"
         How the two chunks are mixed across an overlap: ``cosine`` (a raised cosine,
         ``0.5 - 0.5 cos(pi t)``: flat at both ends, so no kink where the blend
-        starts and stops) or ``linear``. A stitch that is resumed with another
+        starts and stops), ``linear``, or ``step`` (no blending: the previous chunk up to the
+        midpoint of the overlap, the new one after it). A stitch that is resumed with another
         ramp starts again (the checkpoint signature differs).
     channel_registration : str, optional
         Register every channel to ``reference_channel`` while stitching. A path with
