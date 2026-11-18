@@ -34,14 +34,3 @@ Either:
 
 - Add the `release` label to a pull request before merging it. The `Auto-release on PR merge` workflow then releases it, together with any unreleased pull requests merged before it. A release is only made if at least one unreleased pull request has a label that bumps the version (`major`, `minor`, `patch` or `performance`), or if the most recently merged pull request has none of the labels in the table, which counts as `patch`.
 - Or merge pull requests without the `release` label and later run the `Auto-release on PR merge` workflow by hand from the [Actions](https://github.com/lincbrain/linc-convert/actions/workflows/release.yml) tab (`Run workflow`). It releases everything merged since the last release, with or without the `release` label.
-
-## One-time setup
-
-This step needs a repository administrator.
-
-1. **Deploy key.** The ruleset on `main` requires changes to go through pull requests, so the release workflow pushes the `CHANGELOG.md` commit and the tag with a deploy key that is allowed to bypass it:
-    - Create an SSH key pair, for example `ssh-keygen -t ed25519 -C "linc-convert release" -N "" -f release_key`.
-    - Add the public key (`release_key.pub`) as a deploy key with write access (Settings → Deploy keys → Add deploy key, and tick "Allow write access").
-    - Add the private key (`release_key`) as the Actions secret `RELEASE_DEPLOY_KEY` (Settings → Secrets and variables → Actions).
-    - In the ruleset for `main` (Settings → Rules → Rulesets), add "Deploy keys" to the bypass list, set to always allow.
-    - Delete both key files from your computer.
