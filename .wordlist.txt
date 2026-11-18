@@ -39,3 +39,8 @@ yaml
 YAML
 HiP
 microtomography
+Zenodo
+DOI
+changelog
+Changelog
+GitHub

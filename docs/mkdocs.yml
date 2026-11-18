@@ -71,6 +71,7 @@ nav:
   - PS-OCT Stitching: psoct_stitching.md
   - API: api/
   - Contribute: contribute.md
+  - Release Process: release.md
   - About: about.md
 
 extra:

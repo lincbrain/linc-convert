@@ -1,0 +1,17 @@
+{
+    "baseBranch": "main",
+    "name": "github-actions[bot]",
+    "email": "41898282+github-actions[bot]@users.noreply.github.com",
+    "noVersionPrefix": true,
+    "plugins": [
+        "protected-branch",
+        "git-tag",
+        [
+            "exec",
+            {
+                "afterPublish": "python -m build && twine upload dist/*"
+            }
+        ],
+        "released"
+    ]
+}

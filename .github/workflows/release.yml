@@ -1,0 +1,52 @@
+name: Auto-release on PR merge
+
+on:
+  # ATM, this is the closest trigger to a PR merging
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write       # push the CHANGELOG commit and tag, create the GitHub release
+  pull-requests: write  # comment on and label released PRs; open the protected-branch PR
+  issues: write         # comment on and label released issues
+  checks: write         # report required checks for the protected-branch PR
+
+jobs:
+  auto-release:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'ci skip') && !contains(github.event.head_commit.message, 'skip ci')"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history and tags for auto and poetry-dynamic-versioning
+
+      - name: Download latest auto
+        run: |
+          auto_download_url="$(curl -fsSL https://api.github.com/repos/intuit/auto/releases/latest | jq -r '.assets[] | select(.name == "auto-linux.gz") | .browser_download_url')"
+          wget -O- "$auto_download_url" | gunzip > ~/auto
+          chmod a+x ~/auto
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build & twine
+        run: python -m pip install build twine
+
+      - name: Create release
+        run: |
+          echo "@${{ github.actor }} is creating a release triggered by ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = workflow_dispatch ]
+          then opts=
+          else opts=--only-publish-with-release-label
+          fi
+          ~/auto shipit -vv $opts
+        env:
+          PROTECTED_BRANCH_REVIEWER_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
