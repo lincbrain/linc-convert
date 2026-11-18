@@ -57,14 +57,3 @@ These steps need a repository administrator, and the PyPI and Zenodo steps need 
     - If `main` also requires status checks, list them under the `requiredStatusChecks` option of the `protected-branch` plugin in `.autorc`.
 
     Without the `GH_TOKEN` secret, the plugin logs a warning and does nothing, which is fine while `main` is not protected.
-
-## Files
-
-| File                                  | Purpose                                                              |
-|---------------------------------------|----------------------------------------------------------------------|
-| `.autorc`                             | `auto` configuration: branch, tag format, plugins, PyPI upload step  |
-| `.github/workflows/release.yml`       | Runs `auto shipit` on every push to `main` and on manual runs        |
-| `.github/workflows/labels.yml`        | Requires a release label on every pull request                       |
-| `.github/workflows/create-labels.yml` | Creates the labels in the repository (run by hand)                   |
-| `.github/workflows/citation.yml`      | Validates `CITATION.cff` on every pull request                       |
-| `CITATION.cff`                        | Citation metadata for GitHub and for the Zenodo record of a release  |
