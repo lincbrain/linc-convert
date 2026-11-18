@@ -16,10 +16,9 @@ readme = "README.md"
 homepage = "https://connects.mgh.harvard.edu"
 repository = "https://github.com/lincbrain/linc-convert"
 documentation = "https://lincbrain.github.io/linc-convert"
-keywords = ["python", "package", "template"]
+keywords = ["LINC", "neuroimaging", "microscopy", "data conversion", "OME-Zarr", "NIfTI-Zarr", "Zarr"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Programming Language :: Python :: 3.10",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
