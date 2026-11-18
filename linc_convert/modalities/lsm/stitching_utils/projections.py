@@ -35,13 +35,14 @@ tile by tile.
 import os
 import shutil
 from pathlib import Path
-from typing import Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numpy as np
 import zarr
 from dask.distributed import progress
 from scipy import fft as sfft
+from scipy import ndimage
 
 from linc_convert.modalities.lsm.stitching_utils.io import start_dask
 
@@ -151,7 +152,8 @@ def _column_stats(v: np.ndarray, valid: np.ndarray, n: np.ndarray, fraction: flo
 
 
 def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
-                   sigma: Union[float, Sequence[float]] = 0.0) -> np.ndarray:
+                   sigma: Union[float, Sequence[float]] = 0.0,
+                   background: Optional[np.ndarray] = None) -> np.ndarray:
     """``max`` / ``min`` / ``minrel`` contrast of one block ``vol`` (z, y, x), uint16.
 
     Parameters
@@ -166,6 +168,10 @@ def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
     sigma : float or sequence of 3 floats
         High-pass Gaussian sigma in voxels, (z, y, x) (a single number is used for all
         three axes; 0 = no filter). ``minrel`` needs a filter.
+    background : numpy.ndarray, optional
+        The smooth background of ``vol`` (same shape), e.g. from a coarser pyramid level
+        (``CoarseBackground``). If given it replaces the Gaussian that ``sigma`` would
+        compute (``sigma`` then only says that a filter is wanted).
 
     Returns
     -------
@@ -178,7 +184,10 @@ def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
         raise ValueError("the 'minrel' projection needs a high-pass sigma > 0")
     valid = vol != 0
     n = valid.sum(axis=0)
-    if filtered:
+    if filtered and background is not None:
+        background = np.where(valid, background, 0.0).astype(np.float32)
+        residual = np.where(valid, vol.astype(np.float32) - background, 0.0).astype(np.float32)
+    elif filtered:
         residual, background = highpass(vol, sig)
     else:
         residual, background = vol.astype(np.float32), None
@@ -193,12 +202,105 @@ def contrast_block(vol: np.ndarray, kinds: Sequence[str], fraction: float = 0.1,
     return np.where(n[None] > 0, np.stack([got[k] for k in kinds]), 0.0).astype(np.float32)
 
 
+def _levels(root) -> list:
+    """Sorted pyramid levels (ints) of an OME-Zarr group whose arrays are named by level."""
+    names = [k for k, _ in root.arrays() if k.isdigit()]
+    return sorted(int(k) for k in names)
+
+
+def find_coarse_level(zarr_dir: str, group: str, sigma: Sequence[float],
+                      min_sigma: float = 1.5) -> Optional["CoarseBackground"]:
+    """The coarsest pyramid level at which a Gaussian of ``sigma`` (voxels of ``group``)
+    is still at least ``min_sigma`` voxels wide on every filtered axis, or None.
+
+    The factor of every axis is the ratio of the shapes, so it does not matter whether
+    the pyramid also halves z.
+    """
+    root = zarr.open_group(str(zarr_dir), mode="r")
+    shape0 = root[group].shape
+    best = None
+    for lev in _levels(root):
+        if str(lev) == group:
+            continue
+        shape = root[str(lev)].shape
+        f = tuple(a / b for a, b in zip(shape0, shape))
+        if all(x <= 0 or x / fa >= min_sigma for x, fa in zip(sigma, f)) \
+                and max(f) >= 1.5:
+            best = (lev, f, shape)
+    if best is None:
+        return None
+    return CoarseBackground(str(zarr_dir), best[0], best[1], tuple(sigma), tuple(shape0), tuple(best[2]))
+
+
+class CoarseBackground:
+    """Smooth background of a block of the finest level, computed on a coarser level.
+
+    The Gaussian background of the high-pass is smooth, so it can be computed on a
+    pyramid level that is ``f`` times coarser (sigma / f voxels there; the zeros of the
+    shear padding are left out of the average) and interpolated linearly to the
+    full-resolution voxels. This is much cheaper than filtering the full-resolution
+    volume. Picklable: the zarr is opened inside the worker.
+    """
+
+    def __init__(self, zarr_dir: str, level: int, factors: Sequence[float],
+                 sigma: Sequence[float], shape0: Sequence[int], shape: Sequence[int]):
+        self.zarr_dir, self.level = zarr_dir, int(level)
+        self.factors, self.sigma = tuple(factors), tuple(sigma)
+        self.shape0, self.shape = tuple(shape0), tuple(shape)
+        self.sigma_coarse = tuple(x / f if x > 0 else 0.0 for x, f in zip(sigma, factors))
+        self.halo = tuple(int(np.ceil(3.0 * x)) for x in self.sigma_coarse)
+
+    def __call__(self, lo: Sequence[int], hi: Sequence[int]) -> np.ndarray:
+        """Background of the full-resolution voxels ``lo:hi`` (absolute, per axis)."""
+        arr = zarr.open_group(self.zarr_dir, mode="r")[str(self.level)]
+        a = [int(np.floor(l / f)) - 1 for l, f in zip(lo, self.factors)]    # coarse window
+        b = [int(np.ceil(h / f)) + 1 for h, f in zip(hi, self.factors)]
+        w0 = [x - h for x, h in zip(a, self.halo)]
+        w1 = [x + h for x, h in zip(b, self.halo)]
+        r0 = [max(x, 0) for x in w0]
+        r1 = [min(x, n) for x, n in zip(w1, self.shape)]
+        data = np.asarray(arr[r0[0]:r1[0], r0[1]:r1[1], r0[2]:r1[2]], dtype=np.float32)
+        pad = [(r0[i] - w0[i], w1[i] - r1[i]) for i in range(3)]
+        if any(p[0] or p[1] for p in pad):
+            data = np.pad(data, pad, mode="symmetric")
+        valid = (data != 0).astype(np.float32)
+        num = ndimage.gaussian_filter(data * valid, self.sigma_coarse, mode="nearest")
+        den = ndimage.gaussian_filter(valid, self.sigma_coarse, mode="nearest")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            coarse = np.where(den > 1e-3, num / den, 0.0).astype(np.float32)
+        coarse = coarse[tuple(slice(h, h + (bb - aa)) for h, aa, bb in zip(self.halo, a, b))]
+        out = coarse
+        for axis in range(3):                          # linear interpolation, one axis at a time
+            x = (np.arange(lo[axis], hi[axis]) + 0.5) / self.factors[axis] - 0.5 - a[axis]
+            i0 = np.floor(x).astype(np.int64)
+            t = (x - i0).astype(np.float32)
+            n = out.shape[axis]
+            lo_i, hi_i = np.clip(i0, 0, n - 1), np.clip(i0 + 1, 0, n - 1)
+            shape_t = [1, 1, 1]; shape_t[axis] = -1
+            out = (np.take(out, lo_i, axis=axis) * (1 - t).reshape(shape_t)
+                   + np.take(out, hi_i, axis=axis) * t.reshape(shape_t))
+        return out.astype(np.float32)
+
+
+def _block_coarse(vol: np.ndarray, kinds, fraction: float, sigma, coarse: CoarseBackground,
+                  z_start: int, block_info=None) -> np.ndarray:
+    """``contrast_block`` with the background taken from a coarser pyramid level."""
+    loc = block_info[0]["array-location"]
+    lo = [loc[0][0] + z_start, loc[1][0], loc[2][0]]
+    hi = [loc[0][1] + z_start, loc[1][1], loc[2][1]]
+    return contrast_block(vol, kinds, fraction, sigma, background=coarse(lo, hi))
+
+
 def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: int = 32,
             z_start: int = 0, z_end: int = 0, fraction: float = 0.1,
-            highpass_sigma: Union[float, Sequence[float]] = 0.0) -> dict:
+            highpass_sigma: Union[float, Sequence[float]] = 0.0,
+            coarse_background: bool = True) -> dict:
     """Contrast projections over z of one stitched array: ``{kind: float32 (y, x)}``.
 
     Starts (and closes) its own dask cluster, limited to ``memory_gb``.
+    With ``coarse_background`` the smooth background of the high-pass is computed on a
+    coarser pyramid level of the same zarr when there is one at which the sigma is still
+    at least 1.5 voxels (much faster); otherwise the full-resolution volume is filtered.
     ``highpass_sigma`` is the 3-D high-pass sigma in voxels of the stored array, one
     number or (z, y, x) (0 = no filter).
     """
@@ -212,15 +314,25 @@ def project(zarr_dir: str, kinds: Sequence[str], group: str = "0", memory_gb: in
                          f"leaves no plane of the {nz} z planes")
     bz, by, bx = block_shape(stored.shape, stored.chunks)
     arr = da.from_array(stored, chunks=(bz, by, bx))[z_start:nz - z_end]
-    halo = sigma_halo(sig)
-    depth = {0: 0, 1: halo[1], 2: halo[2]}
-    if halo[1] or halo[2]:
-        arr = da.overlap.overlap(arr, depth=depth, boundary="reflect")
-    stacked = arr.map_blocks(contrast_block, kinds, fraction, sig,
-                             chunks=((len(kinds),),) + arr.chunks[1:],
-                             dtype=np.float32, meta=np.empty((0, 0, 0), np.float32))
-    if halo[1] or halo[2]:
-        stacked = da.overlap.trim_internal(stacked, depth, boundary="reflect")
+    coarse = (find_coarse_level(str(zarr_dir), group, sig)
+              if coarse_background and any(x > 0 for x in sig) else None)
+    if coarse is not None:
+        print(f"high-pass background from pyramid level {coarse.level} "
+              f"(factors {tuple(round(f, 2) for f in coarse.factors)})", flush=True)
+        halo = (0, 0, 0)
+        stacked = arr.map_blocks(_block_coarse, kinds, fraction, sig, coarse, z_start,
+                                 chunks=((len(kinds),),) + arr.chunks[1:],
+                                 dtype=np.float32, meta=np.empty((0, 0, 0), np.float32))
+    else:
+        halo = sigma_halo(sig)
+        depth = {0: 0, 1: halo[1], 2: halo[2]}
+        if halo[1] or halo[2]:
+            arr = da.overlap.overlap(arr, depth=depth, boundary="reflect")
+        stacked = arr.map_blocks(contrast_block, kinds, fraction, sig,
+                                 chunks=((len(kinds),),) + arr.chunks[1:],
+                                 dtype=np.float32, meta=np.empty((0, 0, 0), np.float32))
+        if halo[1] or halo[2]:
+            stacked = da.overlap.trim_internal(stacked, depth, boundary="reflect")
     keep_gb = 4.0 * len(kinds) * ny * nx / 2 ** 30 * 1.2 + 1.0
     task_gb = BYTES_PER_VOXEL * bz * (by + 2 * halo[1]) * (bx + 2 * halo[2]) / 2 ** 30
     client = start_dask(memory_gb, task_gb=task_gb, reserve_gb=keep_gb)
