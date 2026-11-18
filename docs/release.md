@@ -6,7 +6,9 @@ Releases of `linc-convert` are automated with [auto](https://intuit.github.io/au
 2. Updates `CHANGELOG.md` and tags the commit with the version, without a `v` prefix (e.g. `0.1.0`).
 3. Builds the package and publishes it to [PyPI](https://pypi.org/project/linc-convert/).
 4. Creates a [GitHub release](https://github.com/lincbrain/linc-convert/releases) and comments on the released pull requests.
-5. Zenodo archives the GitHub release and mints a DOI for it, using the metadata in `.zenodo.json`.
+5. Zenodo archives the GitHub release and mints a DOI for it, using the title, abstract, authors, keywords and license in `CITATION.cff`.
+
+`CITATION.cff` also gives the repository's "Cite this repository" button on GitHub. To add or change an author, edit `CITATION.cff` (and `authors` in `pyproject.toml` for PyPI). Leave out `version` and `date-released`: releases don't update them, and Zenodo takes the version from the tag.
 
 The package version is not stored in the code: `poetry-dynamic-versioning` sets it from the Git tag when the package is built.
 
@@ -48,7 +50,7 @@ These steps need a repository administrator, and the PyPI and Zenodo steps need 
 
 1. **Labels.** Run the `Create release labels` workflow from the Actions tab. This creates the labels above in the repository. Run it again if the labels in `.autorc` change.
 2. **PyPI.** On PyPI, create an API token scoped to the `linc-convert` project. Add it to the repository as the Actions secret `PYPI_TOKEN` (Settings → Secrets and variables → Actions).
-3. **Zenodo.** Log in to [Zenodo](https://zenodo.org) with a GitHub account that owns the `lincbrain` organization, open the GitHub settings page (`https://zenodo.org/account/settings/github/`), and turn on `lincbrain/linc-convert`. Zenodo then archives every published GitHub release. After the first release, add the Zenodo concept DOI badge to `README.md`.
+3. **Zenodo.** Log in to [Zenodo](https://zenodo.org) with a GitHub account that owns the `lincbrain` organization, open the GitHub settings page (`https://zenodo.org/account/settings/github/`), and turn on `lincbrain/linc-convert`. Zenodo then archives every published GitHub release. After the first release, take the concept DOI (the one that covers all versions) from the Zenodo record, add it as `doi:` in `CITATION.cff`, and add its badge to `README.md`.
 4. **Protected branch.** The release workflow pushes the `CHANGELOG.md` commit and the tag to `main` with the workflow's own `GITHUB_TOKEN`. If `main` requires pull request reviews, also:
     - Create a personal access token for a bot or maintainer account that has write access to the repository, and add it as the Actions secret `GH_TOKEN`. The `protected-branch` plugin uses it to approve a temporary pull request holding the release commit, which lets the push through.
     - Turn on "Allow GitHub Actions to create and approve pull requests" (Settings → Actions → General).
@@ -64,4 +66,5 @@ These steps need a repository administrator, and the PyPI and Zenodo steps need 
 | `.github/workflows/release.yml`       | Runs `auto shipit` on every push to `main` and on manual runs        |
 | `.github/workflows/labels.yml`        | Requires a release label on every pull request                       |
 | `.github/workflows/create-labels.yml` | Creates the labels in the repository (run by hand)                   |
-| `.zenodo.json`                        | Metadata for the Zenodo record of each release                       |
+| `.github/workflows/citation.yml`      | Validates `CITATION.cff` on pull requests that change it             |
+| `CITATION.cff`                        | Citation metadata for GitHub and for the Zenodo record of a release  |
