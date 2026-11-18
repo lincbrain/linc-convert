@@ -1,7 +1,5 @@
 name: Validate CITATION.cff
 
-# Zenodo reads CITATION.cff when archiving each GitHub release, and fails to
-# archive a release whose CITATION.cff it cannot load, so check it first.
 on:
   pull_request:
     paths:
