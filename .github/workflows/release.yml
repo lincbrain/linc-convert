@@ -12,6 +12,10 @@ permissions:
   issues: write         # comment on and label released issues
   checks: write         # report required checks for the protected-branch PR
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   AUTO_VERSION: v11.3.6
 
