@@ -20,6 +20,14 @@ PathLike = Union[str, Path]
 
 
 STORED_AXES_ENV = "LINC_LSM_STORED_AXES"
+FLIP_Y_ENV = "LINC_LSM_FLIP_Y"
+
+
+def flip_y_enabled() -> bool:
+    """True if ``LINC_LSM_FLIP_Y`` is 1/true/yes: every chunk is mirrored along the code y
+    axis (the stitched lateral axis) as soon as it is opened, so all steps see the same
+    orientation. Default: off (M2)."""
+    return os.environ.get(FLIP_Y_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def stored_axes_permutation() -> Tuple[int, int, int]:
@@ -111,7 +119,7 @@ def open_tile_array(path: PathLike, layer: int = 0,
     Returns
     -------
     dask.array.Array
-        Lazy volume, shape (Z, Y, X) (axes reordered if ``LINC_LSM_STORED_AXES`` is set,
+        Lazy volume, shape (Z, Y, X) (axes reordered if ``LINC_LSM_STORED_AXES`` is set, y mirrored if ``LINC_LSM_FLIP_Y`` is set,
         see ``stored_axes_permutation``; ``chunks`` and ``block`` are then in (Z, Y, X)).
 
     Raises
@@ -131,12 +139,14 @@ def open_tile_array(path: PathLike, layer: int = 0,
         chunks = coarse_chunks(stored_chunks, shape, block)
     chunks = tuple(chunks) if chunks else stored_chunks
     if perm == (0, 1, 2):
-        return da.asarray(arr, chunks=chunks)
-    # dask chunks of the stored array, then reorder the axes
-    chunks_stored = [0, 0, 0]
-    for code_axis, stored_axis in enumerate(perm):
-        chunks_stored[stored_axis] = chunks[code_axis]
-    return da.asarray(arr, chunks=tuple(chunks_stored)).transpose(perm)
+        out = da.asarray(arr, chunks=chunks)
+    else:
+        # dask chunks of the stored array, then reorder the axes
+        chunks_stored = [0, 0, 0]
+        for code_axis, stored_axis in enumerate(perm):
+            chunks_stored[stored_axis] = chunks[code_axis]
+        out = da.asarray(arr, chunks=tuple(chunks_stored)).transpose(perm)
+    return out[:, ::-1, :] if flip_y_enabled() else out
 
 
 def level_range(rng: Sequence[int], size: int, layer: int) -> Tuple[int, int]:
