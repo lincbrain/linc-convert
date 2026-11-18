@@ -6,11 +6,7 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: write       # create the GitHub release
-  pull-requests: write  # comment on and label released PRs
-  issues: write         # comment on and label released issues
-  actions: write        # start the Docker image build for the release
+permissions: {}
 
 concurrency:
   group: release
@@ -22,6 +18,10 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
     outputs:
       version: ${{ steps.auto-version.outputs.version }}
       opts: ${{ steps.auto-version.outputs.opts }}
@@ -54,6 +54,11 @@ jobs:
     if: needs.check.outputs.version != ''
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: write       # create the GitHub release
+      pull-requests: write  # comment on and label released PRs
+      issues: write         # comment on and label released issues
+      actions: write        # start the Docker image build for the release
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
