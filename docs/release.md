@@ -10,8 +10,6 @@ Releases of `linc-convert` are automated with [auto](https://intuit.github.io/au
 
 `CITATION.cff` also gives the repository's "Cite this repository" button on GitHub. To add or change an author, edit `CITATION.cff` (and `authors` in `pyproject.toml` for PyPI). Leave out `version` and `date-released`: releases don't update them, and Zenodo takes the version from the tag.
 
-The package version is not stored in the code: `poetry-dynamic-versioning` sets it from the Git tag when the package is built.
-
 ## Label pull requests
 
 Every pull request needs one of the labels below. The `Check PR Labels` workflow fails until one is added.
