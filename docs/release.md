@@ -46,12 +46,11 @@ A release is only made if at least one unreleased pull request has a label that 
 
 ## One-time setup
 
-These steps need a repository administrator, and the PyPI step needs an owner of that project.
+These steps need a repository administrator.
 
 1. **Labels.** Run the `Create release labels` workflow from the Actions tab. This creates the labels above in the repository. Run it again if the labels in `.autorc` change.
-2. **PyPI.** On PyPI, create an API token scoped to the `linc-convert` project. Add it to the repository as the Actions secret `PYPI_TOKEN` (Settings → Secrets and variables → Actions).
-3. **Zenodo.** Zenodo archives every published GitHub release. After the first release, take the concept DOI (the one that covers all versions) from the Zenodo record, add it as `doi:` in `CITATION.cff`, and add its badge to `README.md`.
-4. **Protected branch.** The release workflow pushes the `CHANGELOG.md` commit and the tag to `main` with the workflow's own `GITHUB_TOKEN`. If `main` requires pull request reviews, also:
+2. **Zenodo.** Zenodo archives every published GitHub release. After the first release, take the concept DOI (the one that covers all versions) from the Zenodo record, add it as `doi:` in `CITATION.cff`, and add its badge to `README.md`.
+3. **Protected branch.** The release workflow pushes the `CHANGELOG.md` commit and the tag to `main` with the workflow's own `GITHUB_TOKEN`. If `main` requires pull request reviews, also:
     - Create a personal access token for a bot or maintainer account that has write access to the repository, and add it as the Actions secret `GH_TOKEN`. The `protected-branch` plugin uses it to approve a temporary pull request holding the release commit, which lets the push through.
     - Turn on "Allow GitHub Actions to create and approve pull requests" (Settings → Actions → General).
     - If `main` also requires status checks, list them under the `requiredStatusChecks` option of the `protected-branch` plugin in `.autorc`.
