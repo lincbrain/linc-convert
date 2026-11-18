@@ -1,0 +1,96 @@
+name: Auto-release on PR merge
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  AUTO_VERSION: v11.3.6
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      version: ${{ steps.auto-version.outputs.version }}
+      opts: ${{ steps.auto-version.outputs.opts }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download auto
+        run: |
+          wget -O- "https://github.com/intuit/auto/releases/download/$AUTO_VERSION/auto-linux.gz" | gunzip > ~/auto
+          chmod a+x ~/auto
+
+      - name: Check whether a release is due
+        id: auto-version
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]
+          then opts=
+          else opts=--only-publish-with-release-label
+          fi
+          version="$(~/auto version $opts)"
+          echo "opts=$opts" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-release:
+    needs: check
+    if: needs.check.outputs.version != ''
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write       # create the GitHub release
+      pull-requests: write  # comment on and label released PRs
+      issues: write         # comment on and label released issues
+      actions: write        # start the Docker image build for the release
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+
+      - name: Download auto
+        run: |
+          wget -O- "https://github.com/intuit/auto/releases/download/$AUTO_VERSION/auto-linux.gz" | gunzip > ~/auto
+          chmod a+x ~/auto
+
+      - name: Check the deploy key can push
+        run: git push --dry-run "git@github.com:${{ github.repository }}.git" HEAD:main
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: python -m pip install build==1.6.1 twine==7.0.0 poetry-core==1.9.1 poetry-dynamic-versioning==1.10.1
+
+      - name: Create release
+        run: |
+          echo "@${{ github.actor }} is creating a release triggered by ${{ github.event_name }}"
+          ~/auto shipit -vv ${{ needs.check.outputs.opts }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Build the Docker image for the release
+        run: gh workflow run docker-build.yml --ref "$(git describe --tags --exact-match)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

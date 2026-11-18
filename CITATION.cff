@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "linc-convert: Data conversion tools for the LINC project"
+abstract: >-
+  linc-convert provides command-line tools that convert dark-field microscopy,
+  light-sheet microscopy, polarization-sensitive optical coherence tomography
+  (PS-OCT), and Webknossos annotation data to OME-Zarr and NIfTI-Zarr for the
+  LINC project.
+authors:
+  - given-names: Yaël
+    family-names: Balbastre
+    orcid: https://orcid.org/0000-0001-8758-9978
+    affiliation: "University College London, London, UK"
+  - given-names: Kaidong
+    family-names: Chai
+    orcid: https://orcid.org/0009-0001-4654-4092
+    affiliation: "Athinoula A. Martinos Center for Biomedical Imaging, Massachusetts General Hospital, Boston, MA, USA"
+  - given-names: Kabilar
+    family-names: Gunalan
+    orcid: https://orcid.org/0000-0001-6964-4865
+    affiliation: "McGovern Institute for Brain Research, Massachusetts Institute of Technology, Cambridge, MA, USA"
+repository-code: "https://github.com/lincbrain/linc-convert"
+url: "https://convert.lincbrain.org"
+license: Apache-2.0
+keywords:
+  - LINC
+  - neuroimaging
+  - microscopy
+  - data conversion
+  - OME-Zarr
+  - NIfTI-Zarr
+  - Zarr

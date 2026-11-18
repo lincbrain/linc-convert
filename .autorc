@@ -1,0 +1,16 @@
+{
+    "baseBranch": "main",
+    "name": "github-actions[bot]",
+    "email": "41898282+github-actions[bot]@users.noreply.github.com",
+    "noVersionPrefix": true,
+    "plugins": [
+        "git-tag",
+        [
+            "exec",
+            {
+                "afterVersion": "[ \"$ARG_0\" = '{\"dryRun\":true}' ] || (python -m build --no-isolation && twine upload dist/*)"
+            }
+        ],
+        "released"
+    ]
+}

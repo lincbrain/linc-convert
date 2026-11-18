@@ -1,0 +1,30 @@
+name: Create release labels
+
+# Run once to create the labels that auto uses to choose the version bump
+# and the changelog section of each PR.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write  # labels are managed through the issues API
+
+env:
+  AUTO_VERSION: v11.3.6
+
+jobs:
+  create-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Download auto
+        run: |
+          wget -O- "https://github.com/intuit/auto/releases/download/$AUTO_VERSION/auto-linux.gz" | gunzip > ~/auto
+          chmod a+x ~/auto
+
+      - name: Create labels
+        run: ~/auto create-labels -vv
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

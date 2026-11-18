@@ -1,0 +1,47 @@
+name: Validate CITATION.cff
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths:
+      - CITATION.cff
+      - .github/workflows/citation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install cffconvert, idutils and ruamel.yaml
+        run: python -m pip install cffconvert==2.0.0 idutils==1.7.1 ruamel.yaml==0.19.1
+
+      - name: Validate CITATION.cff
+        run: cffconvert --validate --infile CITATION.cff
+
+      - name: Check ORCIDs
+        run: |
+          python - <<'EOF'
+          import sys
+
+          import idutils
+          from ruamel.yaml import YAML
+
+          cff = YAML(typ="safe").load(open("CITATION.cff", encoding="utf-8"))
+          bad = [a["orcid"] for a in cff.get("authors", []) if a.get("orcid") and not idutils.is_orcid(a["orcid"])]
+          if bad:
+              sys.exit("Invalid ORCID: " + ", ".join(bad))
+          print("All ORCIDs are valid.")
+          EOF

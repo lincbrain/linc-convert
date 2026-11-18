@@ -1,6 +1,6 @@
 # Installation
 
-The `linc-convert` package is available through multiple installation methods. Note that the package is not yet available on PyPI, so all installation methods install directly from the GitHub repository.
+The `linc-convert` package is available on [PyPI](https://pypi.org/project/linc-convert/) and can be installed with pip or pipx.
 
 ## Installation with pip
 
@@ -14,7 +14,7 @@ The `linc-convert` package is available through multiple installation methods. N
    ```
 3. Install the `linc-convert` package in your environment
    ```bash
-   pip install "linc-convert[all] @ git+https://github.com/lincbrain/linc-convert.git@main"
+   pip install "linc-convert[all]"
    ```
    If you don't want to install all dependencies, you can install the dependencies for your specific use case. Replace `all` in the above command with:
    - `df` for dark-field microscopy
@@ -22,6 +22,11 @@ The `linc-convert` package is available through multiple installation methods. N
    - `psoct` for polarization-sensitive optical coherence tomography
    - `wk` for Webknossos annotations
    - `ts` for the TensorStore backend
+
+   To install the latest development version from GitHub instead, run:
+   ```bash
+   pip install "linc-convert[all] @ git+https://github.com/lincbrain/linc-convert.git@main"
+   ```
 4. Run the command-line interface to ensure that installation was successful
    ```bash
    linc-convert --help
@@ -47,13 +52,13 @@ The `linc-convert` package is available through multiple installation methods. N
 
 2. Install `linc-convert` with pipx:
    ```bash
+   pipx install "linc-convert[all]"
+   ```
+   To install the latest development version from GitHub instead, run:
+   ```bash
    pipx install "linc-convert[all] @ git+https://github.com/lincbrain/linc-convert.git@main"
    ```
 3. Verify the installation:
    ```bash
    linc-convert --help
    ```
-
-## Installation with Docker or Apptainer/Singularity
-
-For container-based installations using Docker, Apptainer, or Singularity, please refer to the [Container Installation Guide](./container.md).
