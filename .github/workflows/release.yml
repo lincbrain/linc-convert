@@ -10,6 +10,7 @@ permissions:
   contents: write       # create the GitHub release
   pull-requests: write  # comment on and label released PRs
   issues: write         # comment on and label released issues
+  actions: write        # start the Docker image build for the release
 
 concurrency:
   group: release
@@ -68,3 +69,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Build the Docker image for the release
+        if: steps.auto-version.outputs.version != ''
+        run: gh workflow run docker-build.yml --ref "$(git describe --tags --exact-match)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
