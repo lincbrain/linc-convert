@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "linc-convert"
-version = "0.0.1"
+version = "0.0.0"
 description = "Data conversion tools for the LINC project."
 authors = [
     "Yaël Balbastre <yael.balbastre@gmail.com>",

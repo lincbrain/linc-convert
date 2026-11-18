@@ -35,7 +35,7 @@ RUN poetry lock
 # Install the application itself
 #RUN poetry install --no-dev --extras all
 # Set the package version from the VERSION build argument (docker-build.yml passes it in).
-# Without it, the wheel gets the placeholder version 0.0.1 from pyproject.toml.
+# Without it, the wheel gets the placeholder version 0.0.0 from pyproject.toml.
 ARG VERSION
 RUN if [ -n "$VERSION" ]; then poetry version "$VERSION"; fi
 RUN poetry build -f wheel
