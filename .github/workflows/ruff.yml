@@ -13,7 +13,7 @@ jobs:
         with:
           args: "format"
           changed-files: "true"
-      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v1
         with:
           args: "check --fix"
           changed-files: "true"
