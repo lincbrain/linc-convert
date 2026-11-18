@@ -8,7 +8,7 @@
         [
             "exec",
             {
-                "afterPublish": "python -m build && twine upload dist/*"
+                "afterVersion": "[ \"$ARG_0\" = '{\"dryRun\":true}' ] || (python -m build && twine upload dist/*)"
             }
         ],
         "released"
