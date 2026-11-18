@@ -20,7 +20,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history and tags for auto and poetry-dynamic-versioning
+          fetch-depth: 0
 
       - name: Download latest auto
         run: |
