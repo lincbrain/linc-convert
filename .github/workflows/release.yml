@@ -46,6 +46,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check the deploy key can push
+        if: steps.auto-version.outputs.version != ''
+        run: git push --dry-run "git@github.com:${{ github.repository }}.git" HEAD:main
+
       - name: Set up Python
         if: steps.auto-version.outputs.version != ''
         uses: actions/setup-python@v5
