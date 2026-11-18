@@ -26,7 +26,7 @@ Every pull request needs one of the labels below. The `Check PR Labels` workflow
 Two more labels control when a release happens:
 
 - `release`: publish a release as soon as this pull request is merged.
-- `skip-release`: never publish a release for this pull request.
+- `skip-release`: stop a manual run of the release workflow from publishing while this is the last pull request merged. Its changes still go out with the next release.
 
 ## Make a release
 
