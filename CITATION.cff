@@ -8,12 +8,18 @@ abstract: >-
   (PS-OCT), and Webknossos annotation data to OME-Zarr and NIfTI-Zarr for the
   LINC project.
 authors:
-  - given-names: Yael
+  - given-names: Yaël
     family-names: Balbastre
+    orcid: https://orcid.org/0000-0001-8758-9978
+    affiliation: "University College London, London, UK"
   - given-names: Kaidong
     family-names: Chai
+    orcid: https://orcid.org/0009-0001-4654-4092
+    affiliation: "Athinoula A. Martinos Center for Biomedical Imaging, Massachusetts General Hospital, Boston, MA, USA"
   - given-names: Kabilar
     family-names: Gunalan
+    orcid: https://orcid.org/0000-0001-6964-4865
+    affiliation: "McGovern Institute for Brain Research, Massachusetts Institute of Technology, Cambridge, MA, USA"
 repository-code: "https://github.com/lincbrain/linc-convert"
 url: "https://convert.lincbrain.org"
 license: Apache-2.0
