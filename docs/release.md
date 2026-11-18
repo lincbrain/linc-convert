@@ -32,5 +32,5 @@ Two more labels control when a release happens:
 
 Either:
 
-- Add the `release` label to a pull request before merging it. The `Auto-release on PR merge` workflow then releases it, together with any unreleased pull requests merged before it. A release is only made if at least one unreleased pull request has a label that bumps the version (`major`, `minor`, `patch` or `performance`), or if the most recently merged pull request has none of the labels in the table, which counts as `patch`.
+- Add the `release` label to a pull request before merging it. Merging it releases it together with any earlier unreleased pull requests, as long as at least one of them is labeled `major`, `minor`, `patch` or `performance`. If the last pull request merged has none of the labels in the table, it counts as `patch`.
 - Or merge pull requests without the `release` label and later run the `Auto-release on PR merge` workflow by hand from the [Actions](https://github.com/lincbrain/linc-convert/actions/workflows/release.yml) tab (`Run workflow`). It releases everything merged since the last release, with or without the `release` label.
