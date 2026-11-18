@@ -5,4 +5,4 @@
 
 Documentation is available at: https://convert.lincbrain.org
 
-![diagram](./docs/img/linc-convert.png)
+![diagram](https://raw.githubusercontent.com/lincbrain/linc-convert/main/docs/img/linc-convert.png)
