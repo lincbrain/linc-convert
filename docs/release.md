@@ -1,6 +1,6 @@
 # Release process
 
-Releases of `linc-convert` are automated with [auto](https://intuit.github.io/auto/), following the setup used by the [DANDI](https://github.com/dandi/dandi-cli) project. Each release:
+Releases of `linc-convert` are automated with [auto](https://intuit.github.io/auto/). Each release:
 
 1. Picks the next version from the labels of the pull requests merged since the last release.
 2. Updates `CHANGELOG.md` and tags the commit with the version, without a `v` prefix (e.g. `0.1.0`).
