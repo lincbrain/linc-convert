@@ -34,6 +34,9 @@ COPY . .
 RUN poetry lock
 # Install the application itself
 #RUN poetry install --no-dev --extras all
+# Set the package version passed in by the build (Poetry ignores the dynamic versioning backend)
+ARG VERSION
+RUN if [ -n "$VERSION" ]; then poetry version "$VERSION"; fi
 RUN poetry build -f wheel
 RUN ./.venv/bin/pip install dist/*.whl
 # ----------------------------------------------------------------------------
