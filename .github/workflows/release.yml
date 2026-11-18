@@ -67,5 +67,4 @@ jobs:
           ~/auto shipit -vv ${{ steps.auto-version.outputs.opts }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
