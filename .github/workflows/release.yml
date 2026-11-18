@@ -7,10 +7,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write       # push the CHANGELOG commit and tag, create the GitHub release
-  pull-requests: write  # comment on and label released PRs; open the protected-branch PR
+  contents: write       # create the GitHub release
+  pull-requests: write  # comment on and label released PRs
   issues: write         # comment on and label released issues
-  checks: write         # report required checks for the protected-branch PR
 
 concurrency:
   group: release
@@ -27,6 +26,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Download auto
         run: |
@@ -50,7 +50,6 @@ jobs:
           fi
           ~/auto shipit -vv $opts
         env:
-          PROTECTED_BRANCH_REVIEWER_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

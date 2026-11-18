@@ -39,9 +39,9 @@ Either:
 
 This step needs a repository administrator.
 
-1. **Protected branch.** The release workflow pushes the `CHANGELOG.md` commit and the tag to `main` with the workflow's own `GITHUB_TOKEN`. If `main` requires pull request reviews, also:
-    - Create a personal access token for a bot or maintainer account that has write access to the repository, and add it as the Actions secret `GH_TOKEN`. The `protected-branch` plugin uses it to approve a temporary pull request holding the release commit, which lets the push through.
-    - Turn on "Allow GitHub Actions to create and approve pull requests" (Settings → Actions → General).
-    - If `main` also requires status checks, list them under the `requiredStatusChecks` option of the `protected-branch` plugin in `.autorc`.
-
-    Without the `GH_TOKEN` secret, the plugin logs a warning and does nothing, which is fine while `main` is not protected.
+1. **Deploy key.** The ruleset on `main` requires changes to go through pull requests, so the release workflow pushes the `CHANGELOG.md` commit and the tag with a deploy key that is allowed to bypass it:
+    - Create an SSH key pair, for example `ssh-keygen -t ed25519 -C "linc-convert release" -N "" -f release_key`.
+    - Add the public key (`release_key.pub`) as a deploy key with write access (Settings → Deploy keys → Add deploy key, and tick "Allow write access").
+    - Add the private key (`release_key`) as the Actions secret `RELEASE_DEPLOY_KEY` (Settings → Secrets and variables → Actions).
+    - In the ruleset for `main` (Settings → Rules → Rulesets), add "Deploy keys" to the bypass list, set to always allow.
+    - Delete both key files from your computer.
