@@ -8,8 +8,8 @@ from linc_convert.modalities.lsm.stitching_utils.corrections import MIN_SCALER
 
 RAMP_POWER = 1               # linear ramp only: 1 = linear blend across the overlap; larger =
                              #   longer plateau at 0.5
-RAMP_SHAPES = ("cosine", "linear")
-CONFIDENCE_POWER = 0.2       # how much the size of a row's correction (its multiplier)
+RAMP_SHAPES = ("cosine", "linear", "step")
+CONFIDENCE_POWER = 0.5       # how much the size of a row's correction (its multiplier)
                              #   counts: the confidence is (1 / multiplier) ** this.
                              #   0 = not at all (pure ramp); it was 2.
 
@@ -37,7 +37,9 @@ def ramp_weights(n: int, shape: str = "cosine") -> np.ndarray:
     ``"cosine"``: ``0.5 - 0.5 cos(pi t)`` for ``t`` from 0 to 1 (a raised cosine: the
     weights of the two chunks always add to 1, and the ramp is flat at both ends, so
     there is no visible kink where the blend starts and ends). ``"linear"``: ``t``
-    (with ``RAMP_POWER`` 1).
+    (with ``RAMP_POWER`` 1). ``"step"``: no blending, the previous chunk is used up to the
+    midpoint of the overlap and the new one from there on (a hard cut; the confidence
+    weights then only matter where one of the two has no data).
 
     Raises
     ------
@@ -45,6 +47,8 @@ def ramp_weights(n: int, shape: str = "cosine") -> np.ndarray:
         If ``shape`` is unknown.
     """
     t = np.linspace(0, 1, n)
+    if shape == "step":
+        return (np.arange(n) >= n / 2).astype(np.float64)
     if shape == "cosine":
         return 0.5 - 0.5 * np.cos(np.pi * t)
     if shape == "linear":
@@ -74,7 +78,7 @@ def blend_overlap(prev: da.Array, cur: da.Array, w_prev: np.ndarray,
         Mosaic z size.
     overlap : int
         Number of overlapping rows.
-    ramp : {"cosine", "linear"}, default="cosine"
+    ramp : {"cosine", "linear", "step"}, default="cosine"
         Shape of the blend ramp (see ``ramp_weights``).
 
     Returns

@@ -269,7 +269,7 @@ def main() -> None:
     # --min_x / --max_x are in stitching coordinates (x of the sheared mosaic, x' = x +
     # shear_x * z). A chunk column x is inside the window at every z only for
     # min_x <= x and x < max_x - shear_x * (Z - 1), so that is the range used.
-    shift = int(math.ceil(get_skew_shear(scan) * (sz - 1)))
+    shift = int(math.ceil(abs(get_skew_shear(scan)) * (sz - 1)))
     x0 = 0 if args.min_x is None else max(0, int(round(args.min_x / scale)))
     x1 = sx if args.max_x is None else int(round(args.max_x / scale)) - shift
     x1 = min(sx, x1)

@@ -28,6 +28,8 @@ import scipy.ndimage
 import yaml
 from dask_image.ndinterp import affine_transform
 
+from linc_convert.modalities.lsm.stitching_utils.corrections import x_pad
+
 
 @dataclass
 class ChannelRegistration:
@@ -115,7 +117,8 @@ def load_channel_registration(path: str) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _shear_matrix(shear_x: float, shear_z: float) -> np.ndarray:
-    """``S`` of ``shear_volume`` in (z, y, x): ``z' = z + shear_z y``, ``x' = x + shear_x z``."""
+    """``S`` of ``shear_volume`` in (z, y, x): ``z' = z + shear_z y``, ``x' = x + shear_x z``
+    (plus the x shift ``x_pad`` of a negative ``shear_x``, which is not part of ``S``)."""
     return np.array([[1.0, shear_z, 0.0], [0.0, 1.0, 0.0], [shear_x, 0.0, 1.0]])
 
 
@@ -141,7 +144,8 @@ def sampling_transform(reg: ChannelRegistration, shear_x: float, shear_z: float,
         3 x 3 and length 3.
     """
     shear = _shear_matrix(shear_x, shear_z)
-    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0, 0.0])
+    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0,
+                    float(x_pad(shear_x, z_in_ref))])
     a_inv = np.linalg.inv(reg.matrix)
     s_inv = np.linalg.inv(shear)
     origin = np.asarray(reg.origin, dtype=float)
@@ -155,7 +159,8 @@ def _crop_box_sampling(shear_x: float, shear_z: float, z_in_ref: int,
     """Sampling transform of the shear alone: output voxel -> voxel of the reference
     stitching crop (before the shear). Used to keep only what lies inside that crop."""
     shear = _shear_matrix(shear_x, shear_z)
-    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0, 0.0])
+    pad = np.array([(z_out - z_in_ref) if shear_z < 0 else 0.0, 0.0,
+                    float(x_pad(shear_x, z_in_ref))])
     s_inv = np.linalg.inv(shear)
     return s_inv, -s_inv @ pad
 
@@ -236,7 +241,9 @@ def registered_weights(weight: np.ndarray, reg: ChannelRegistration, shear_x: fl
 
 def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int],
                      ref_stitch_z: Tuple[Optional[int], Optional[int]], ref_depth: int,
-                     ref_flip: bool, layer: int) -> Tuple[float, float, float]:
+                     ref_flip: bool, layer: int,
+                     ref_split_z: Tuple[Optional[int], Optional[int]] = (None, None)
+                     ) -> Tuple[float, float, float]:
     """Corner (z, y, 0) of the reference stitching crop in its split, flipped frame.
 
     Parameters
@@ -249,6 +256,10 @@ def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int]
         reference, in voxels of the layer; None for the whole depth.
     ref_depth : int
         z size of the reference's raw chunk at the layer.
+    ref_split_z : tuple of int or None, optional
+        ``(lo, hi)`` of the split z range in the RAW z, in voxels of the layer, when the
+        channels are split along z (default: no split in z, the whole depth). The
+        stitching z range lies inside it and defaults to it.
     ref_flip : bool
         Whether the reference's camera flips z.
     layer : int
@@ -259,10 +270,13 @@ def reference_origin(ref_split_y: Tuple[int, int], ref_stitch_y: Tuple[int, int]
     tuple of float
         (z, y, 0).
     """
+    s_lo, s_hi = ref_split_z
+    if s_lo is None or s_hi is None:
+        s_lo, s_hi = 0, ref_depth
     z_lo, z_hi = ref_stitch_z
     if z_lo is None or z_hi is None:
-        z_lo, z_hi = 0, ref_depth
-    oz = (ref_depth - z_hi) if ref_flip else z_lo
+        z_lo, z_hi = s_lo, s_hi
+    oz = (s_hi - z_hi) if ref_flip else (z_lo - s_lo)
     return float(oz), float(ref_stitch_y[0] - ref_split_y[0]), 0.0
 
 

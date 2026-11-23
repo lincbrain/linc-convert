@@ -120,7 +120,7 @@ def load_registration_volume(path: str, slice_number: int, camera: int, channel:
                          f"{crop_kind!r}")
     arr = open_tile_array(path, layer)
     crop = get_crop(params, camera, slice_number, channel,
-                    kind="splitCrop", include_z=False)
+                    kind="splitCrop", include_z=True)
     flip = get_vertical_flip(params, camera)
     vol = crop_and_flip(arr, crop, flip, layer)
     full_vol = vol
@@ -138,8 +138,11 @@ def load_registration_volume(path: str, slice_number: int, camera: int, channel:
         split_y = level_range((crop[2], crop[3]), raw_y, layer)
         sz = (None, None) if z0 is None or z1 is None else level_range(
             (z0, z1), raw_z, layer)
-        oz, oy, _ = reference_origin(split_y, sy, sz, raw_z, flip, layer)
-        hz = raw_z if sz[0] is None else sz[1] - sz[0]
+        split_z = (None, None) if crop[0] is None or crop[1] is None else level_range(
+            (crop[0], crop[1]), raw_z, layer)
+        oz, oy, _ = reference_origin(split_y, sy, sz, raw_z, flip, layer, split_z)
+        hz = (raw_z if split_z[0] is None else split_z[1] - split_z[0]) \
+            if sz[0] is None else sz[1] - sz[0]
         oz, oy, hz, hy = int(oz), int(oy), int(hz), int(sy[1] - sy[0])
         vol = vol[oz:oz + hz, oy:oy + hy]
         if noise is not None:
