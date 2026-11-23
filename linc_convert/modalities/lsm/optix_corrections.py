@@ -14,6 +14,7 @@ import numpy as np
 import yaml
 
 from linc_convert.modalities.lsm.cli import lsm
+from linc_convert.modalities.lsm.create_corrections import _auto_reference_tiles
 from linc_convert.modalities.lsm.stitching_utils.corrections import (
     compute_noise_map,
     correction_paths,
@@ -72,6 +73,8 @@ def optix_corrections_cmd(
     zy_threshold_multiplier: float = 1.1, crop_kind: str = "stitchingCrop",
     gain: Optional[float] = None, max_iterations: Optional[int] = None,
     dark_source: str = "estimate", only_channel: Optional[str] = None, force: bool = False,
+    auto_reference_tiles: bool = False, n_reference_tiles: int = 8,
+    min_tissue_fraction: float = 0.9, edge_margin: int = 3, auto_scan_layer: int = 3,
 ) -> None:
     """Fit CIDRE, IlluminationFunction or GammaMixture and write noise / scaler maps.
 
@@ -94,6 +97,14 @@ def optix_corrections_cmd(
         1-based tile numbers the estimator is fitted on.
     tiles_file : str, optional
         YAML with a ``tiles`` list (``pick_tissue_chunks``); used when ``tiles`` is not given.
+    auto_reference_tiles : bool, default=False
+        Pick the tiles exactly as ``create_corrections --auto_reference_tiles`` does (tissue
+        rows scanned at ``auto_scan_layer``, tiles with at least ``min_tissue_fraction`` of rows
+        in tissue, ``edge_margin`` outermost dropped, ``n_reference_tiles`` evenly spread).
+        Used when neither ``tiles`` nor ``tiles_file`` is given.
+    n_reference_tiles, min_tissue_fraction, edge_margin, auto_scan_layer
+        The settings of ``auto_reference_tiles`` (same meaning and defaults as in
+        ``create_corrections``).
     layer : int, default=0
         Pyramid level the maps are made for (the one the stitch runs at). 0 = full resolution.
     fit_layer : int, default=2
@@ -137,8 +148,8 @@ def optix_corrections_cmd(
     if not tiles and tiles_file:
         with open(tiles_file) as f:
             tiles = list(yaml.safe_load(f)["tiles"])
-    if not tiles:
-        raise ValueError("give tiles or tiles_file")
+    if not tiles and not auto_reference_tiles:
+        raise ValueError("give tiles or tiles_file (or set auto_reference_tiles)")
     with open(yaml_path) as f:
         params = yaml.safe_load(f)
     channels = get_channel_names(params, camera_id)
@@ -147,6 +158,16 @@ def optix_corrections_cmd(
             raise ValueError(f"only_channel {only_channel!r} is not in {channels}")
         channels = [only_channel]
     all_paths = discover_tile_paths(input_path, camera_id)
+    if not tiles:
+        crops_all = get_crops(params, camera_id, slice_number, kind=crop_kind, include_z=True)
+        tiles = _auto_reference_tiles(
+            all_paths, crops_all, channels, get_vertical_flip(params, camera_id),
+            background_length, zy_threshold_multiplier, auto_scan_layer, n_reference_tiles,
+            min_tissue_fraction, edge_margin,
+            os.path.join(output_dir, f"reference_tiles_camera{camera_id}.yaml"))
+        if not tiles:
+            raise ValueError("auto_reference_tiles found no tile with enough tissue: lower "
+                             "min_tissue_fraction")
     bad = [t for t in tiles if not 1 <= t <= len(all_paths)]
     if bad:
         raise ValueError(f"tiles {bad} out of range (1..{len(all_paths)})")
