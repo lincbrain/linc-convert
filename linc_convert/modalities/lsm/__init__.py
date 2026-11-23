@@ -15,7 +15,10 @@ try:
         "create_corrections",
         "register_chunks",
         "register_channels",
-        "stitch_chunks"
+        "stitch_chunks",
+        "optix_corrections",
+        "optix_deconvolve",
+        "pick_tissue_chunks"
     ]
 
     from . import (
@@ -23,6 +26,9 @@ try:
         create_corrections,
         mosaic,
         multi_slice,
+        optix_corrections,
+        optix_deconvolve,
+        pick_tissue_chunks,
         prd,
         register_channels,
         register_chunks,
